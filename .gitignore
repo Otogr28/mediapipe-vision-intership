@@ -1,0 +1,75 @@
+# Python
+__pycache__/
+*.py[cod]
+*.class
+*.so
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+
+# Env files / secrets
+.env
+.env.*
+!.env.example
+
+# IDEs/editors
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+
+# Testing / coverage
+.pytest_cache/
+.coverage
+htmlcov/
+.mypy_cache/
+.ruff_cache/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Media / generated files
+*.mp4
+*.avi
+*.mov
+*.mkv
+*.jpg
+*.jpeg
+*.png
+*.webp
+
+# But allow sample assets if you create this folder
+!assets/
+!assets/samples/
+!assets/samples/**
+
+# Model/checkpoint files
+*.pt
+*.pth
+*.onnx
+*.tflite
+*.h5
+*.pkl
+*.joblib
+
+# Local data/output
+data/
+outputs/
+runs/
+captures/
+recordings/
+
+# Build artifacts
+build/
+dist/
+*.egg-info/
