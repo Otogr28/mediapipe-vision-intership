@@ -1,0 +1,14 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "F=/home/oto/Intership2026/HalLMediaPipe/SHARED.md; if [ -f \"$F\" ]; then jq -Rs --arg hdr \"# SHARED.md (agent coordination file)\\n\\nYou MUST read this before starting work in this repo, and append a dated update to it after completing meaningful work. Do not overwrite other agents' notes.\\n\\n---\\n\\n\" '{hookSpecificOutput:{hookEventName:\"SessionStart\",additionalContext:($hdr+.)}}' < \"$F\"; else jq -n '{hookSpecificOutput:{hookEventName:\"SessionStart\",additionalContext:\"SHARED.md not found in /home/oto/Intership2026/HalLMediaPipe. If you do meaningful work, create one with the agent coordination protocol so future agents inherit context.\"}}'; fi"
+          }
+        ]
+      }
+    ]
+  }
+}
