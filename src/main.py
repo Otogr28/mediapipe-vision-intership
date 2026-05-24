@@ -1,3 +1,15 @@
+'''
+  Si lo quisieras separar, un corte natural sería:
+
+  - config.py (o constantes arriba): rutas, umbrales, índice de cámara.
+  - detectors.py: una función build_pose_detector() / build_hand_detector() que
+  devuelva el detector ya configurado. Esto saca ~40 líneas de main().
+  - drawing.py: draw_landmarks() y draw_connections() separadas (ahora draw()
+  hace las dos cosas y tiene la lógica de visibilidad duplicada).
+  - main.py: solo el loop — captura frame, dispara async, dibuja, muestra.
+  '''
+
+
 import time
 
 import cv2
