@@ -107,3 +107,24 @@ Coding values: clean, beginner-friendly, secure, and maintainable.
 
 ### Next steps / unfinished work
 - On future Codex sessions, read `SHARED.md` first before planning, inspecting unrelated files, or editing.
+
+## Update - 2026-05-20 15:10 - Claude (Opus 4.7)
+
+### What I did
+- Created `src/main_beta.py` as a minimal-diff variant of `src/main.py` that switches both `PoseLandmarker` and `HandLandmarker` from `RunningMode.VIDEO` (blocking `detect_for_video`) to `RunningMode.LIVE_STREAM` (non-blocking `detect_async` + `result_callback`). Goal: reduce perceived camera delay caused by running two synchronous inferences per frame.
+- Kept `main.py` untouched so the user can A/B compare.
+
+### Files changed
+- `src/main_beta.py` (new)
+
+### Important context for the other agent
+- The async results are stored in two module-level globals (`latest_pose_result`, `latest_hand_result`) written from MediaPipe's callback threads. No lock is used — relies on the GIL making single-reference assignment atomic. If callbacks grow to do more than a single assignment, add a `threading.Lock`.
+- `main_beta.py` snapshots both globals into locals at the top of each frame before drawing, so a callback firing mid-frame can't swap the object out from under the drawing loop.
+- First 1–2 frames render without landmarks (callbacks haven't fired yet) — the `is not None` guards handle this.
+- While editing, I noticed two bugs in `main.py`'s cleanup path that would crash on quit: `main.py:109` calls undefined `detector.close()` (should be `pose_detector.close()` + `hand_detector.close()`), and `main.py:110` has `v2.destroyAllWindows()` (typo, missing `c`). I fixed both in `main_beta.py` but **left `main.py` as-is** since the user only asked for the LIVE_STREAM beta.
+- Other efficiency levers we discussed but did NOT apply (saved for later iteration): (a) downscale the frame before sending to MediaPipe and scale landmarks back when drawing, (b) run the hand detector every N frames instead of every frame.
+
+### Next steps / unfinished work
+- User to test `src/main_beta.py` vs `src/main.py` and compare perceived latency / FPS.
+- If LIVE_STREAM helps, fold the changes back into `main.py` and delete `main_beta.py`.
+- Independently, fix the two cleanup bugs in `main.py` (`detector.close()` and `v2.destroyAllWindows()`).
