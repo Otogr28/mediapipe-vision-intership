@@ -83,6 +83,19 @@ BH_DISK_BRIGHTNESS = 1.0
 # disk's procedural texture.
 BH_DISK_ROTATION_SPEED = 0.8
 
+# 6 7 Counter. Counts each time a wrist transitions from below to above its
+# corresponding elbow — same definition as the original 67counter project. A
+# rising-edge detector with hysteresis avoids re-firing on jitter near the
+# elbow line: the wrist must clear the elbow by `SIXSEVEN_HYSTERESIS` (in
+# normalised image coords, where 1.0 = full frame height) to count, and must
+# fall the same distance below the elbow before another count is allowed on
+# that side. Each arm is tracked independently, so an alternating pump fires
+# two counts per cycle.
+SIXSEVEN_MIN_VISIBILITY = 0.3
+SIXSEVEN_HYSTERESIS = 0.01
+# Frames over which the count-flash animation decays back to 0.
+SIXSEVEN_FLASH_FRAMES = 12
+
 
 if __name__ == "__main__":
     print("config file, not supposed to be run directly")

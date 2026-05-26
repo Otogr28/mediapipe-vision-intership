@@ -1,6 +1,6 @@
 from rendering.gl_lensing import LensingRenderer
 from ui.button import Button
-from ui.interactables import BlackHole, BouncingSphere
+from ui.interactables import BlackHole, BouncingSphere, SixSevenCounter
 
 MENU_BTN_W, MENU_BTN_H = 260, 70
 RESET_W, RESET_H = 130, 50
@@ -15,6 +15,7 @@ class UIManager:
         self.state = "menu"
         self.spheres = []
         self._black_hole = None
+        self._sixseven = None
         # Lazy-initialised the first time the user enters the "experiments"
         # state — postpones GL context creation until something actually
         # needs it, and keeps startup cost out of the camera-only path.
@@ -51,6 +52,13 @@ class UIManager:
             on_click=self._add_sphere,
         )
 
+        self._sixseven_btn = Button(
+            x=20 + 120 + 10, y=20, width=170, height=50,
+            label="6 7 Counter",
+            on_click=self._spawn_sixseven,
+            font_scale=0.6,
+        )
+
         self._black_hole_btn = Button(
             x=20, y=20, width=150, height=50,
             label="Black Hole",
@@ -75,9 +83,16 @@ class UIManager:
             self._lensing_renderer = LensingRenderer(self.frame_w, self.frame_h)
         self._black_hole = BlackHole(self.frame_w, self.frame_h, self._lensing_renderer)
 
+    def _spawn_sixseven(self):
+        # Re-pressing the button while a counter is active resets the
+        # tally — gives users a way to zero the count without leaving the
+        # mode (the global Reset button drops the counter entirely).
+        self._sixseven = SixSevenCounter(self.frame_w, self.frame_h)
+
     def _reset(self):
         self.spheres.clear()
         self._black_hole = None
+        self._sixseven = None
         self.state = "menu"
 
     def update(self, hand_result, pose_landmarks):
@@ -87,8 +102,11 @@ class UIManager:
 
         elif self.state == "interactables":
             self._sphere_btn.update(hand_result, pose_landmarks, self.frame_w, self.frame_h)
+            self._sixseven_btn.update(hand_result, pose_landmarks, self.frame_w, self.frame_h)
             for s in self.spheres:
                 s.update(hand_result, pose_landmarks)
+            if self._sixseven is not None:
+                self._sixseven.update(hand_result, pose_landmarks)
             self._reset_btn.update(hand_result, pose_landmarks, self.frame_w, self.frame_h)
 
         elif self.state == "experiments":
@@ -105,8 +123,11 @@ class UIManager:
 
         elif self.state == "interactables":
             self._sphere_btn.draw(frame)
+            self._sixseven_btn.draw(frame)
             for s in self.spheres:
                 s.draw(frame)
+            if self._sixseven is not None:
+                self._sixseven.draw(frame)
             self._reset_btn.draw(frame)
 
         elif self.state == "experiments":

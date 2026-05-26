@@ -15,8 +15,17 @@ from config import (
     BH_GRAB_RADIUS,
     PINCH_HOLD_RATIO,
     PINCH_RATIO,
+    SIXSEVEN_FLASH_FRAMES,
+    SIXSEVEN_HYSTERESIS,
+    SIXSEVEN_MIN_VISIBILITY,
 )
 from detection.gestures import hand_id, pinch_state
+
+
+POSE_LEFT_ELBOW = 13
+POSE_RIGHT_ELBOW = 14
+POSE_LEFT_WRIST = 15
+POSE_RIGHT_WRIST = 16
 
 
 FINGERTIP_INDICES = [0, 4, 8, 12, 16, 20]
@@ -223,3 +232,113 @@ class BlackHole:
             rotation_speed=self.disk_rotation_speed,
         )
         np.copyto(frame, lensed)
+
+
+class SixSevenCounter:
+    """6 7 gesture counter — port of mannygonzalezj7/67counter.
+
+    Watches both arms in the pose landmarks and increments on the rising
+    edge of "wrist above elbow" per side. Each arm latches independently
+    with a hysteresis band (`SIXSEVEN_HYSTERESIS`) so jitter near the
+    elbow line cannot re-fire the count without a clear reset stroke.
+    """
+
+    def __init__(self, frame_width, frame_height):
+        self.w = frame_width
+        self.h = frame_height
+        self.count = 0
+        # Latch state per side: True when that side is currently "armed"
+        # (wrist clearly above elbow) and waiting for a reset stroke.
+        self._left_armed = False
+        self._right_armed = False
+        # Decay counter for the flash overlay, in frames.
+        self._flash = 0
+
+    def _side_armed(self, prev_armed, elbow_lm, wrist_lm):
+        """Hysteresis latch for one arm.
+
+        Returns ``(new_armed, fired)`` where ``fired`` is True only on the
+        frame the wrist *just* crossed above the elbow. Low-visibility
+        landmarks leave the latch unchanged and never fire — so a brief
+        tracking dropout cannot phantom-trigger a count.
+        """
+        e_vis = elbow_lm.visibility if elbow_lm.visibility is not None else 1.0
+        w_vis = wrist_lm.visibility if wrist_lm.visibility is not None else 1.0
+        if e_vis < SIXSEVEN_MIN_VISIBILITY or w_vis < SIXSEVEN_MIN_VISIBILITY:
+            return prev_armed, False
+
+        dy = elbow_lm.y - wrist_lm.y  # >0 when wrist is above elbow
+        if not prev_armed and dy > SIXSEVEN_HYSTERESIS:
+            return True, True
+        if prev_armed and dy < -SIXSEVEN_HYSTERESIS:
+            return False, False
+        return prev_armed, False
+
+    def update(self, hand_result, pose_landmarks):
+        if not pose_landmarks:
+            return
+
+        self._left_armed, left_fired = self._side_armed(
+            self._left_armed,
+            pose_landmarks[POSE_LEFT_ELBOW],
+            pose_landmarks[POSE_LEFT_WRIST],
+        )
+        self._right_armed, right_fired = self._side_armed(
+            self._right_armed,
+            pose_landmarks[POSE_RIGHT_ELBOW],
+            pose_landmarks[POSE_RIGHT_WRIST],
+        )
+
+        if left_fired:
+            self.count += 1
+            self._flash = SIXSEVEN_FLASH_FRAMES
+        if right_fired:
+            self.count += 1
+            self._flash = SIXSEVEN_FLASH_FRAMES
+
+        if self._flash > 0:
+            self._flash -= 1
+
+    def draw(self, frame):
+        flash_t = self._flash / SIXSEVEN_FLASH_FRAMES if SIXSEVEN_FLASH_FRAMES else 0.0
+
+        label = "6 7"
+        count_text = str(self.count)
+        font = cv2.FONT_HERSHEY_SIMPLEX
+        label_scale = 0.9
+        count_scale = 2.2 + 0.4 * flash_t
+        label_thick = 2
+        count_thick = 4
+
+        (lw, lh), _ = cv2.getTextSize(label, font, label_scale, label_thick)
+        (cw, ch), _ = cv2.getTextSize(count_text, font, count_scale, count_thick)
+
+        pad_x, pad_y, gap = 24, 18, 10
+        box_w = max(lw, cw) + pad_x * 2
+        box_h = lh + ch + gap + pad_y * 2
+        box_x = (self.w - box_w) // 2
+        box_y = 12
+
+        overlay = frame.copy()
+        cv2.rectangle(overlay, (box_x, box_y), (box_x + box_w, box_y + box_h),
+                      (0, 0, 0), -1)
+        cv2.addWeighted(overlay, 0.55, frame, 0.45, 0, frame)
+
+        # Border flashes green on a fresh count, then fades to neutral.
+        border = (
+            int(120 + (0 - 120) * flash_t),
+            int(120 + (220 - 120) * flash_t),
+            int(120 + (100 - 120) * flash_t),
+        )
+        cv2.rectangle(frame, (box_x, box_y), (box_x + box_w, box_y + box_h),
+                      border, 2)
+
+        lx = box_x + (box_w - lw) // 2
+        ly = box_y + pad_y + lh
+        cv2.putText(frame, label, (lx, ly), font, label_scale,
+                    (200, 200, 200), label_thick, cv2.LINE_AA)
+
+        cx = box_x + (box_w - cw) // 2
+        cy = ly + gap + ch
+        cv2.putText(frame, count_text, (cx, cy), font, count_scale,
+                    (255, 255, 255), count_thick, cv2.LINE_AA)

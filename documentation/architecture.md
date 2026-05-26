@@ -16,6 +16,7 @@ main.py
 └── ui/manager.py
     ├── ui/button.py                  (Button)            ──▶ detection/gestures.py
     ├── ui/interactables.py           (BouncingSphere)    ──▶ detection/gestures.py
+    │                                  (SixSevenCounter)  ──▶ (pose landmarks only)
     │                                  (BlackHole)        ──▶ rendering/gl_lensing.py
     └── rendering/gl_lensing.py       (LensingRenderer)   ──▶ shaders/black_hole.frag
                                                               shaders/fullscreen.vert
@@ -72,7 +73,8 @@ cv2.flip()  →  toMpImage()
                  │ pinch "Interactable Figures"
                  ▼
        ┌─────────────────────────┐
-       │      interactables      │  spawnable spheres
+       │      interactables      │  spawnable spheres + optional
+       │                         │  singleton 6 7 counter (pose-driven)
        └─────────┬───────────────┘
                  │ pinch "Reset"
                  ▼
@@ -127,6 +129,7 @@ When no pose is detected (or shoulders are occluded) both flags are suppressed.
 | Sphere push | Any fingertip overlaps sphere collision radius |
 | BH grab — initiate | `pinching` (rapid close) + cursor within `BH_GRAB_RADIUS` (100 px) of BH centre |
 | BH grab — maintain | `held` + previously grabbed |
+| 6 7 count fire | Per-arm rising edge: wrist crosses above elbow by > `SIXSEVEN_HYSTERESIS` (normalised), with visibility ≥ `SIXSEVEN_MIN_VISIBILITY` on both landmarks. Resets when the wrist falls below the elbow by the same margin. Pose-only — no hand input. |
 
 ---
 
