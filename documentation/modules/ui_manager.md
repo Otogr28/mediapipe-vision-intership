@@ -41,6 +41,7 @@ Initialises state to `"menu"`, empty sphere list, and builds all buttons.
 |---|---|---|---|
 | `state` | `str` | `"menu"`, `"interactables"`, `"experiments"` | Current UI mode |
 | `spheres` | `list[BouncingSphere]` | — | Active physics spheres in `"interactables"` mode |
+| `_sixseven` | `SixSevenCounter \| None` | — | Active 6 7 counter in `"interactables"` mode (single-instance — `None` until spawned) |
 | `_black_hole` | `BlackHole \| None` | — | Active black hole in `"experiments"` mode (single-instance — `None` until spawned) |
 | `_lensing_renderer` | `LensingRenderer \| None` | — | Lazy-created on first BH spawn; reused across BH lifecycles to avoid repeated GL-context creation |
 
@@ -53,7 +54,7 @@ Dispatches per-frame interaction updates based on current `state`. `pose_landmar
 | State | Objects updated |
 |---|---|
 | `"menu"` | `_menu_interactables_btn`, `_menu_experiments_btn` |
-| `"interactables"` | `_sphere_btn`, all `spheres`, `_reset_btn` |
+| `"interactables"` | `_sphere_btn`, `_sixseven_btn`, all `spheres`, `_sixseven` (if active), `_reset_btn` |
 | `"experiments"` (no BH) | `_black_hole_btn`, `_reset_btn` |
 | `"experiments"` (BH active) | `_black_hole` (drag), `_reset_btn` |
 
@@ -72,8 +73,9 @@ Dispatches per-frame draw calls based on current `state`. Same routing as `updat
 | `_build_buttons()` | Constructs and positions all `Button` instances |
 | `_set_state(new_state)` | Sets `self.state` — used as button `on_click` callback |
 | `_add_sphere()` | Appends a new `BouncingSphere` to `self.spheres` |
+| `_spawn_sixseven()` | Assigns a fresh `SixSevenCounter` to `self._sixseven`. Re-pressing the button while a counter is active zeroes the tally without leaving the mode. |
 | `_spawn_black_hole()` | Lazy-creates the shared `LensingRenderer` on first call, then assigns a fresh `BlackHole` to `self._black_hole` |
-| `_reset()` | Clears `self.spheres`, drops `self._black_hole` (the renderer is retained for reuse), and returns to `"menu"` |
+| `_reset()` | Clears `self.spheres`, drops `self._sixseven` and `self._black_hole` (the lensing renderer is retained for reuse), and returns to `"menu"` |
 
 ---
 
@@ -84,6 +86,7 @@ Dispatches per-frame draw calls based on current `state`. Same routing as `updat
 | "Interactable Figures" | Horizontally centred, above centre | `_set_state("interactables")` |
 | "Experiments" | Horizontally centred, below centre | `_set_state("experiments")` |
 | "Sphere" | Top-left `(20, 20)` | `_add_sphere()` |
+| "6 7 Counter" | Top-left, right of Sphere `(150, 20)` | `_spawn_sixseven()` (spawn or zero the counter) |
 | "Black Hole" | Top-left `(20, 20)` (shown only while no BH is active in Experiments) | `_spawn_black_hole()` |
 | "Reset" | Bottom-right corner | `_reset()` |
 

@@ -7,7 +7,7 @@ tags: [module, physics, interactables]
 
 **Location:** `src/ui/interactables.py`
 
-Scene objects that can be spawned by the UI. `BouncingSphere` lives in the `"interactables"` mode and has full collision physics; `BlackHole` lives in the `"experiments"` mode and is a pinch-draggable visual effect with no physics interaction (the two never coexist in the current state machine, so the BH cannot affect the sphere's bounce).
+Scene objects that can be spawned by the UI. `BouncingSphere` lives in the `"interactables"` mode and has full collision physics; `SixSevenCounter` also lives in `"interactables"` and is a pose-driven gesture counter (no physics, no hand interaction); `BlackHole` lives in the `"experiments"` mode and is a pinch-draggable visual effect with no physics interaction (the BH and sphere never coexist in the current state machine, so the BH cannot affect the sphere's bounce).
 
 ---
 
@@ -21,6 +21,8 @@ Scene objects that can be spawned by the UI. `BouncingSphere` lives in the `"int
 | `MAX_SPEED` | `22.0` | Speed cap (px/frame) |
 | `FRICTION` | `0.985` | Velocity multiplier applied each frame when not grabbed (near-1 = low friction) |
 | `GRAB_RADIUS` | `80 px` | Max distance from pinch midpoint to sphere centre to initiate a grab |
+| `POSE_LEFT_ELBOW` / `POSE_RIGHT_ELBOW` | `13` / `14` | Pose landmark indices used by `SixSevenCounter` |
+| `POSE_LEFT_WRIST` / `POSE_RIGHT_WRIST` | `15` / `16` | Pose landmark indices used by `SixSevenCounter` |
 
 The grab-trigger pinch is delegated to `pinch_state(...)` from [[gestures]] using `PINCH_RATIO` from [[config]] — see those modules for the scale-aware threshold rule. The landmark indices for the pinch (thumb tip = 4, index tip = 8) are also defined there.
 
@@ -160,9 +162,59 @@ See [[gl_lensing]] for the shader, orientation, and uniform contract.
 
 ---
 
+## `SixSevenCounter`
+
+A pose-driven gesture counter — Python port of [mannygonzalezj7/67counter](https://github.com/mannygonzalezj7/67counter). Counts each time either wrist transitions from below to above its corresponding elbow, with hysteresis to suppress jitter near the elbow line. Renders a centred top-of-frame overlay (label + big count) that flashes green for one beat on every increment.
+
+Lives in the `"interactables"` UI state alongside `BouncingSphere`. Singleton (one active counter at a time); pressing the spawn button again zeroes the count, and the global Reset button drops the counter entirely.
+
+### `__init__(frame_width, frame_height)`
+
+| Parameter | Type | Description |
+|---|---|---|
+| `frame_width` | `int` | Frame width in pixels — used to centre the overlay box |
+| `frame_height` | `int` | Frame height in pixels |
+
+Starts with `count = 0`, both per-arm latches disarmed, and no active flash.
+
+### State
+
+| Attribute | Type | Description |
+|---|---|---|
+| `count` | `int` | Total fired counts since spawn. Each side contributes independently — a clean alternating pump fires two counts per cycle. |
+| `_left_armed` / `_right_armed` | `bool` | Per-side hysteresis latch. `True` means that side is currently "wrist clearly above elbow" and waiting for a reset stroke (wrist clearly below elbow) before it can fire again. |
+| `_flash` | `int` | Frames remaining on the count-flash animation. Decays by 1 per `update()`. |
+
+### `update(hand_result, pose_landmarks)`
+
+Reads only `pose_landmarks` (the hand result is accepted for interface symmetry and ignored). Returns early on missing pose so the count is preserved across detection dropouts.
+
+For each side, calls the internal `_side_armed(prev_armed, elbow, wrist)` helper, which implements:
+
+```
+require visibility(elbow, wrist) ≥ SIXSEVEN_MIN_VISIBILITY
+dy = elbow.y − wrist.y          # >0 when wrist is above elbow (image coords)
+
+if not armed and dy >  SIXSEVEN_HYSTERESIS:  → armed = True, fired = True
+if     armed and dy < −SIXSEVEN_HYSTERESIS:  → armed = False, fired = False
+otherwise: unchanged, fired = False
+```
+
+Each `fired` increments `self.count` and resets `self._flash` to `SIXSEVEN_FLASH_FRAMES`. The two arms maintain independent latches; coordinated alternation is not required (and not enforced) — the counter mirrors the original 67counter behaviour where either side scoring is enough.
+
+Low-visibility frames leave the latch state untouched. This is intentional: an arm that briefly drops out of pose tracking returns in whatever logical state it left in, so a brief occlusion does not phantom-trigger a count.
+
+### `draw(frame)`
+
+Renders a translucent dark box at the top-centre containing the `"6 7"` label and the count number. The box border colour and the count's font scale both lerp toward a brighter / larger state proportional to `self._flash / SIXSEVEN_FLASH_FRAMES`, then decay back to neutral over `SIXSEVEN_FLASH_FRAMES` frames. The overlay is built via `cv2.addWeighted` so it dims rather than blocks the camera feed underneath.
+
+See [[config]] for `SIXSEVEN_*` constants and [[ui_manager]] for the spawn button and singleton slot.
+
+---
+
 ## Adding New Interactables
 
 1. Add a new class to this file following the `update(hand_result, pose_landmarks)` / `draw(frame)` interface.
-2. Add a spawn button and list (or single-instance slot, like the BH) in [[modules/ui_manager]].
+2. Add a spawn button and list (or single-instance slot, like the BH or 6 7 counter) in [[modules/ui_manager]].
 3. If the new object uses GPU rendering, reuse the `LensingRenderer`'s ModernGL context or extend it — see [[gl_lensing]].
 4. Document it here.

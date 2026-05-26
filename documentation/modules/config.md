@@ -76,6 +76,18 @@ See [[gl_lensing]] for the shader-side use of these and [[interactables]] for th
 
 ---
 
+## 6 7 Counter
+
+| Constant | Default | Description |
+|---|---|---|
+| `SIXSEVEN_MIN_VISIBILITY` | `0.3` | Minimum pose-landmark `visibility` for both elbow and wrist before a side participates in counting. A side that drops below this leaves its latch unchanged and never fires — a momentary tracking dropout cannot phantom-trigger a count. Set deliberately low so partial occlusions (sleeves, side angles) still count. |
+| `SIXSEVEN_HYSTERESIS` | `0.01` | Half-width of the dead band around the elbow line, in normalised image coords (`1.0` = full frame height). The wrist must rise more than this above the elbow to fire, and fall more than this below the elbow before another count can fire on the same side. Tuned tight (~1% of frame height ≈ 7 px at 720p) so small flicks count. Raise toward `0.05+` if you see double-counts from jitter. |
+| `SIXSEVEN_FLASH_FRAMES` | `12` | Frames over which the count-flash animation (border colour + slight count-text scale-up) decays back to neutral. At ~30 fps this is ~0.4 s. |
+
+See [[interactables]] for the `SixSevenCounter` class.
+
+---
+
 ## Notes
 
 - Per-widget timing constants (e.g. `COOLDOWN_FRAMES`, sphere `GRAB_RADIUS`) live next to their consumers in [[interactableUI]] / [[interactables]], not here. BH constants are kept here because the Einstein radius is the kind of knob that's worth tuning per deployment (e.g. the Jetson install in the hallway may want a different visual scale).
