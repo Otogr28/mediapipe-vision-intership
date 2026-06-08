@@ -24,6 +24,7 @@ Real-time hand and pose interaction system built with MediaPipe and OpenCV. Dete
 | `ui_manager.py`          | [[modules/ui_manager]]     |
 | `interactableUI.py`      | [[modules/interactableUI]] |
 | `interactables.py`       | [[modules/interactables]]  |
+| `hints.py`               | [[modules/hints]]          |
 
 ---
 
@@ -44,7 +45,8 @@ HalLMediaPipe/
 │   └── ui/
 │       ├── manager.py             UI state machine, button layout, scene objects
 │       ├── button.py              Button widget (pinch interaction)
-│       └── interactables.py       Scene objects (BouncingSphere, BlackHole)
+│       ├── interactables.py       Scene objects (BouncingSphere, BlackHole)
+│       └── hints.py               Onboarding overlays (intro splash + pinch hint)
 ├── models/
 │   ├── pose_landmarker_lite.task
 │   └── hand_landmarker.task
