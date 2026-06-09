@@ -3,7 +3,7 @@ import mediapipe as mp
 POSE_MODEL_PATH = "models/pose_landmarker_lite.task"
 HAND_MODEL_PATH = "models/hand_landmarker.task"
 IMAGE_FORMAT = mp.ImageFormat.SRGB
-SELECTED_CAMERA = 0
+SELECTED_CAMERA = 1
 
 # Requested capture resolution for the webcam. The actual frame size is read
 # back after `cv2.VideoCapture.set(...)` because some drivers silently snap
@@ -95,6 +95,22 @@ SIXSEVEN_MIN_VISIBILITY = 0.3
 SIXSEVEN_HYSTERESIS = 0.01
 # Frames over which the count-flash animation decays back to 0.
 SIXSEVEN_FLASH_FRAMES = 12
+
+# Onboarding / intro overlay.
+# A brief "how to interact" splash shown once at startup (Nintendo-style),
+# plus a persistent bottom-right hint that appears while a person is
+# detected and has not interacted yet. Both demonstrate the pinch gesture
+# with a small animated hand.
+INTRO_DURATION_S = 3.0          # seconds the startup splash stays up
+INTRO_FADE_S = 0.5              # fade-in / fade-out tail length (seconds)
+HINT_PINCH_PERIOD_S = 1.6       # one open->close->open cycle of the demo hand
+# The bottom-right hint retires permanently after the user first interacts,
+# and also auto-expires this many seconds after it first appears (so it
+# never lingers if the user just stands there without trying it).
+HINT_TIMEOUT_S = 8.0
+INTRO_TITLE = "HalLMediaPipe"
+INTRO_SUBTITLE = "Gesture-controlled vision"
+HINT_TEXT = "Close your hand to interact"
 
 
 if __name__ == "__main__":

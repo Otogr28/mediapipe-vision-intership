@@ -1,5 +1,6 @@
 from rendering.gl_lensing import LensingRenderer
 from ui.button import Button
+from ui.hints import IntroOverlay, PinchHint
 from ui.interactables import BlackHole, BouncingSphere, SixSevenCounter
 
 MENU_BTN_W, MENU_BTN_H = 260, 70
@@ -20,6 +21,12 @@ class UIManager:
         # state — postpones GL context creation until something actually
         # needs it, and keeps startup cost out of the camera-only path.
         self._lensing_renderer = None
+
+        # Onboarding overlays. The intro splash plays once at startup; the
+        # bottom-right pinch hint shows until the user first interacts.
+        self._intro = IntroOverlay(frame_w, frame_h)
+        self._pinch_hint = PinchHint(frame_w, frame_h)
+        self._has_interacted = False
 
         self._build_buttons()
 
@@ -116,6 +123,24 @@ class UIManager:
                 self._black_hole.update(hand_result, pose_landmarks)
             self._reset_btn.update(hand_result, pose_landmarks, self.frame_w, self.frame_h)
 
+        if self._detect_interaction():
+            self._has_interacted = True
+        self._pinch_hint.update(pose_landmarks is not None, self._has_interacted)
+
+    def _detect_interaction(self):
+        """True on a frame where the user pressed a button or grabbed an
+        object — used to retire the onboarding pinch hint."""
+        if self.state == "menu":
+            return self._menu_interactables_btn.pressed or self._menu_experiments_btn.pressed
+        if self.state == "interactables":
+            return (self._sphere_btn.pressed or self._sixseven_btn.pressed
+                    or self._reset_btn.pressed
+                    or any(s.grabbed for s in self.spheres))
+        if self.state == "experiments":
+            return (self._reset_btn.pressed or self._black_hole_btn.pressed
+                    or (self._black_hole is not None and self._black_hole.grabbed))
+        return False
+
     def draw(self, frame):
         if self.state == "menu":
             self._menu_interactables_btn.draw(frame)
@@ -138,3 +163,10 @@ class UIManager:
             else:
                 self._black_hole_btn.draw(frame)
             self._reset_btn.draw(frame)
+
+        # Onboarding overlays sit on top of the scene. The bottom-right hint
+        # yields to the intro splash so they never stack.
+        if self._intro.active:
+            self._intro.draw(frame)
+        else:
+            self._pinch_hint.draw(frame)

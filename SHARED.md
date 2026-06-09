@@ -128,3 +128,38 @@ Coding values: clean, beginner-friendly, secure, and maintainable.
 - User to test `src/main_beta.py` vs `src/main.py` and compare perceived latency / FPS.
 - If LIVE_STREAM helps, fold the changes back into `main.py` and delete `main_beta.py`.
 - Independently, fix the two cleanup bugs in `main.py` (`detector.close()` and `v2.destroyAllWindows()`).
+
+## Update - 2026-06-08 18:26 - Claude (Opus 4.8)
+
+### What I did
+- Added onboarding overlays: a ~3s startup splash (Nintendo-style) that
+  demonstrates the pinch gesture, and a bottom-right hint ("Close your hand
+  to interact") shown while a person is detected and hasn't interacted yet.
+- Created `src/ui/hints.py` with `IntroOverlay`, `PinchHint`, and a shared
+  `draw_pinch_hand()` (a stylized hand animating the thumb-index pinch).
+- Wired both into `UIManager` (no changes to `main.py` — it stays thin).
+- Added config constants and a documentation module to match repo conventions.
+
+### Files changed
+- `src/ui/hints.py` (new)
+- `src/ui/manager.py` (instantiate + update + draw overlays; `_detect_interaction()`)
+- `src/config.py` (intro/hint constants section)
+- `documentation/modules/hints.md` (new) + `documentation/index.md` (links)
+
+### Important context for the other agent
+- The intro plays once at startup regardless of detection; the bottom-right
+  hint shows only while `pose_landmarks is not None` and the user hasn't
+  interacted. `UIManager._has_interacted` latches on the first button press
+  or grab — so in practice the hint lives in the `menu` state only, which is
+  why it never collides with the Reset button.
+- Note: `main_beta.py` referenced in earlier updates no longer exists; the
+  LIVE_STREAM changes are already folded into `main.py` and the cleanup bugs
+  (`pose_detector.close()`/`hand_detector.close()`, `cv2.destroyAllWindows()`)
+  are already fixed there. Those earlier "next steps" are done.
+- Verified imports + headless drawing on a dummy frame; not run with a real
+  camera/GUI (no webcam in this environment).
+- Local uncommitted change in `config.py`: `SELECTED_CAMERA = 1` (was 0).
+
+### Next steps / unfinished work
+- User to run `uv run python src/main.py` and visually tune sizes/timing
+  (`INTRO_DURATION_S`, `HINT_PINCH_PERIOD_S`, panel size in `PinchHint`).
