@@ -3,13 +3,13 @@ import mediapipe as mp
 POSE_MODEL_PATH = "models/pose_landmarker_lite.task"
 HAND_MODEL_PATH = "models/hand_landmarker.task"
 IMAGE_FORMAT = mp.ImageFormat.SRGB
-SELECTED_CAMERA = 1
+SELECTED_CAMERA = 0
 
 # Requested capture resolution for the webcam. The actual frame size is read
 # back after `cv2.VideoCapture.set(...)` because some drivers silently snap
 # to the nearest supported mode. The cv2 display window inherits this size.
-WINDOW_WIDTH = 1280
-WINDOW_HEIGHT = 720
+WINDOW_WIDTH = 1920
+WINDOW_HEIGHT = 1080
 
 NUM_POSES = 1
 MIN_POSE_DETECTION_CONFIDENCE = 0.5

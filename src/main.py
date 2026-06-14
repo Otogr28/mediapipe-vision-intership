@@ -27,6 +27,9 @@ def main():
         print(f"Cant access to camera #{SELECTED_CAMERA}")
         return
 
+    # MJPG must be requested before the resolution: this webcam only offers
+    # 1920x1080 in MJPG; its raw YUYV modes top out at 640x480.
+    camera.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
     camera.set(cv2.CAP_PROP_FRAME_WIDTH, WINDOW_WIDTH)
     camera.set(cv2.CAP_PROP_FRAME_HEIGHT, WINDOW_HEIGHT)
 
@@ -34,6 +37,12 @@ def main():
     frame_h = int(camera.get(cv2.CAP_PROP_FRAME_HEIGHT))
 
     ui = UIManager(frame_w, frame_h)
+
+    # WINDOW_NORMAL makes the window resizable/maximizable like any other
+    # window; the frame is scaled by the window manager, so capture and UI
+    # logic keep working in camera-frame coordinates.
+    cv2.namedWindow("Camera", cv2.WINDOW_NORMAL)
+    cv2.resizeWindow("Camera", frame_w, frame_h)
 
     pose_connections = vision.PoseLandmarksConnections.POSE_LANDMARKS
     hand_connections = vision.HandLandmarksConnections.HAND_CONNECTIONS
