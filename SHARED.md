@@ -163,3 +163,46 @@ Coding values: clean, beginner-friendly, secure, and maintainable.
 ### Next steps / unfinished work
 - User to run `uv run python src/main.py` and visually tune sizes/timing
   (`INTRO_DURATION_S`, `HINT_PINCH_PERIOD_S`, panel size in `PinchHint`).
+
+## Update - 2026-06-29 - Claude (Opus 4.8)
+
+### What I did
+- Deployed the full interactive app to the **Jetson Orin Nano** (was only the
+  camera MJPEG stream before). New kit: `deploy/hall-app/` (deploy.sh, hallrun,
+  README). Code+models live at `~/HalLMediaPipe` on the device; launcher at
+  `~/.local/bin/hallrun`.
+- Added **configurable camera input + output sink** so the Jetson can act as a
+  headless remote-inference appliance: laptop webcam → Jetson (infer+render) →
+  laptop browser. New `src/output.py` (WindowSink / MjpegSink). `main.py` and
+  `config.py` now read env vars `HALL_CAMERA`, `HALL_OUTPUT`, `HALL_STREAM_*`.
+- Laptop-side helpers: `deploy/hall-app/laptop-camera.sh` (reuses the existing
+  `camera-stream/camera_stream.py` to expose the laptop webcam) and
+  `remote-infer.sh` (one command: starts everything, opens the viewer).
+- Verified end-to-end on hardware: headless stream serves a valid annotated
+  1920×1080 JPEG; Jetson pulls the laptop's MJPEG URL over Tailscale and reads
+  frames. GL lensing context runs on the Tegra Orin GPU even headless.
+
+### Files changed
+- `src/output.py` (new), `src/main.py`, `src/config.py`, `CLAUDE.md`
+- `deploy/hall-app/` (new): `deploy.sh`, `hallrun`, `laptop-camera.sh`,
+  `remote-infer.sh`, `README.md`
+
+### Important context for the other agent
+- The Jetson runs on **system Python 3.10** (mediapipe 0.10.18 + cv2 4.10 ship
+  in the image; `moderngl` added via `pip install --user`). It deliberately
+  does NOT use `uv`/the pyproject pins (3.12 / mediapipe 0.10.35 have no
+  prebuilt aarch64 wheel). Don't `uv sync` on the device.
+- **MediaPipe inference is CPU-only** on the Jetson — its Python Tasks API has
+  no CUDA/TensorRT path. Only the moderngl shader uses the GPU. TensorRT 10.7,
+  onnxruntime-gpu 1.20, torch 2.5+CUDA are already installed for the planned
+  "make it GPU-accelerated" follow-up (would mean exporting the models to
+  ONNX→TensorRT, leaving the Tasks API).
+- Jetson Tailscale IP `100.91.206.114`; laptop `100.105.148.27`. Output stream
+  port 8092 (camera-stream uses 8090; laptop camera uses 8091).
+- Nothing auto-starts; camera privacy preserved (C920 LED + manual launch).
+
+### Next steps / unfinished work
+- GPU-accelerate MediaPipe inference (the "extra compatible" task): ONNX→TensorRT
+  or onnxruntime-gpu, benchmark vs current CPU FPS with `tegrastats`.
+- Optionally add a systemd/.desktop autostart for a true kiosk (deferred for
+  privacy).

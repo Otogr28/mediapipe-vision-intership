@@ -1,9 +1,26 @@
+import os
+
 import mediapipe as mp
 
 POSE_MODEL_PATH = "models/pose_landmarker_lite.task"
 HAND_MODEL_PATH = "models/hand_landmarker.task"
 IMAGE_FORMAT = mp.ImageFormat.SRGB
-SELECTED_CAMERA = 0
+
+# Camera source. Either a local device index ("0") or a stream URL — e.g. an
+# MJPEG feed from another machine ("http://<ip>:8091/stream.mjpg") so this node
+# can infer on a *remote* camera (the Jetson pulling a laptop's webcam). Set
+# with the HALL_CAMERA env var; defaults to the first local device.
+SELECTED_CAMERA = os.environ.get("HALL_CAMERA", "0")
+
+# Where the annotated output goes (HALL_OUTPUT):
+#   "window" — an on-screen cv2 window (needs a display); press 'q' to quit.
+#   "stream" — a headless MJPEG HTTP server, viewable in a remote browser.
+#              Used on the Jetson when driving it from a laptop (no monitor).
+OUTPUT_MODE = os.environ.get("HALL_OUTPUT", "window")
+# MJPEG server settings for OUTPUT_MODE == "stream":
+STREAM_BIND = os.environ.get("HALL_STREAM_BIND", "auto")    # "auto" -> Tailscale IP
+STREAM_PORT = int(os.environ.get("HALL_STREAM_PORT", "8092"))
+STREAM_QUALITY = int(os.environ.get("HALL_STREAM_QUALITY", "80"))  # JPEG 1..100
 
 # Requested capture resolution for the webcam. The actual frame size is read
 # back after `cv2.VideoCapture.set(...)` because some drivers silently snap
