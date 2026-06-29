@@ -206,3 +206,31 @@ Coding values: clean, beginner-friendly, secure, and maintainable.
   or onnxruntime-gpu, benchmark vs current CPU FPS with `tegrastats`.
 - Optionally add a systemd/.desktop autostart for a true kiosk (deferred for
   privacy).
+
+## Update - 2026-06-30 - Claude (Opus 4.8)
+
+### GPU investigation → the real bottleneck was the CAMERA, not inference
+- Built a working CUDA hand-inference backend (onnxruntime palm+handpose from the
+  OpenCV Model Zoo) behind `HALL_INFERENCE=gpu`: `src/detection/gpu_hands.py`,
+  `src/detection/_zoo/`, `models/gpu/*.onnx`. Confirmed it runs on CUDA (palm 22 ms,
+  handpose 10 ms vs 38–41 ms CPU).
+- BUT profiling the *local* app showed inference was NEVER the bottleneck
+  (`detect_async` enqueue ≈ 1.6 ms; CPU mostly idle at 10 fps). The bottleneck was
+  **camera capture**: `main.py` opened the C920 with OpenCV's default **GStreamer**
+  backend, which ignores FOURCC/FPS and opens it raw at full res → ~2 fps
+  (89–500 ms/read). `cv2.CAP_PROP_FPS` read back as 2.0.
+- **FIX (deployed):** open a local device with `cv2.CAP_V4L2` + MJPG + `FPS=30`
+  (exactly what `deploy/camera-stream/camera_stream.py` already did). Result:
+  end-to-end app **10 → 25.5 FPS @1080p (2.5×)**. See `src/main.py` camera-open block.
+
+### Device change on the Jetson
+- Uninstalled a stray **user-site `onnxruntime` (CPU 1.22.1)** that was shadowing the
+  system **`onnxruntime-gpu` 1.20.0** → `CUDA`/`TensorRT` EP now active by default.
+  (Don't reinstall plain `onnxruntime` in the user site or it'll shadow again.)
+
+### Status
+- GPU hand backend works but is **synchronous + detection-every-frame**, so it's
+  slightly SLOWER than MediaPipe and is NOT the perf fix. Kept behind
+  `HALL_INFERENCE` (default `mediapipe`). Shelved further GPU work (pose port,
+  TensorRT) — inference isn't the bottleneck. The `*.onnx` are gitignored but
+  rsync'd by deploy.sh. All changes uncommitted.

@@ -36,18 +36,25 @@ def main():
     hand_detector = build_hand_detector()
 
     source = _camera_source(SELECTED_CAMERA)
-    camera = cv2.VideoCapture(source)
-    if not camera.isOpened():
-        print(f"Cant access to camera {source!r}")
-        return
-
-    # MJPG must be requested before the resolution: the C920 only offers
-    # 1920x1080 in MJPG; its raw YUYV modes top out at 640x480. A network
-    # stream is decoded as-is, so only negotiate modes for a local device.
     if isinstance(source, int):
+        # A local webcam: force the V4L2 backend. OpenCV's default backend on
+        # the Jetson is GStreamer, which IGNORES the FOURCC/FPS requests and
+        # opens the C920 in a raw full-resolution mode that delivers only ~2
+        # fps (a ~500 ms blocking read) — that, not inference, was the app's
+        # real bottleneck. V4L2 + MJPG honours the requests and gives 30 fps.
+        # MJPG must be requested before the resolution: the C920 only offers
+        # 1920x1080 in MJPG; its raw YUYV modes top out at 640x480.
+        camera = cv2.VideoCapture(source, cv2.CAP_V4L2)
         camera.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
         camera.set(cv2.CAP_PROP_FRAME_WIDTH, WINDOW_WIDTH)
         camera.set(cv2.CAP_PROP_FRAME_HEIGHT, WINDOW_HEIGHT)
+        camera.set(cv2.CAP_PROP_FPS, 30)
+    else:
+        # A network stream (MJPEG URL) is decoded as-is by the default backend.
+        camera = cv2.VideoCapture(source)
+    if not camera.isOpened():
+        print(f"Cant access to camera {source!r}")
+        return
 
     # Read one frame to learn the true frame size — a network source reports 0
     # from CAP_PROP_* until the first frame is decoded — then size the UI to it.
