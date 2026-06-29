@@ -5,7 +5,8 @@
 ```
 src/
   main.py               — entry point: camera loop only, no UI logic
-  config.py             — global constants (camera index, thresholds, …)
+  config.py             — global constants (camera source, thresholds, …)
+  output.py             — output sinks: on-screen window or headless MJPEG stream
   detection/
     detectors.py        — MediaPipe pose/hand detector setup + shared results
   rendering/

@@ -1,0 +1,22 @@
+% HalLMediaPipe app, jetson, inference
+
+# Remote inference: laptop camera -> Jetson infers -> watch in this browser (one command, Ctrl-C stops)
+cd ~/Documents/Repos/vaults/Intership2026/HalLMediaPipe/deploy/hall-app && ./remote-infer.sh
+
+# Open the Jetson's annotated output viewer (if remote-infer is already running)
+xdg-open http://<ip>:<outport>/
+
+# Run the app on the Jetson's OWN monitor (needs a display + the C920 attached)
+ssh jetson@<ip> 'DISPLAY=:0 ~/.local/bin/hallrun'
+
+# Expose just this laptop's webcam on the tailnet (server only; Ctrl-C stops)
+cd ~/Documents/Repos/vaults/Intership2026/HalLMediaPipe/deploy/hall-app && ./laptop-camera.sh
+
+# Stop the app on the Jetson (kills any running main.py)
+ssh jetson@<ip> 'pkill -f "src/main.py" || true'
+
+# Deploy / update the app on the Jetson (code + models + launcher + deps)
+cd ~/Documents/Repos/vaults/Intership2026/HalLMediaPipe/deploy/hall-app && ./deploy.sh
+
+$ ip: echo 100.91.206.114
+$ outport: echo 8092

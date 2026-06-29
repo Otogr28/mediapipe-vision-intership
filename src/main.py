@@ -1,4 +1,5 @@
 import time
+import traceback
 
 import cv2
 from mediapipe.tasks.python import vision
@@ -8,85 +9,116 @@ from config import SELECTED_CAMERA, WINDOW_WIDTH, WINDOW_HEIGHT
 from detection.detectors import build_pose_detector, build_hand_detector
 from rendering.drawing import toMpImage, draw_landmarks, draw_connections, draw_line
 from ui.manager import UIManager
+from output import make_sink
 
 start_time = time.monotonic()
 last_timestamp_ms = -1
 
 
+def _camera_source(value):
+    """Resolve the configured camera source: a device index ('0' -> 0) or a
+    stream URL / device path, which is passed to OpenCV unchanged."""
+    return int(value) if str(value).isdigit() else value
+
+
 def main():
     """
-    Capture webcam video and overlay a real-time pose + hand skeleton using
-    MediaPipe in LIVE_STREAM (async) mode.  Press 'q' to quit.
+    Capture video and overlay a real-time pose + hand skeleton using MediaPipe
+    in LIVE_STREAM (async) mode.
+
+    The source (SELECTED_CAMERA / HALL_CAMERA) is either a local device index
+    or a stream URL — e.g. an MJPEG feed from a laptop — so this node can infer
+    on a remote camera. The annotated output goes to the sink chosen by config
+    (HALL_OUTPUT): an on-screen window ('q' to quit) or a headless MJPEG server
+    for a remote browser. Ctrl-C also quits.
     """
     pose_detector = build_pose_detector()
     hand_detector = build_hand_detector()
 
-    camera = cv2.VideoCapture(SELECTED_CAMERA)
-
+    source = _camera_source(SELECTED_CAMERA)
+    camera = cv2.VideoCapture(source)
     if not camera.isOpened():
-        print(f"Cant access to camera #{SELECTED_CAMERA}")
+        print(f"Cant access to camera {source!r}")
         return
 
-    # MJPG must be requested before the resolution: this webcam only offers
-    # 1920x1080 in MJPG; its raw YUYV modes top out at 640x480.
-    camera.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
-    camera.set(cv2.CAP_PROP_FRAME_WIDTH, WINDOW_WIDTH)
-    camera.set(cv2.CAP_PROP_FRAME_HEIGHT, WINDOW_HEIGHT)
+    # MJPG must be requested before the resolution: the C920 only offers
+    # 1920x1080 in MJPG; its raw YUYV modes top out at 640x480. A network
+    # stream is decoded as-is, so only negotiate modes for a local device.
+    if isinstance(source, int):
+        camera.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
+        camera.set(cv2.CAP_PROP_FRAME_WIDTH, WINDOW_WIDTH)
+        camera.set(cv2.CAP_PROP_FRAME_HEIGHT, WINDOW_HEIGHT)
 
-    frame_w = int(camera.get(cv2.CAP_PROP_FRAME_WIDTH))
-    frame_h = int(camera.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    # Read one frame to learn the true frame size — a network source reports 0
+    # from CAP_PROP_* until the first frame is decoded — then size the UI to it.
+    ok, probe = camera.read()
+    if not ok or probe is None:
+        print("Camera opened but returned no frames")
+        camera.release()
+        return
+    frame_h, frame_w = probe.shape[:2]
 
     ui = UIManager(frame_w, frame_h)
-
-    # WINDOW_NORMAL makes the window resizable/maximizable like any other
-    # window; the frame is scaled by the window manager, so capture and UI
-    # logic keep working in camera-frame coordinates.
-    cv2.namedWindow("Camera", cv2.WINDOW_NORMAL)
-    cv2.resizeWindow("Camera", frame_w, frame_h)
+    sink = make_sink(frame_w, frame_h)
 
     pose_connections = vision.PoseLandmarksConnections.POSE_LANDMARKS
     hand_connections = vision.HandLandmarksConnections.HAND_CONNECTIONS
 
-    while True:
-        success, frame = camera.read()
-        flip_frame = cv2.flip(src=frame, flipCode=1)
-        mp_image = toMpImage(frame=flip_frame)
+    global last_timestamp_ms
+    last_error = None
+    try:
+        while True:
+            try:
+                success, frame = camera.read()
+                if not success or frame is None:
+                    # A network source can momentarily starve; keep polling.
+                    continue
+                flip_frame = cv2.flip(src=frame, flipCode=1)
+                mp_image = toMpImage(frame=flip_frame)
 
-        global last_timestamp_ms
-        timestamps_ms = max(int((time.monotonic() - start_time) * 1000), last_timestamp_ms + 1)
-        last_timestamp_ms = timestamps_ms
+                timestamps_ms = max(int((time.monotonic() - start_time) * 1000), last_timestamp_ms + 1)
+                last_timestamp_ms = timestamps_ms
 
-        pose_detector.detect_async(image=mp_image, timestamp_ms=timestamps_ms)
-        hand_detector.detect_async(image=mp_image, timestamp_ms=timestamps_ms)
+                pose_detector.detect_async(image=mp_image, timestamp_ms=timestamps_ms)
+                hand_detector.detect_async(image=mp_image, timestamp_ms=timestamps_ms)
 
-        pose_result = detectors.latest_pose_result
-        hand_result = detectors.latest_hand_result
+                pose_result = detectors.latest_pose_result
+                hand_result = detectors.latest_hand_result
 
-        pose_landmarks = None
-        if pose_result is not None and pose_result.pose_landmarks:
-            pose_landmarks = pose_result.pose_landmarks[0]
-            draw_landmarks(pose_landmarks, flip_frame)
-            draw_connections(pose_landmarks, flip_frame, pose_connections)
+                pose_landmarks = None
+                if pose_result is not None and pose_result.pose_landmarks:
+                    pose_landmarks = pose_result.pose_landmarks[0]
+                    draw_landmarks(pose_landmarks, flip_frame)
+                    draw_connections(pose_landmarks, flip_frame, pose_connections)
 
-        if hand_result is not None:
-            for i in range(len(hand_result.hand_landmarks)):
-                draw_landmarks(hand_result.hand_landmarks[i], flip_frame)
-                draw_connections(hand_result.hand_landmarks[i], flip_frame, hand_connections)
-                draw_line(hand_result.hand_landmarks[i], flip_frame, 4, 8)
+                if hand_result is not None:
+                    for i in range(len(hand_result.hand_landmarks)):
+                        draw_landmarks(hand_result.hand_landmarks[i], flip_frame)
+                        draw_connections(hand_result.hand_landmarks[i], flip_frame, hand_connections)
+                        draw_line(hand_result.hand_landmarks[i], flip_frame, 4, 8)
 
-        ui.update(hand_result, pose_landmarks)
-        ui.draw(flip_frame)
+                ui.update(hand_result, pose_landmarks)
+                ui.draw(flip_frame)
 
-        cv2.imshow("Camera", flip_frame)
-
-        key = cv2.waitKey(1) & 0xFF
-        if key == ord("q"):
-            break
-
-    camera.release()
-    pose_detector.close()
-    hand_detector.close()
-    cv2.destroyAllWindows()
+                sink.present(flip_frame)
+                if sink.should_quit():
+                    break
+            except Exception:
+                # A single bad frame, draw, or GPU call must not take down a
+                # long-running headless appliance. Log each distinct error
+                # once (not 30x/s) and keep serving the stream.
+                tb = traceback.format_exc()
+                if tb != last_error:
+                    print("=== frame error (continuing) ===\n" + tb, flush=True)
+                    last_error = tb
+                continue
+    except KeyboardInterrupt:
+        pass
+    finally:
+        camera.release()
+        pose_detector.close()
+        hand_detector.close()
+        sink.close()
 
 
 if __name__ == "__main__":
