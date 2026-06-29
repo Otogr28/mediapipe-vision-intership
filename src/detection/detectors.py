@@ -2,7 +2,7 @@ from mediapipe.tasks import python
 from mediapipe.tasks.python import vision
 
 from config import (
-    POSE_MODEL_PATH, HAND_MODEL_PATH,
+    POSE_MODEL_PATH, HAND_MODEL_PATH, HALL_INFERENCE,
     NUM_POSES, MIN_POSE_DETECTION_CONFIDENCE, MIN_POSE_PRESENCE_CONFIDENCE, MIN_POSE_TRACKING_CONFIDENCE,
     NUM_HANDS, MIN_HAND_DETECTION_CONFIDENCE, MIN_HAND_PRESENCE_CONFIDENCE, MIN_HAND_TRACKING_CONFIDENCE,
 )
@@ -36,6 +36,20 @@ def build_pose_detector():
 
 
 def build_hand_detector():
+    """Build the hand detector for the configured backend.
+
+    HALL_INFERENCE == "gpu" returns the onnxruntime two-stage detector
+    (GpuHandDetector); anything else (default "mediapipe") returns MediaPipe's
+    HandLandmarker. Both expose ``detect_async(image, timestamp_ms)`` and
+    ``close()`` and publish results via ``on_hand_result`` into
+    ``latest_hand_result``, so ``main.py`` is identical for both.
+    """
+    if HALL_INFERENCE == "gpu":
+        # Lazy import: keeps the onnxruntime dependency (pulled in by this
+        # module) off the default MediaPipe path.
+        from detection.gpu_hands import GpuHandDetector
+        return GpuHandDetector(result_callback=on_hand_result)
+
     base_options = python.BaseOptions(model_asset_path=HAND_MODEL_PATH)
     options = vision.HandLandmarkerOptions(
         base_options=base_options,

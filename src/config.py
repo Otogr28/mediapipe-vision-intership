@@ -6,6 +6,28 @@ POSE_MODEL_PATH = "models/pose_landmarker_lite.task"
 HAND_MODEL_PATH = "models/hand_landmarker.task"
 IMAGE_FORMAT = mp.ImageFormat.SRGB
 
+# Inference backend for the HAND pipeline (HALL_INFERENCE):
+#   "mediapipe" — default; MediaPipe HandLandmarker (.task), CPU on the Jetson.
+#   "gpu"       — onnxruntime palm-detection + handpose, able to use the CUDA
+#                 execution provider on the Jetson (CPU fallback elsewhere).
+# POSE always stays on MediaPipe (hybrid) for now — only HANDS switch backends.
+HALL_INFERENCE = os.environ.get("HALL_INFERENCE", "mediapipe")
+
+# ONNX models for the "gpu" hand backend. Paths are relative to the repo root
+# (the app runs from there, matching the .task paths above). Sourced from the
+# OpenCV Model Zoo (opencv/opencv_zoo, Apache-2.0).
+PALM_ONNX = os.environ.get("HALL_PALM_ONNX", "models/gpu/palm_detection_mediapipe_2023feb.onnx")
+HAND_ONNX = os.environ.get("HALL_HAND_ONNX", "models/gpu/handpose_estimation_mediapipe_2023feb.onnx")
+
+# onnxruntime execution providers, in priority order: CUDA first so the Jetson
+# uses the GPU, CPU fallback so the same code runs on a laptop without CUDA.
+# Override (e.g. to force CPU) with HALL_ONNX_PROVIDERS, comma-separated.
+ONNX_PROVIDERS = [
+    p.strip() for p in os.environ.get(
+        "HALL_ONNX_PROVIDERS", "CUDAExecutionProvider,CPUExecutionProvider"
+    ).split(",") if p.strip()
+]
+
 # Camera source. Either a local device index ("0") or a stream URL — e.g. an
 # MJPEG feed from another machine ("http://<ip>:8091/stream.mjpg") so this node
 # can infer on a *remote* camera (the Jetson pulling a laptop's webcam). Set
