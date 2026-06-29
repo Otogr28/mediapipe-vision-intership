@@ -1,0 +1,19 @@
+% HalLMediaPipe, jetson, camera
+
+# Watch the Jetson camera live (turns the stream ON, then opens it in the browser)
+ssh jetson@<ip> camctl on && sleep 2 && xdg-open http://<ip>:<port>/
+
+# Turn the camera OFF (lab privacy — stops streaming and stays off on reboot)
+ssh jetson@<ip> camctl off
+
+# Camera status (is it active? does it start on boot?)
+ssh jetson@<ip> camctl status
+
+# Snapshot only (turns on, saves one still frame, opens it)
+ssh jetson@<ip> camctl on && sleep 2 && curl -fsS http://<ip>:<port>/snapshot.jpg -o /tmp/jetson-cam.jpg && xdg-open /tmp/jetson-cam.jpg
+
+# Deploy / update the camera stream service on the Jetson
+cd ~/Documents/Repos/vaults/Intership2026/HalLMediaPipe/deploy/camera-stream && ./deploy.sh
+
+$ ip: echo 100.91.206.114
+$ port: echo 8090

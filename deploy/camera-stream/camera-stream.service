@@ -1,0 +1,28 @@
+[Unit]
+Description=HalLMediaPipe live camera MJPEG stream (Logitech C920 on Jetson)
+Documentation=https://github.com/Otogr28/mediapipe-vision-intership
+# Start after the network and Tailscale are up so the default "auto" bind
+# (the node's Tailscale IP) is resolvable on a cold boot.
+After=network-online.target tailscaled.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=jetson
+Group=jetson
+SupplementaryGroups=video
+# Defaults live here so the unit is the single source of truth on the device.
+# Override per-deployment by editing these or dropping a systemd override.
+Environment=CAM_DEVICE=0
+Environment=CAM_PORT=8090
+Environment=CAM_WIDTH=1280
+Environment=CAM_HEIGHT=720
+Environment=CAM_FPS=30
+Environment=CAM_QUALITY=80
+Environment=CAM_BIND=auto
+ExecStart=/usr/bin/python3 -u /opt/hall-camera/camera_stream.py
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target
