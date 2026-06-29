@@ -1,0 +1,7 @@
+# HalLMediaPipe — passwordless on/off toggle for the camera stream service.
+#
+# Lets __USER__ flip the lab-privacy switch (camctl on|off) without typing a
+# sudo password. Scoped to EXACTLY camera-stream.service — no broader sudo is
+# granted. Installed to /etc/sudoers.d/camera-stream (mode 0440) by install.sh,
+# which substitutes __USER__ and validates with `visudo -cf` first.
+__USER__ ALL=(root) NOPASSWD: /usr/bin/systemctl start camera-stream.service, /usr/bin/systemctl stop camera-stream.service, /usr/bin/systemctl restart camera-stream.service, /usr/bin/systemctl enable camera-stream.service, /usr/bin/systemctl disable camera-stream.service

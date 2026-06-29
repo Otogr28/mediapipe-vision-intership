@@ -1,0 +1,34 @@
+#!/usr/bin/env bash
+# camctl — privacy on/off switch for the HalLMediaPipe camera stream.
+#
+#   camctl on       start streaming now AND auto-start on boot
+#   camctl off      stop streaming now AND stay off on boot   (lab privacy)
+#   camctl status   show whether it's active and enabled-on-boot
+#
+# `on`/`off` use sudo, but a scoped /etc/sudoers.d/camera-stream rule makes
+# them passwordless so the toggle is a single quick command. `status` is
+# read-only and needs no privileges.
+set -euo pipefail
+SVC=camera-stream.service
+
+case "${1:-status}" in
+  on)
+    sudo systemctl enable "$SVC"
+    sudo systemctl start "$SVC"
+    echo "camera stream: ON   (streaming now; will auto-start on boot)"
+    echo "note: the C920's LED is lit while the camera is in use."
+    ;;
+  off)
+    sudo systemctl stop "$SVC"
+    sudo systemctl disable "$SVC"
+    echo "camera stream: OFF  (stopped; will stay off on boot)"
+    ;;
+  status)
+    printf "active:  %s\n" "$(systemctl is-active   "$SVC" 2>/dev/null || true)"
+    printf "on-boot: %s\n" "$(systemctl is-enabled  "$SVC" 2>/dev/null || true)"
+    ;;
+  *)
+    echo "usage: camctl on|off|status" >&2
+    exit 2
+    ;;
+esac
