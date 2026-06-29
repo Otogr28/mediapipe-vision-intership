@@ -1,5 +1,11 @@
 % HalLMediaPipe app, jetson, inference
 
+# Watch the JETSON'S OWN camera WITH inference (skeleton + UI) in this browser
+ssh jetson@<ip> 'HALL_OUTPUT=stream HALL_CAMERA=0 nohup ~/.local/bin/hallrun >/tmp/hall-app.log 2>&1 </dev/null & sleep 2'; xdg-open http://<ip>:<outport>/
+
+# Same, but run the HANDS on the GPU (CUDA) instead of CPU MediaPipe
+ssh jetson@<ip> 'HALL_INFERENCE=gpu HALL_OUTPUT=stream HALL_CAMERA=0 nohup ~/.local/bin/hallrun >/tmp/hall-app.log 2>&1 </dev/null & sleep 2'; xdg-open http://<ip>:<outport>/
+
 # Remote inference: laptop camera -> Jetson infers -> watch in this browser (one command, Ctrl-C stops)
 cd ~/Documents/Repos/vaults/Intership2026/HalLMediaPipe/deploy/hall-app && ./remote-infer.sh
 
