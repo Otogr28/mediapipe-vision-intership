@@ -234,3 +234,56 @@ Coding values: clean, beginner-friendly, secure, and maintainable.
   `HALL_INFERENCE` (default `mediapipe`). Shelved further GPU work (pose port,
   TensorRT) — inference isn't the bottleneck. The `*.onnx` are gitignored but
   rsync'd by deploy.sh. All changes uncommitted.
+
+## Update - 2026-06-30 (later) - Claude (Opus 4.8)
+
+### GPU hand inference is now the default on the Jetson (it IS the inference-latency fix)
+- User reported the app "lentísimo", clarified the **camera is fine (async) — the
+  slow part is inference**. Benchmarked on-board with the camera free:
+  - Camera capture + the whole main loop (async enqueue) = **28 fps** (not the bottleneck).
+  - Each MediaPipe model (pose, hand) = **~75 ms / 13 fps on CPU**; app pinned **~318% CPU**.
+  - **Downscaling input does NOT help** (75 ms @1080p == @640x360 — MediaPipe resizes internally).
+  - MediaPipe wheel has **no GPU build** (`BaseOptions.Delegate.GPU` raises "GPU processing
+    is disabled in build flags") — so the Tasks GPU delegate is out.
+  - The existing onnxruntime-CUDA hand backend is actually **async** (the old note above
+    is stale) and **~2x faster**: GPU palm 21.6 ms, ~27 fps; real app in GPU mode =
+    **214% CPU + GR3D 70-90%**, no errors, drop-in with the gesture/pinch code.
+- **Change:** `deploy/hall-app/hallrun` now `export HALL_INFERENCE="${HALL_INFERENCE:-gpu}"`
+  (override `=mediapipe` to A/B). Deployed to the Jetson (`~/HalLMediaPipe/hallrun`,
+  symlinked at `~/.local/bin/hallrun`). **Uncommitted** in the repo.
+
+### Files changed
+- `deploy/hall-app/hallrun` (default HALL_INFERENCE=gpu) — uncommitted.
+
+### TensorRT FP16 for the hand nets + Ctrl-C fix (same session, later)
+- **TRT-FP16 is now the default hand EP** on the Jetson. `hallrun` sets
+  `HALL_ONNX_PROVIDERS=TensorrtExecutionProvider,CUDAExecutionProvider,CPUExecutionProvider`;
+  `config.py` attaches `trt_fp16_enable` + a persistent engine cache (repo-root
+  `.trt_cache`, gitignored, survives deploys). Raw nets **~2.9x vs CUDA**
+  (palm 10.2->3.5 ms, handpose 6.7->2.9 ms). Real app: **CPU 214->181%, GR3D ~0%**
+  (GPU idle -> headroom for the black-hole shader). Engine build slow ONCE
+  (palm ~17s, handpose ~100s) then cached. Validated end-to-end, no errors, cache reused.
+  **BUT hands were already camera-capped (28 fps), so TRT is NOT felt as smoother
+  hands** — it's headroom + latency. The hallrun comment claims deploy.sh pre-warms
+  the cache; it does NOT yet (cache is built + persists, first-ever launch on a fresh
+  cache eats the ~2 min build) — adding a deploy pre-warm step is a clean TODO.
+- **Ctrl-C fix:** running `ssh jetson '...hallrun'` without `-t` never delivered SIGINT
+  to the remote python, so Ctrl-C "didn't work" and left the app holding the camera.
+  Cheat now uses `ssh -t`. (Watch out killing the app over SSH: `pkill -f "src/main.py"`
+  matches the remote shell running your own command and kills your session — use a
+  pattern like `pkill -f "main[.]py"` that doesn't self-match.)
+
+### Files changed (this part)
+- `src/config.py` (TRT provider options + engine cache), `deploy/hall-app/hallrun`
+  (HALL_INFERENCE=gpu + HALL_ONNX_PROVIDERS=TRT...), `deploy/hall-app/hall-app.cheat`
+  (`ssh -t`). All **uncommitted**.
+
+### Next steps / unfinished work
+- **POSE is now the real (felt) bottleneck**: MediaPipe CPU ~13 fps, choppy body
+  skeleton. No cheap fix — needs a GPU pose backend (onnxruntime/TRT + a BlazePose
+  landmark ONNX that must be sourced/verified; OpenCV zoo only ships the person
+  *detector*). TRT-FP16 now proven on-board, so the runtime side is de-risked.
+- Optional: add a TRT engine pre-warm step to deploy.sh so a fresh device doesn't
+  eat the ~2 min build on first user launch (and make the hallrun comment true).
+- Optional: hand ROI tracking (skip palm det while tracking) — but hands are already
+  camera-capped, so low marginal value now.

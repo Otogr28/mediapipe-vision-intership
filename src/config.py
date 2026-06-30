@@ -21,12 +21,39 @@ HAND_ONNX = os.environ.get("HALL_HAND_ONNX", "models/gpu/handpose_estimation_med
 
 # onnxruntime execution providers, in priority order: CUDA first so the Jetson
 # uses the GPU, CPU fallback so the same code runs on a laptop without CUDA.
-# Override (e.g. to force CPU) with HALL_ONNX_PROVIDERS, comma-separated.
-ONNX_PROVIDERS = [
+# Override (e.g. to force CPU, or to add TensorRT) with HALL_ONNX_PROVIDERS,
+# comma-separated. On the Jetson, hallrun puts TensorrtExecutionProvider first
+# (measured ~2.9x faster than CUDA on the hand nets in FP16).
+_ONNX_PROVIDER_NAMES = [
     p.strip() for p in os.environ.get(
         "HALL_ONNX_PROVIDERS", "CUDAExecutionProvider,CPUExecutionProvider"
     ).split(",") if p.strip()
 ]
+
+# Where TensorRT caches compiled engines. Building an engine is slow (palm ~17s,
+# handpose ~100s on the Orin) but only happens ONCE per (model, GPU, TRT version,
+# input shape): the cache is reused on every later launch, so only the first run
+# after a deploy pays it. Lives at the repo root next to models/ (gitignored).
+TRT_ENGINE_CACHE = os.environ.get(
+    "HALL_TRT_CACHE",
+    os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), ".trt_cache"),
+)
+
+
+def _provider_with_options(name):
+    """Attach provider options to TensorRT (engine cache + FP16); pass any other
+    provider through as a bare name. onnxruntime accepts a providers list that
+    mixes plain names and ``(name, options_dict)`` tuples."""
+    if name == "TensorrtExecutionProvider":
+        return (name, {
+            "trt_engine_cache_enable": True,
+            "trt_engine_cache_path": TRT_ENGINE_CACHE,
+            "trt_fp16_enable": True,
+        })
+    return name
+
+
+ONNX_PROVIDERS = [_provider_with_options(n) for n in _ONNX_PROVIDER_NAMES]
 
 # Camera source. Either a local device index ("0") or a stream URL — e.g. an
 # MJPEG feed from another machine ("http://<ip>:8091/stream.mjpg") so this node
