@@ -13,7 +13,10 @@ cd ~/Documents/Repos/vaults/Intership2026/HalLMediaPipe/deploy/hall-app && ./rem
 xdg-open http://<ip>:<outport>/
 
 # Run the app on the Jetson's OWN monitor (needs a display + the C920 attached)
-ssh jetson@<ip> 'DISPLAY=:0 ~/.local/bin/hallrun'
+# -t allocates a PTY so Ctrl-C forwards SIGINT to the remote app and it exits
+# cleanly. WITHOUT -t, Ctrl-C does NOT reach the remote python and the app keeps
+# running (and holds the camera) — that's why "Ctrl-C didn't work".
+ssh -t jetson@<ip> 'DISPLAY=:0 ~/.local/bin/hallrun'
 
 # Expose just this laptop's webcam on the tailnet (server only; Ctrl-C stops)
 cd ~/Documents/Repos/vaults/Intership2026/HalLMediaPipe/deploy/hall-app && ./laptop-camera.sh

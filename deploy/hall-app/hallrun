@@ -16,6 +16,22 @@ set -euo pipefail
 APP_DIR="${HALL_APP_DIR:-$HOME/HalLMediaPipe}"
 export DISPLAY="${DISPLAY:-:0}"
 
+# Default the HAND inference backend to the GPU (onnxruntime CUDA EP) on the
+# Jetson. Measured on this board: ~2x faster hand tracking than the CPU
+# MediaPipe path (13 -> 27 fps) and it offloads the work to the Tegra GPU,
+# dropping the app from ~318% to ~214% CPU. POSE still runs on MediaPipe CPU
+# (no GPU build of the Tasks API on this image). Override with
+# HALL_INFERENCE=mediapipe to A/B against the all-CPU path.
+export HALL_INFERENCE="${HALL_INFERENCE:-gpu}"
+
+# Hand ONNX nets run on TensorRT (FP16) first — measured ~2.9x faster than the
+# plain CUDA EP on this Orin, and it leaves the GPU mostly idle (headroom for the
+# black-hole shader). The compiled engine is cached (TRT_ENGINE_CACHE in
+# config.py) and survives deploys, so only the FIRST launch on a fresh cache pays
+# the ~2 min build; every launch after reuses it. CUDA then CPU stay as
+# fallbacks. Override the whole chain with HALL_ONNX_PROVIDERS.
+export HALL_ONNX_PROVIDERS="${HALL_ONNX_PROVIDERS:-TensorrtExecutionProvider,CUDAExecutionProvider,CPUExecutionProvider}"
+
 # When started over SSH there is no X cookie in the environment; reuse the
 # local graphical session's so the window lands on the attached monitor.
 if [ -z "${XAUTHORITY:-}" ]; then
