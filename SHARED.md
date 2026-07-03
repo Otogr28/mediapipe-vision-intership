@@ -287,3 +287,124 @@ Coding values: clean, beginner-friendly, secure, and maintainable.
   eat the ~2 min build on first user launch (and make the hallrun comment true).
 - Optional: hand ROI tracking (skip palm det while tracking) — but hands are already
   camera-capped, so low marginal value now.
+
+## Update - 2026-07-01 18:40 - Claude (Opus)
+
+### What I did
+- Added a new **Slingshot** physics experiment (projectile motion) to the
+  `"experiments"` mode: pinch near the anchor, pull back (rubber-band aim,
+  clamped, with a dotted trajectory preview), release to launch. Then pure CPU
+  Newtonian physics — gravity, wall/floor bounces with restitution, air drag,
+  fading motion trail, up to 8 coexisting shots. Reuses the existing
+  `pinch_state` grab/hold split (so it needs shoulders visible, like the BH).
+- Refactored the `"experiments"` state from a single hardcoded Black-Hole slot
+  into a **generic experiment picker**: `_active_experiment` holds the one
+  running experiment (BlackHole | Slingshot), each just needs
+  `update/draw/grabbed`. Adding a 3rd experiment now = new class + one button.
+- Verified headless: physics sim (launch dir, gravity, bounce, rest, dead-fire,
+  cap, predicted arc) + UIManager integration (picker/spawn/update/draw/reset)
+  all pass. Did NOT run the live GUI app (no camera driven here).
+- Kept docs in sync: `documentation/architecture.md` (state machine + dep graph)
+  and `documentation/modules/interactables.md` (new Slingshot section). Also
+  rewrote the root `CLAUDE.md` earlier this session (added run/deploy commands,
+  the HALL_* env-var config, dual hand backend, pointers to docs/SHARED).
+
+### Files changed (uncommitted)
+- `src/ui/interactables.py` (+`Slingshot`, `_Projectile`, `SLING_*` consts; new
+  `math`/`deque` imports)
+- `src/ui/manager.py` (`_active_experiment` slot + `_experiment_btns` picker +
+  `_spawn_slingshot`)
+- `documentation/architecture.md`, `documentation/modules/interactables.md`,
+  `CLAUDE.md`
+
+### Next steps / ideas on the table
+- More experiments proposed (not yet built): double pendulum (chaos), rope/cloth
+  (Verlet), elastic sphere-sphere collisions, N-body/orbital sandbox, charged
+  particles (Coulomb); GPU-shader ones: stir-a-fluid, water-ripple refraction of
+  the live frame, reaction-diffusion. The picker refactor makes CPU ones cheap
+  to slot in.
+- Slingshot physics constants (`SLING_*`) are gut-tuned for 1920x1080; may want
+  a live playtest pass on the actual camera to dial in feel.
+
+## Update - 2026-07-01 19:05 - Claude (Opus)
+
+### What I did
+- **Slingshot ball-vs-ball collisions:** spawned balls now interact with each
+  other — equal-mass 2-D elastic collisions (`_resolve_collisions`): positional
+  separation + normal-component velocity exchange with
+  `SLING_COLLISION_RESTITUTION` (0.85). Real impacts wake resting balls (piles
+  can be knocked apart); gentle touches between settled balls only separate (no
+  jitter). Verified over a 1200-frame multi-ball sim: no crashes, in-bounds,
+  settles to rest, no interpenetration.
+- **Angle/power HUD:** while aiming, a translucent readout above the anchor
+  shows launch angle (deg from horizontal, +90 = up) and power (% of full-pull
+  max) via `_aim_readout()`/`_draw_readout()`.
+- **Camera-delay mitigation:** set `CAP_PROP_BUFFERSIZE=1` on the local webcam in
+  `main.py` so `read()` favours the freshest frame. NOTE: this is a partial fix —
+  V4L2 often ignores it. The real cure for the growing "camera delay" is a
+  drop-stale-frames grabber (capture on its own thread, main loop always takes
+  the latest). Not done yet; flagged to the user as the next option.
+
+### Why the camera delay exists (for the next agent / the user asked)
+- Detection is async (`detect_async`, LIVE_STREAM) so inference does NOT block
+  the loop — good for throughput, but the skeleton overlay *lags* the live image
+  by one inference (landmark trail). Separate from capture lag.
+- The dominant "camera delay" is **capture-buffer backlog**: when the per-frame
+  work (draw + UI + BH shader, and on Jetson the CPU-bound ~13 fps pose) is
+  slower than the camera's 25-30 fps, unread frames pile up in the V4L2/OpenCV
+  queue and `read()` returns ever-older frames. Fix = drop stale frames, not a
+  bigger buffer.
+
+### Files changed (uncommitted, this part)
+- `src/ui/interactables.py` (collisions, HUD, `SLING_COLLISION_RESTITUTION`)
+- `src/main.py` (`CAP_PROP_BUFFERSIZE=1` + comment)
+- `documentation/modules/interactables.md`
+
+### Next steps
+- Offered: threaded latest-frame grabber (definitive latency fix) and/or
+  detect-every-Nth-frame. Awaiting user's pick.
+
+## Update - 2026-07-01 19:20 - Claude (Opus)
+
+### What I did
+- **Camera-delay real fix:** new `src/capture.py` `FreshestFrame` — a background
+  thread that continuously drains the VideoCapture and keeps ONLY the latest
+  frame. `main.py` now wraps the capture with it after the size-probe read. When
+  the loop is slower than the camera (CPU-bound pose), stale frames are dropped
+  instead of queued, so latency stays ~1 frame. Verified with a fake fast
+  producer: a slow consumer skips ~40 frames between reads (dropped, not queued)
+  and release() tears down the underlying cap. (`CAP_PROP_BUFFERSIZE=1` stays as
+  a cheap belt-and-suspenders; V4L2 often ignores it.)
+- **Slingshot rewritten in SI units** (metres/s/kg/N). Two bridge constants:
+  `SLING_PX_PER_M=100` (100 px = 1 m) and `SLING_DT=1/30 s` fixed timestep. Real
+  gravity 9.81 m/s^2, mass 1.0 kg, linear drag F=-b*v (b=0.15). Answered the
+  user's "what is power %?" — the HUD now shows **launch angle (deg), speed
+  (m/s), and KE (J)** instead of a made-up %.
+- **Force-vector overlay:** every ball draws its live force vectors in newtons —
+  weight (amber), drag (cyan), contact/normal (green), and net (white) — via
+  `_draw_force_arrow` scaled `SLING_FORCE_PX_PER_N`. Contact force is recorded
+  from wall/floor bounces and ball-ball impulses (impulse/dt) with a per-frame
+  decay so impact arrows flash then fade; a resting ball shows a steady normal
+  that cancels weight (net = 0). Plus a top-left legend with the SI constants.
+- Verified: free-fall accel = 9.81; drag lowers accel at speed (6.81 @ 20 m/s);
+  full pull ~14 m/s; collisions conserve momentum + record equal/opposite N;
+  resting normal cancels weight; 400-frame multi-ball UI update+draw no crash;
+  rendered a preview PNG that looks right (legend, HUD, arrows).
+
+### Files changed (uncommitted, this part)
+- NEW `src/capture.py`; `src/main.py` (wrap capture in FreshestFrame + import)
+- `src/ui/interactables.py` (full SI Slingshot rewrite: constants, `_Projectile`
+  with `cfx/cfy`, SI `_step`/`_resolve_collisions`/`_predicted_arc`, SI HUD,
+  `_draw_force_arrow`, `_draw_legend`)
+- docs: `documentation/architecture.md`, `documentation/index.md`,
+  `documentation/modules/interactables.md`, `CLAUDE.md`
+
+### Notes / knobs for the next agent
+- `SLING_PX_PER_M=100` was chosen so real Earth gravity lands at ~1.09 px/frame^2
+  — nearly the old hand-tuned 0.9 "feel" — while staying honest SI. Bumping it
+  makes the arena smaller and the fall visually faster.
+- Angle shown in **degrees** (accepted-for-use-with-SI); everything else strict
+  SI. If a stickler wants radians, `_aim_readout` already computes in radians
+  internally.
+- Force arrows can look busy with 8 balls; `SLING_FORCE_PX_PER_N` / the min-draw
+  threshold tune density. Drag arrow is short at low speed (physically correct).
