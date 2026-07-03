@@ -1,7 +1,7 @@
 from rendering.gl_lensing import LensingRenderer
 from ui.button import Button
 from ui.hints import IntroOverlay, PinchHint
-from ui.interactables import BlackHole, BouncingSphere, SixSevenCounter
+from ui.interactables import BlackHole, BouncingSphere, SixSevenCounter, Slingshot
 
 MENU_BTN_W, MENU_BTN_H = 260, 70
 RESET_W, RESET_H = 130, 50
@@ -15,11 +15,14 @@ class UIManager:
         self.frame_h = frame_h
         self.state = "menu"
         self.spheres = []
-        self._black_hole = None
+        # The single experiment currently running in the "experiments" state
+        # (a BlackHole, Slingshot, …), or None while its picker is shown. Only
+        # one experiment is active at a time.
+        self._active_experiment = None
         self._sixseven = None
-        # Lazy-initialised the first time the user enters the "experiments"
-        # state — postpones GL context creation until something actually
-        # needs it, and keeps startup cost out of the camera-only path.
+        # Lazy-initialised the first time the user spawns the black hole —
+        # postpones GL context creation until something actually needs it, and
+        # keeps startup cost out of the camera-only path.
         self._lensing_renderer = None
 
         # Onboarding overlays. The intro splash plays once at startup; the
@@ -66,11 +69,19 @@ class UIManager:
             font_scale=0.6,
         )
 
+        # Experiment picker: one spawn button per experiment, laid out in a
+        # row. Whichever is pressed becomes the single active experiment.
         self._black_hole_btn = Button(
             x=20, y=20, width=150, height=50,
             label="Black Hole",
             on_click=self._spawn_black_hole,
         )
+        self._slingshot_btn = Button(
+            x=20 + 150 + 10, y=20, width=150, height=50,
+            label="Slingshot",
+            on_click=self._spawn_slingshot,
+        )
+        self._experiment_btns = [self._black_hole_btn, self._slingshot_btn]
 
         self._reset_btn = Button(
             x=fw - RESET_W - 20, y=fh - RESET_H - 20,
@@ -88,7 +99,10 @@ class UIManager:
     def _spawn_black_hole(self):
         if self._lensing_renderer is None:
             self._lensing_renderer = LensingRenderer(self.frame_w, self.frame_h)
-        self._black_hole = BlackHole(self.frame_w, self.frame_h, self._lensing_renderer)
+        self._active_experiment = BlackHole(self.frame_w, self.frame_h, self._lensing_renderer)
+
+    def _spawn_slingshot(self):
+        self._active_experiment = Slingshot(self.frame_w, self.frame_h)
 
     def _spawn_sixseven(self):
         # Re-pressing the button while a counter is active resets the
@@ -98,7 +112,7 @@ class UIManager:
 
     def _reset(self):
         self.spheres.clear()
-        self._black_hole = None
+        self._active_experiment = None
         self._sixseven = None
         self.state = "menu"
 
@@ -117,10 +131,11 @@ class UIManager:
             self._reset_btn.update(hand_result, pose_landmarks, self.frame_w, self.frame_h)
 
         elif self.state == "experiments":
-            if self._black_hole is None:
-                self._black_hole_btn.update(hand_result, pose_landmarks, self.frame_w, self.frame_h)
+            if self._active_experiment is None:
+                for btn in self._experiment_btns:
+                    btn.update(hand_result, pose_landmarks, self.frame_w, self.frame_h)
             else:
-                self._black_hole.update(hand_result, pose_landmarks)
+                self._active_experiment.update(hand_result, pose_landmarks)
             self._reset_btn.update(hand_result, pose_landmarks, self.frame_w, self.frame_h)
 
         if self._detect_interaction():
@@ -137,8 +152,9 @@ class UIManager:
                     or self._reset_btn.pressed
                     or any(s.grabbed for s in self.spheres))
         if self.state == "experiments":
-            return (self._reset_btn.pressed or self._black_hole_btn.pressed
-                    or (self._black_hole is not None and self._black_hole.grabbed))
+            if self._active_experiment is None:
+                return self._reset_btn.pressed or any(b.pressed for b in self._experiment_btns)
+            return self._reset_btn.pressed or self._active_experiment.grabbed
         return False
 
     def draw(self, frame):
@@ -156,12 +172,13 @@ class UIManager:
             self._reset_btn.draw(frame)
 
         elif self.state == "experiments":
-            # BH distortion runs first so the spawn/reset buttons stay
-            # readable on top of the lensed background.
-            if self._black_hole is not None:
-                self._black_hole.draw(frame)
+            # The active experiment draws first (e.g. the BH's full-frame
+            # distortion) so the picker/reset buttons stay readable on top.
+            if self._active_experiment is not None:
+                self._active_experiment.draw(frame)
             else:
-                self._black_hole_btn.draw(frame)
+                for btn in self._experiment_btns:
+                    btn.draw(frame)
             self._reset_btn.draw(frame)
 
         # Onboarding overlays sit on top of the scene. The bottom-right hint

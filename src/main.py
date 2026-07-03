@@ -10,6 +10,7 @@ from detection.detectors import build_pose_detector, build_hand_detector
 from rendering.drawing import toMpImage, draw_landmarks, draw_connections, draw_line
 from ui.manager import UIManager
 from output import make_sink
+from capture import FreshestFrame
 
 start_time = time.monotonic()
 last_timestamp_ms = -1
@@ -49,6 +50,13 @@ def main():
         camera.set(cv2.CAP_PROP_FRAME_WIDTH, WINDOW_WIDTH)
         camera.set(cv2.CAP_PROP_FRAME_HEIGHT, WINDOW_HEIGHT)
         camera.set(cv2.CAP_PROP_FPS, 30)
+        # Ask the driver to keep the shallowest possible queue so read()
+        # returns the *freshest* frame. When the loop runs slower than the
+        # camera's frame rate, the driver otherwise buffers the backlog and
+        # read() hands back progressively older frames — that growing lag is
+        # the "camera delay". (V4L2 may ignore this; the real cure is dropping
+        # stale frames — see the note in the loop below.)
+        camera.set(cv2.CAP_PROP_BUFFERSIZE, 1)
     else:
         # A network stream (MJPEG URL) is decoded as-is by the default backend.
         camera = cv2.VideoCapture(source)
@@ -64,6 +72,13 @@ def main():
         camera.release()
         return
     frame_h, frame_w = probe.shape[:2]
+
+    # Wrap the capture so the loop always gets the newest frame. This is the
+    # real cure for the "camera delay": a background thread drains the capture
+    # continuously and keeps only the latest frame, so when the render loop is
+    # slower than the camera the stale frames are dropped instead of piling up
+    # in the driver queue. Latency stays ~1 frame regardless of loop speed.
+    camera = FreshestFrame(camera)
 
     ui = UIManager(frame_w, frame_h)
     sink = make_sink(frame_w, frame_h)

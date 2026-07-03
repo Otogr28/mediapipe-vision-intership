@@ -10,6 +10,7 @@ tags: [architecture, design]
 ```
 main.py
 ├── config.py                    (constants)
+├── capture.py                   (FreshestFrame — threaded latest-frame reader)
 ├── detection/detectors.py       (build detectors, read shared results)
 ├── detection/gestures.py        (scale-aware pinch detection)
 ├── rendering/drawing.py         (toMpImage, draw_landmarks, draw_connections, draw_line)
@@ -17,6 +18,7 @@ main.py
     ├── ui/button.py                  (Button)            ──▶ detection/gestures.py
     ├── ui/interactables.py           (BouncingSphere)    ──▶ detection/gestures.py
     │                                  (SixSevenCounter)  ──▶ (pose landmarks only)
+    │                                  (Slingshot)        ──▶ detection/gestures.py
     │                                  (BlackHole)        ──▶ rendering/gl_lensing.py
     └── rendering/gl_lensing.py       (LensingRenderer)   ──▶ shaders/black_hole.frag
                                                               shaders/fullscreen.vert
@@ -58,7 +60,8 @@ cv2.flip()  →  toMpImage()
 
 ### Key design decisions
 
-- **Async detection** — Both detectors run in `LIVE_STREAM` mode. Results land in module-level globals (`latest_pose_result`, `latest_hand_result`) via callbacks, decoupling detection latency from the render loop.
+- **Freshest-frame capture** — The `VideoCapture` is wrapped in `capture.FreshestFrame`, a background thread that continuously drains the camera and keeps only the newest frame. When the render loop is slower than the camera (the usual case — CPU-bound pose caps it below the camera's fps), stale frames are *dropped* instead of piling up in the driver queue, so end-to-end latency stays ~1 frame instead of growing without bound. This is the real cure for the "camera delay" (a shallow `CAP_PROP_BUFFERSIZE` alone is often ignored by V4L2).
+- **Async detection** — Both detectors run in `LIVE_STREAM` mode. Results land in module-level globals (`latest_pose_result`, `latest_hand_result`) via callbacks, decoupling detection latency from the render loop. (Note: this makes the *skeleton overlay* lag the live frame by one inference — a separate effect from the capture latency above.)
 - **Frame timestamp** — A monotonic clock drives timestamps. Each call uses `max(monotonic_ms, last_timestamp_ms + 1)` to guarantee strictly increasing values required by MediaPipe's LIVE_STREAM mode.
 - **Frame flip** — The frame is horizontally flipped before processing so coordinates are mirror-corrected (natural for front-facing camera use).
 
@@ -83,16 +86,18 @@ cv2.flip()  →  toMpImage()
        └─────────────────────────┘
 
        ┌─────────────────────────┐
-       │       experiments       │  spawn slot for "Black Hole"
-       │                         │  → on spawn, the button is replaced
-       │                         │    by a draggable Schwarzschild BH
+       │       experiments       │  picker row: "Black Hole" | "Slingshot"
+       │                         │  → on pick, the buttons are replaced by the
+       │                         │    single active experiment (draggable
+       │                         │    Schwarzschild BH, or the projectile
+       │                         │    slingshot)
        └─────────┬───────────────┘
                  │ pinch "Reset"
                  ▼
               menu
 ```
 
-State is a plain string (`"menu"` | `"interactables"` | `"experiments"`) owned by `UIManager`. The Experiments state has two visual sub-modes — spawn button visible vs. BH active — toggled by whether `_black_hole` is `None`. Reset always returns to `menu` regardless of sub-mode.
+State is a plain string (`"menu"` | `"interactables"` | `"experiments"`) owned by `UIManager`. The Experiments state has two visual sub-modes — the experiment picker (a button per experiment) vs. one active experiment — toggled by whether `_active_experiment` is `None`. Only one experiment runs at a time; each object just needs `update(hand_result, pose_landmarks)`, `draw(frame)`, and a `grabbed` flag. Reset always returns to `menu` regardless of sub-mode.
 
 ---
 

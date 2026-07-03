@@ -1,5 +1,7 @@
+import math
 import random
 import time
+from collections import deque
 
 import cv2
 import numpy as np
@@ -342,3 +344,415 @@ class SixSevenCounter:
         cy = ly + gap + ch
         cv2.putText(frame, count_text, (cx, cy), font, count_scale,
                     (255, 255, 255), count_thick, cv2.LINE_AA)
+
+
+# --- Slingshot projectile experiment (SI units) -------------------------
+# The whole simulation runs in SI units — metres, seconds, kilograms, newtons.
+# Two scale constants bridge that physical world to the video's pixels/frames:
+SLING_PX_PER_M = 100.0       # screen scale: 100 px = 1 m (frame ~ 19.2 x 10.8 m)
+SLING_DT = 1.0 / 30.0        # fixed physics timestep (s) — one video frame
+
+SLING_G = 9.81               # gravitational acceleration (m/s^2), Earth
+SLING_BALL_MASS = 1.0        # mass of every ball (kg); equal mass keeps the
+                             # ball-vs-ball collision a clean velocity exchange
+SLING_DRAG_COEF = 0.15       # linear air-drag coefficient b in F = -b*v (N.s/m)
+
+SLING_LAUNCH_GAIN = 5.4      # launch speed per metre of pull (1/s);
+                             # a full 2.6 m pull -> ~14 m/s
+SLING_MAX_PULL_PX = 260      # cap on pull-back distance (screen px)
+SLING_GRAB_RADIUS_PX = 90    # max screen distance from the anchor to start aiming
+
+SLING_WALL_RESTITUTION = 0.7
+SLING_GROUND_RESTITUTION = 0.55
+SLING_GROUND_FRICTION = 0.8  # fraction of tangential speed kept per floor bounce
+SLING_COLLISION_RESTITUTION = 0.85  # bounciness of ball-vs-ball impacts
+SLING_REST_SPEED = 0.3       # m/s; below this on the floor a ball is "at rest"
+
+SLING_RADIUS_PX = 22         # ball radius on screen (px) -> 0.22 m
+SLING_TRAIL_LEN = 40
+SLING_MAX_PROJECTILES = 8
+SLING_PREDICT_STEPS = 45     # look-ahead frames for the aim trajectory
+SLING_CONTACT_DECAY = 0.6    # per-frame fade of the transient contact-force arrow
+
+# Force-vector overlay.
+SLING_FORCE_PX_PER_N = 6.0     # arrow length drawn per newton
+SLING_MIN_FORCE_DRAW_N = 0.05  # skip arrows for negligible forces
+SLING_COL_WEIGHT = (0, 180, 255)   # BGR amber — weight  m*g
+SLING_COL_DRAG = (255, 200, 0)     # BGR cyan  — air drag -b*v
+SLING_COL_NORMAL = (0, 235, 0)     # BGR green — contact / normal reaction
+SLING_COL_NET = (240, 240, 240)    # BGR white — net force
+
+
+class _Projectile:
+    __slots__ = ("x", "y", "vx", "vy", "trail", "resting", "cfx", "cfy")
+
+    def __init__(self, x, y, vx, vy):
+        self.x = x     # position, metres (screen frame; +y points down)
+        self.y = y
+        self.vx = vx   # velocity, m/s
+        self.vy = vy
+        self.trail = deque(maxlen=SLING_TRAIL_LEN)
+        self.resting = False
+        # Net contact force this frame (N) — floor/wall/ball reactions — kept
+        # only for the force overlay. Weight and drag are recomputed from state.
+        self.cfx = 0.0
+        self.cfy = 0.0
+
+
+class Slingshot:
+    """Projectile-motion experiment in SI units: pull back and release to launch.
+
+    Physics runs in metres / seconds / kilograms / newtons; ``SLING_PX_PER_M``
+    and ``SLING_DT`` map that world onto the video's pixels and frames. A ball
+    rests on a fixed anchor; a pinch near it grabs the ball, the hand pulls it
+    back (rubber-band aim, capped) and a dotted arc previews the shot while a
+    HUD reads out launch angle, speed (m/s) and kinetic energy (J). Releasing
+    launches it under real gravity (9.81 m/s^2) with linear air drag; balls
+    bounce off the walls and floor with restitution and collide elastically
+    with each other, and every ball draws the force vectors acting on it
+    (weight, drag, contact, net). Up to ``SLING_MAX_PROJECTILES`` shots coexist
+    (oldest dropped past the cap). Like the black hole it reuses the
+    pose-scaled pinch, so the shoulders must be visible to aim.
+    """
+
+    def __init__(self, frame_width, frame_height):
+        self.w_px = frame_width
+        self.h_px = frame_height
+        # Frame extent and ball radius expressed in metres for the physics.
+        self.w = frame_width / SLING_PX_PER_M
+        self.h = frame_height / SLING_PX_PER_M
+        self.r = SLING_RADIUS_PX / SLING_PX_PER_M
+        self.anchor_x = (frame_width * 0.5) / SLING_PX_PER_M
+        self.anchor_y = (frame_height * 0.82) / SLING_PX_PER_M
+        self.projectiles = []
+        # Aim state: while aiming, (pull_x, pull_y) is the clamped ball position
+        # in metres.
+        self.aiming = False
+        self.pull_x = self.anchor_x
+        self.pull_y = self.anchor_y
+
+    @property
+    def grabbed(self):
+        # Mirrors the interface UIManager uses for the black hole so the
+        # onboarding pinch hint retires while the user is actively aiming.
+        return self.aiming
+
+    @staticmethod
+    def _px(m):
+        """Metres -> integer screen pixels."""
+        return int(m * SLING_PX_PER_M)
+
+    def _clamp_pull(self, mx_m, my_m):
+        """Clamp the pulled ball position (metres) to the max pull radius."""
+        max_pull = SLING_MAX_PULL_PX / SLING_PX_PER_M
+        dx = mx_m - self.anchor_x
+        dy = my_m - self.anchor_y
+        dist = math.hypot(dx, dy)
+        if dist > max_pull and dist > 0:
+            scale = max_pull / dist
+            dx *= scale
+            dy *= scale
+        return self.anchor_x + dx, self.anchor_y + dy
+
+    def _launch_velocity(self):
+        # Fires opposite to the pull: pull down-left -> launches up-right.
+        # (anchor - pull) is in metres; * gain (1/s) gives m/s.
+        return (
+            (self.anchor_x - self.pull_x) * SLING_LAUNCH_GAIN,
+            (self.anchor_y - self.pull_y) * SLING_LAUNCH_GAIN,
+        )
+
+    def _fire(self):
+        # Capture the launch point/velocity from the current pull BEFORE
+        # resetting the aim back to the anchor.
+        launch_x, launch_y = self.pull_x, self.pull_y
+        vx, vy = self._launch_velocity()
+        self.aiming = False
+        self.pull_x, self.pull_y = self.anchor_x, self.anchor_y
+        # Ignore a dead-fire (pull too small to matter, < SLING_REST_SPEED m/s).
+        if math.hypot(vx, vy) < SLING_REST_SPEED:
+            return
+        self.projectiles.append(_Projectile(launch_x, launch_y, vx, vy))
+        if len(self.projectiles) > SLING_MAX_PROJECTILES:
+            self.projectiles.pop(0)
+
+    def update(self, hand_result, pose_landmarks):
+        if hand_result is not None:
+            aiming_this_frame = False
+            anchor_x_px = self.anchor_x * SLING_PX_PER_M
+            anchor_y_px = self.anchor_y * SLING_PX_PER_M
+            for i, hand_landmarks in enumerate(hand_result.hand_landmarks):
+                hid = hand_id(hand_result, i)
+                # The pinch cursor (mx, my) comes back in pixels.
+                pinching, held, (mx, my) = pinch_state(
+                    hand_landmarks, pose_landmarks, self.w_px, self.h_px, PINCH_RATIO,
+                    hold_ratio=PINCH_HOLD_RATIO, hand_id=hid,
+                )
+                anchor_dist = math.hypot(anchor_x_px - mx, anchor_y_px - my)
+                # Only a rapid close near the anchor starts an aim; once
+                # aiming, `held` keeps it while the fingers stay roughly shut.
+                can_aim = (self.aiming and held) or (
+                    pinching and anchor_dist < SLING_GRAB_RADIUS_PX
+                )
+                if can_aim:
+                    # Convert the cursor to metres for the physics world.
+                    self.pull_x, self.pull_y = self._clamp_pull(
+                        mx / SLING_PX_PER_M, my / SLING_PX_PER_M)
+                    self.aiming = True
+                    aiming_this_frame = True
+                    break
+
+            # Fingers opened this frame -> release the shot.
+            if self.aiming and not aiming_this_frame:
+                self._fire()
+        elif self.aiming:
+            # Hand lost mid-pull: fire with the pull we had (better than
+            # silently swallowing the shot).
+            self._fire()
+
+        # Fade last frame's transient contact-force arrows (bounces / impacts).
+        for p in self.projectiles:
+            p.cfx *= SLING_CONTACT_DECAY
+            p.cfy *= SLING_CONTACT_DECAY
+        # Free-flight motion + walls first, then ball-vs-ball collisions so
+        # every spawned ball obeys the same physics against the others; trails
+        # are recorded last, after positions have settled for the frame.
+        for p in self.projectiles:
+            self._step(p)
+        self._resolve_collisions()
+        for p in self.projectiles:
+            if p.resting:
+                # A ball parked on the floor: the steady normal reaction
+                # exactly balances its weight (so the net force reads zero).
+                p.cfx, p.cfy = 0.0, -SLING_BALL_MASS * SLING_G
+            p.trail.append((self._px(p.x), self._px(p.y)))
+
+    def _step(self, p):
+        if p.resting:
+            return
+        m = SLING_BALL_MASS
+        # Forces (N): weight down (+y) plus linear air drag opposing velocity.
+        # a = F / m, integrated with semi-implicit Euler over SLING_DT seconds.
+        fx = -SLING_DRAG_COEF * p.vx
+        fy = m * SLING_G - SLING_DRAG_COEF * p.vy
+        p.vx += (fx / m) * SLING_DT
+        p.vy += (fy / m) * SLING_DT
+        p.x += p.vx * SLING_DT
+        p.y += p.vy * SLING_DT
+        r = self.r
+
+        # Wall / floor bounces. Each records the reaction as a contact force
+        # (impulse / dt, in newtons) for the force overlay.
+        if p.x - r <= 0:
+            p.x = r
+            before = p.vx
+            p.vx = abs(p.vx) * SLING_WALL_RESTITUTION
+            p.cfx += m * (p.vx - before) / SLING_DT
+        elif p.x + r >= self.w:
+            p.x = self.w - r
+            before = p.vx
+            p.vx = -abs(p.vx) * SLING_WALL_RESTITUTION
+            p.cfx += m * (p.vx - before) / SLING_DT
+
+        if p.y - r <= 0:
+            p.y = r
+            before = p.vy
+            p.vy = abs(p.vy) * SLING_WALL_RESTITUTION
+            p.cfy += m * (p.vy - before) / SLING_DT
+        elif p.y + r >= self.h:
+            p.y = self.h - r
+            before = p.vy
+            p.vy = -abs(p.vy) * SLING_GROUND_RESTITUTION
+            p.cfy += m * (p.vy - before) / SLING_DT
+            p.vx *= SLING_GROUND_FRICTION
+            # Settle to rest once the bounce energy is spent. A resting ball
+            # skips integration until a collision wakes it (see
+            # `_resolve_collisions`), so a pile can still be knocked apart.
+            if abs(p.vy) < SLING_REST_SPEED and abs(p.vx) < SLING_REST_SPEED:
+                p.vx = p.vy = 0.0
+                p.resting = True
+
+    def _resolve_collisions(self):
+        """Equal-mass elastic collisions between every pair of balls (SI).
+
+        Overlapping pairs are pushed apart (positional correction split evenly)
+        and, when they are actually approaching, exchange their velocity
+        component along the contact normal with `SLING_COLLISION_RESTITUTION`.
+        The impulse is also recorded as a contact force (N) on both balls for
+        the overlay. A real impact wakes resting balls; a gentle touch between
+        two settled balls only separates them (no impulse) so a pile stays put.
+        """
+        r = self.r
+        min_dist = 2 * r
+        m = SLING_BALL_MASS
+        n = len(self.projectiles)
+        for a in range(n):
+            pa = self.projectiles[a]
+            for b in range(a + 1, n):
+                pb = self.projectiles[b]
+                dx = pb.x - pa.x
+                dy = pb.y - pa.y
+                dist = math.hypot(dx, dy)
+                if dist >= min_dist:
+                    continue
+                if dist == 0.0:
+                    # Perfectly coincident: separate along a fixed axis.
+                    dx, dy, dist = 1.0, 0.0, 1.0
+                nx, ny = dx / dist, dy / dist
+                overlap = min_dist - dist
+                pa.x -= nx * overlap * 0.5
+                pa.y -= ny * overlap * 0.5
+                pb.x += nx * overlap * 0.5
+                pb.y += ny * overlap * 0.5
+
+                # Relative velocity along the normal; > 0 means approaching.
+                vrel = (pa.vx - pb.vx) * nx + (pa.vy - pb.vy) * ny
+                if vrel > SLING_REST_SPEED:
+                    j = (1.0 + SLING_COLLISION_RESTITUTION) * vrel * 0.5
+                    pa.vx -= j * nx
+                    pa.vy -= j * ny
+                    pb.vx += j * nx
+                    pb.vy += j * ny
+                    # Impulse (m*j) as an average force over the timestep.
+                    f = m * j / SLING_DT
+                    pa.cfx -= f * nx
+                    pa.cfy -= f * ny
+                    pb.cfx += f * nx
+                    pb.cfy += f * ny
+                    pa.resting = pb.resting = False
+
+        # Positional correction can shove a ball past an edge — clamp back in.
+        for p in self.projectiles:
+            p.x = min(max(p.x, r), self.w - r)
+            p.y = min(max(p.y, r), self.h - r)
+
+    def _predicted_arc(self):
+        """Forward-simulate the pending shot for a short dotted preview."""
+        vx, vy = self._launch_velocity()
+        x, y = self.pull_x, self.pull_y
+        r = self.r
+        m = SLING_BALL_MASS
+        pts = []
+        for _ in range(SLING_PREDICT_STEPS):
+            vx += (-SLING_DRAG_COEF * vx / m) * SLING_DT
+            vy += (SLING_G - SLING_DRAG_COEF * vy / m) * SLING_DT
+            x += vx * SLING_DT
+            y += vy * SLING_DT
+            pts.append((self._px(x), self._px(y)))
+            if x - r <= 0 or x + r >= self.w or y + r >= self.h:
+                break
+        return pts
+
+    def _aim_readout(self):
+        """(angle_deg, speed_mps, ke_joules) for the pending shot. Angle is
+        measured from the horizontal (0 = right, +90 = straight up, negatives =
+        downward); speed is the launch speed in m/s and ke its kinetic energy."""
+        vx, vy = self._launch_velocity()
+        speed = math.hypot(vx, vy)                   # m/s
+        ke = 0.5 * SLING_BALL_MASS * speed * speed    # joules
+        # Screen y grows downward, so negate vy to make "up" a positive angle.
+        angle = math.degrees(math.atan2(-vy, vx))
+        return angle, speed, ke
+
+    def _draw_readout(self, frame, angle, speed, ke):
+        """Translucent SI readout (angle / launch speed / KE) above the anchor."""
+        label = f"ANGLE {angle:+.0f} deg   v0 {speed:.1f} m/s   KE {ke:.0f} J"
+        font = cv2.FONT_HERSHEY_SIMPLEX
+        scale, thick, pad = 0.6, 2, 8
+        (tw, th), base = cv2.getTextSize(label, font, scale, thick)
+        box_w = tw + pad * 2
+        box_h = th + base + pad * 2
+        box_x = int(self.anchor_x * SLING_PX_PER_M - box_w / 2)
+        box_y = int(self.anchor_y * SLING_PX_PER_M - SLING_RADIUS_PX - 24 - box_h)
+
+        overlay = frame.copy()
+        cv2.rectangle(overlay, (box_x, box_y), (box_x + box_w, box_y + box_h),
+                      (0, 0, 0), -1)
+        cv2.addWeighted(overlay, 0.5, frame, 0.5, 0, frame)
+        cv2.putText(frame, label, (box_x + pad, box_y + pad + th), font, scale,
+                    (0, 255, 255), thick, cv2.LINE_AA)
+
+    @staticmethod
+    def _draw_force_arrow(frame, cx, cy, fx, fy, color):
+        """Draw one force vector (newtons) from a ball centre, scaled to px."""
+        if math.hypot(fx, fy) < SLING_MIN_FORCE_DRAW_N:
+            return
+        ex = int(cx + fx * SLING_FORCE_PX_PER_N)
+        ey = int(cy + fy * SLING_FORCE_PX_PER_N)
+        cv2.arrowedLine(frame, (cx, cy), (ex, ey), color, 2, cv2.LINE_AA,
+                        tipLength=0.25)
+
+    def _draw_legend(self, frame):
+        """Colour key for the force overlay + the SI constants in play."""
+        font = cv2.FONT_HERSHEY_SIMPLEX
+        rows = [
+            (SLING_COL_WEIGHT, "weight  m*g"),
+            (SLING_COL_DRAG, "drag  -b*v"),
+            (SLING_COL_NORMAL, "contact / normal"),
+            (SLING_COL_NET, "net force"),
+        ]
+        x, y, line_h = 20, 84, 22
+        box_w = 232
+        box_h = line_h * (len(rows) + 1) + 14
+        overlay = frame.copy()
+        cv2.rectangle(overlay, (x, y), (x + box_w, y + box_h), (0, 0, 0), -1)
+        cv2.addWeighted(overlay, 0.5, frame, 0.5, 0, frame)
+        cy = y + 8
+        for color, text in rows:
+            cy += line_h
+            cv2.line(frame, (x + 10, cy - 5), (x + 34, cy - 5), color, 3, cv2.LINE_AA)
+            cv2.putText(frame, text, (x + 42, cy), font, 0.45, (230, 230, 230), 1,
+                        cv2.LINE_AA)
+        cy += line_h
+        cv2.putText(frame,
+                    f"g={SLING_G} m/s2  m={SLING_BALL_MASS:.1f} kg  b={SLING_DRAG_COEF} Ns/m",
+                    (x + 10, cy), font, 0.38, (180, 180, 180), 1, cv2.LINE_AA)
+
+    def draw(self, frame):
+        self._draw_legend(frame)
+        ax = int(self.anchor_x * SLING_PX_PER_M)
+        ay = int(self.anchor_y * SLING_PX_PER_M)
+        cv2.circle(frame, (ax, ay), 6, (180, 180, 180), -1)  # fixed anchor post
+
+        if self.aiming:
+            px = int(self.pull_x * SLING_PX_PER_M)
+            py = int(self.pull_y * SLING_PX_PER_M)
+            # Rubber band from the two forks of the anchor to the pulled ball.
+            cv2.line(frame, (ax - 16, ay - 10), (px, py), (60, 200, 255), 3, cv2.LINE_AA)
+            cv2.line(frame, (ax + 16, ay - 10), (px, py), (60, 200, 255), 3, cv2.LINE_AA)
+            for i, (tx, ty) in enumerate(self._predicted_arc()):
+                if i % 2 == 0:
+                    cv2.circle(frame, (tx, ty), 3, (0, 255, 255), -1)
+            cv2.circle(frame, (px, py), SLING_RADIUS_PX, (0, 140, 255), -1)
+            cv2.circle(frame, (px, py), SLING_RADIUS_PX, (255, 255, 255), 2, cv2.LINE_AA)
+            angle, speed, ke = self._aim_readout()
+            self._draw_readout(frame, angle, speed, ke)
+        else:
+            # Idle ball ready to grab, resting above the anchor.
+            cv2.circle(frame, (ax, ay - SLING_RADIUS_PX),
+                       SLING_RADIUS_PX, (0, 140, 255), -1)
+
+        m = SLING_BALL_MASS
+        for p in self.projectiles:
+            cx, cy = self._px(p.x), self._px(p.y)
+            # Fading motion trail.
+            n = len(p.trail)
+            for i, (tx, ty) in enumerate(p.trail):
+                t = (i + 1) / n if n else 0.0
+                col = (int(60 * t), int(160 * t), int(255 * t))
+                cv2.circle(frame, (tx, ty), max(1, int(SLING_RADIUS_PX * 0.3 * t)), col, -1)
+            # The ball.
+            cv2.circle(frame, (cx, cy), SLING_RADIUS_PX, (0, 90, 220), -1)
+            cv2.circle(frame, (cx - SLING_RADIUS_PX // 4, cy - SLING_RADIUS_PX // 4),
+                       SLING_RADIUS_PX // 4, (120, 210, 255), -1)
+            # Force vectors acting on it right now (all in newtons): weight,
+            # linear drag, the contact reaction, and their vector sum (net).
+            weight = (0.0, m * SLING_G)
+            drag = (-SLING_DRAG_COEF * p.vx, -SLING_DRAG_COEF * p.vy)
+            contact = (p.cfx, p.cfy)
+            self._draw_force_arrow(frame, cx, cy, *weight, SLING_COL_WEIGHT)
+            self._draw_force_arrow(frame, cx, cy, *drag, SLING_COL_DRAG)
+            self._draw_force_arrow(frame, cx, cy, *contact, SLING_COL_NORMAL)
+            net = (weight[0] + drag[0] + contact[0],
+                   weight[1] + drag[1] + contact[1])
+            self._draw_force_arrow(frame, cx, cy, *net, SLING_COL_NET)

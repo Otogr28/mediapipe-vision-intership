@@ -7,7 +7,7 @@ tags: [module, physics, interactables]
 
 **Location:** `src/ui/interactables.py`
 
-Scene objects that can be spawned by the UI. `BouncingSphere` lives in the `"interactables"` mode and has full collision physics; `SixSevenCounter` also lives in `"interactables"` and is a pose-driven gesture counter (no physics, no hand interaction); `BlackHole` lives in the `"experiments"` mode and is a pinch-draggable visual effect with no physics interaction (the BH and sphere never coexist in the current state machine, so the BH cannot affect the sphere's bounce).
+Scene objects that can be spawned by the UI. `BouncingSphere` lives in the `"interactables"` mode and has full collision physics; `SixSevenCounter` also lives in `"interactables"` and is a pose-driven gesture counter (no physics, no hand interaction); `BlackHole` and `Slingshot` live in the `"experiments"` mode — the BH is a pinch-draggable lensing effect with no physics, the Slingshot is a pinch-to-launch projectile with full CPU physics. Only one experiment is active at a time, so they never coexist.
 
 ---
 
@@ -209,6 +209,40 @@ Low-visibility frames leave the latch state untouched. This is intentional: an a
 Renders a translucent dark box at the top-centre containing the `"6 7"` label and the count number. The box border colour and the count's font scale both lerp toward a brighter / larger state proportional to `self._flash / SIXSEVEN_FLASH_FRAMES`, then decay back to neutral over `SIXSEVEN_FLASH_FRAMES` frames. The overlay is built via `cv2.addWeighted` so it dims rather than blocks the camera feed underneath.
 
 See [[config]] for `SIXSEVEN_*` constants and [[ui_manager]] for the spawn button and singleton slot.
+
+---
+
+## `Slingshot`
+
+A projectile-motion experiment (the second entry in the `"experiments"` picker, alongside `BlackHole`), simulated in **SI units** (metres, seconds, kilograms, newtons). A ball rests on a fixed anchor near the bottom-centre of the frame. A pinch *near the anchor* grabs it; while the hand stays closed the ball is pulled back — a rubber-band aim clamped at `SLING_MAX_PULL_PX` — a dotted arc previews the shot, and a HUD above the anchor reads out the live **launch angle (°), speed (m/s) and kinetic energy (J)**. Releasing launches the ball under real gravity (9.81 m/s²) with linear air drag; it bounces off the walls and floor with restitution, **collides elastically with every other shot**, leaves a fading trail, and continuously draws the **force vectors acting on it** (weight, drag, contact/normal, and their vector sum). Up to `SLING_MAX_PROJECTILES` shots coexist (the oldest is dropped past the cap). Like `BlackHole`, aiming reuses `pinch_state`, so it needs the pose scale — the shoulders must be visible.
+
+### Units and scale
+
+Physics state is stored in SI; two constants bridge to the video's pixels/frames: **`SLING_PX_PER_M`** (100 px = 1 m, so a 1920×1080 frame is a ~19.2 × 10.8 m arena) and **`SLING_DT`** (a fixed `1/30 s` timestep). The pinch cursor arrives in pixels and is converted to metres at the boundary; `_px(m)` converts back for drawing. Ball mass is `SLING_BALL_MASS` (equal for all → collisions are a clean velocity exchange), drag is linear `F = −SLING_DRAG_COEF·v`.
+
+### `__init__(frame_width, frame_height)`
+
+Stores the frame extent and ball radius in metres, places the anchor at `(0.5·w, 0.82·h)`, and starts with no projectiles and not aiming.
+
+### State
+
+| Attribute | Type | Description |
+|---|---|---|
+| `aiming` | `bool` | True while a grabbed ball is being pulled back. Exposed read-only via the `grabbed` property (the interface `UIManager` uses to retire the onboarding hint / detect interaction). |
+| `pull_x` / `pull_y` | `float` | Current (clamped) ball position **in metres** while aiming; equal to the anchor when idle. |
+| `projectiles` | `list[_Projectile]` | In-flight and resting balls. Each `_Projectile` (a `__slots__` value object) carries SI `x, y` (m), `vx, vy` (m/s), a bounded pixel `trail`, a `resting` flag (set once it settles on the floor so it stops integrating), and `cfx, cfy` — the net contact force (N) this frame, kept only for the overlay. |
+
+### `update(hand_result, pose_landmarks)`
+
+Two phases. **Aim:** for each hand, `pinch_state` gives `(pinching, held, midpoint_px)`; a fresh `pinching` within `SLING_GRAB_RADIUS_PX` of the anchor starts an aim, and `held` sustains it (same trigger/hold split as `BouncingSphere`). Fingers opening (`held` drops) — or the hand leaving the frame mid-pull — fires the shot via `_fire()`, which captures the launch point/velocity *before* resetting the aim, ignores a dead-fire, and enforces the projectile cap. **Integrate:** transient contact-force arrows fade by `SLING_CONTACT_DECAY`; each non-resting projectile gets semi-implicit Euler from real forces (weight `m·g` + drag `−b·v`) over `SLING_DT` with wall/ground restitution via `_step()`; then `_resolve_collisions()` handles every ball pair; finally resting balls are given the steady floor normal (`−m·g`, so their net force reads zero) and every ball appends its pixel position to its trail.
+
+`_resolve_collisions()` does equal-mass 2-D elastic collisions: overlapping pairs are separated by splitting the overlap, and pairs that are actually *approaching* (relative velocity along the contact normal `> SLING_REST_SPEED`) exchange that normal component with `SLING_COLLISION_RESTITUTION`, recording the impulse as an equal-and-opposite contact force (N) on both balls. A genuine impact wakes resting balls (`resting = False`) so a settled pile can be knocked apart; a gentle touch between two already-settled balls only separates them, with no impulse, so the pile doesn't jitter. A final clamp keeps every ball inside the frame.
+
+### `draw(frame)`
+
+Draws a colour **legend** (top-left) mapping each arrow colour to its force plus the SI constants in play (`g`, `m`, `b`); the anchor post; while aiming, the rubber band, the dotted `_predicted_arc()` (a short drag-aware forward-sim), the pulled ball, and a translucent HUD above the anchor showing the live **launch angle, speed (m/s) and KE (J)** from `_aim_readout()`; otherwise an idle ball. Each projectile renders with a velocity-fading trail and, via `_draw_force_arrow()` (scaled `SLING_FORCE_PX_PER_N` px per newton), the vectors for **weight** (amber), **drag** (cyan), **contact/normal** (green) and the **net force** (white).
+
+Tuning constants (`SLING_*`) live at the top of `interactables.py` next to the class — following the `BouncingSphere` precedent of keeping a CPU interactable's physics knobs local rather than in [[config]]. See [[ui_manager]] for the experiment picker slot.
 
 ---
 

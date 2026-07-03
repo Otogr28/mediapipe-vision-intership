@@ -34,6 +34,7 @@ Real-time hand and pose interaction system built with MediaPipe and OpenCV. Dete
 HalLMediaPipe/
 ├── src/
 │   ├── main.py                    Entry point: camera loop
+│   ├── capture.py                 FreshestFrame — threaded latest-frame reader (low latency)
 │   ├── config.py                  Global constants and thresholds
 │   ├── detection/
 │   │   ├── detectors.py           MediaPipe detector factories + shared result state
