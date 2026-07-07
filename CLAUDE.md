@@ -58,6 +58,7 @@ or a headless inference appliance. Key knobs:
 | `HALL_CAMERA` | `0` | Local device index, **or a stream URL** (`http://host:8091/stream.mjpg`) to infer on a remote camera |
 | `HALL_OUTPUT` | `window` | `window` (on-screen cv2 window), `stream` (headless MJPEG server), or `web` (React frontend: raw frames + per-frame state JSON over SSE; serves `web/dist`; backend does NO drawing) |
 | `HALL_INFERENCE` | `mediapipe` | Hand backend: `mediapipe` (CPU `.task`) or `gpu` (onnxruntime CUDA/TensorRT). `hallrun` defaults this to `gpu`. |
+| `HALL_POSE` | `0` | Body-pose inference is OFF by default (the UI is fully hand-driven; pose cost ~1.5 CPU cores at ~13 fps). `1` re-enables it + the pose-driven 6-7 counter. |
 | `HALL_ONNX_PROVIDERS` | `CUDA,CPU` | onnxruntime provider priority. `hallrun` prepends `TensorrtExecutionProvider` (~2.9x faster; first launch pays a ~2 min engine build, then cached to `.trt_cache/`) |
 | `HALL_DEBUG` | `0` | `1` draws the pinch-pipeline debug HUD (live ratio vs thresholds, machine state, detection age/FPS) — for tuning gesture constants |
 
