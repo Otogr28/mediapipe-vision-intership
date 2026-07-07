@@ -1,31 +1,89 @@
-% HalLMediaPipe app, jetson, inference
+% hall, kiosk, jetson
 
-# Watch the JETSON'S OWN camera WITH inference (skeleton + UI) in this browser
-ssh jetson@<ip> 'HALL_OUTPUT=stream HALL_CAMERA=0 nohup ~/.local/bin/hallrun >/tmp/hall-app.log 2>&1 </dev/null & sleep 2'; xdg-open http://<ip>:<outport>/
+; El Jetson es un appliance: bootea directo al kiosk (Firefox fullscreen +
+; backend web) y se AUTO-ACTUALIZA desde git main cada ~60 s.
+; Regla de oro: NO editar archivos a mano en el Jetson (el updater hace
+; git reset --hard). Deploy = pushear a main.
 
-# Same, but run the HANDS on the GPU (CUDA) instead of CPU MediaPipe
-ssh jetson@<ip> 'HALL_INFERENCE=gpu HALL_OUTPUT=stream HALL_CAMERA=0 nohup ~/.local/bin/hallrun >/tmp/hall-app.log 2>&1 </dev/null & sleep 2'; xdg-open http://<ip>:<outport>/
+# PUBLICAR cambios al kiosk (build si tocaste web/ + commit + push; el Jetson se actualiza solo en ≤60 s)
+cd ~/Documents/Repos/vaults/Intership2026/HalLMediaPipe && (cd web && npm run build) && git add -A && git commit -m '<mensaje>' && git push
 
-# Remote inference: laptop camera -> Jetson infers -> watch in this browser (one command, Ctrl-C stops)
-cd ~/Documents/Repos/vaults/Intership2026/HalLMediaPipe/deploy/hall-app && ./remote-infer.sh
+# Publicar cambios SOLO de backend/docs (sin rebuild del frontend)
+cd ~/Documents/Repos/vaults/Intership2026/HalLMediaPipe && git add -A && git commit -m '<mensaje>' && git push
 
-# Open the Jetson's annotated output viewer (if remote-infer is already running)
+# Ver el kiosk del Jetson desde ESTA laptop (misma sesión en vivo)
 xdg-open http://<ip>:<outport>/
 
-# Run the app on the Jetson's OWN monitor (needs a display + the C920 attached)
-# -t allocates a PTY so Ctrl-C forwards SIGINT to the remote app and it exits
-# cleanly. WITHOUT -t, Ctrl-C does NOT reach the remote python and the app keeps
-# running (and holds the camera) — that's why "Ctrl-C didn't work".
+# Estado del kiosk (servicio + updater + commit actual)
+ssh jetson@<ip> 'export XDG_RUNTIME_DIR=/run/user/1000; systemctl --user status hallkiosk --no-pager -n 5; cd ~/HalLMediaPipe && git log --oneline -1'
+
+# Reiniciar el kiosk (reinicia backend + browser)
+ssh jetson@<ip> 'export XDG_RUNTIME_DIR=/run/user/1000; systemctl --user restart hallkiosk'
+
+# Parar el kiosk (apaga cámara y browser hasta el próximo boot/start)
+ssh jetson@<ip> 'export XDG_RUNTIME_DIR=/run/user/1000; systemctl --user stop hallkiosk'
+
+# Forzar la actualización YA (sin esperar el timer de 60 s)
+ssh jetson@<ip> '~/HalLMediaPipe/deploy/hall-app/hall-update.sh'
+
+# Log del backend en vivo
+ssh jetson@<ip> 'tail -f /tmp/hall-app.log'
+
+# Captura de lo que muestra el MONITOR del Jetson (para ver el kiosk sin estar ahí)
+ssh jetson@<ip> 'DISPLAY=:0 XAUTHORITY=/run/user/1000/gdm/Xauthority ffmpeg -y -loglevel error -f x11grab -video_size 1920x1080 -i :0 -frames:v 1 /tmp/k.png' && scp jetson@<ip>:/tmp/k.png /tmp/k.png && xdg-open /tmp/k.png
+
+# Carga del Jetson (CPU por core + GPU) mientras corre el kiosk
+ssh jetson@<ip> 'timeout 4 tegrastats --interval 1500 | head -2; top -bn1 | head -12 | tail -6'
+
+# Setup appliance desde cero (checkout git + units systemd; una sola vez por device)
+ssh jetson@<ip> 'bash -s' < ~/Documents/Repos/vaults/Intership2026/HalLMediaPipe/deploy/hall-app/setup-boot.sh
+
+$ ip: echo 100.91.206.114
+$ outport: echo 8092
+
+% hall, dev, laptop
+
+# Dev local: backend web (frames + estado en :8092; correr desde la raíz del repo)
+cd ~/Documents/Repos/vaults/Intership2026/HalLMediaPipe && HALL_OUTPUT=web uv run python src/main.py
+
+# Dev local: frontend con hot-reload (:5173, proxy a :8092)
+cd ~/Documents/Repos/vaults/Intership2026/HalLMediaPipe/web && npm run dev
+
+# Dev local: backend con HUD de debug del pinch (tecla d en el browser)
+cd ~/Documents/Repos/vaults/Intership2026/HalLMediaPipe && HALL_DEBUG=1 HALL_OUTPUT=web uv run python src/main.py
+
+# Mock backend: cualquier escena SIN cámara ni gestos (menu/sphere/sixseven/picker/slingshot/slingaim/blackhole)
+cd ~/Documents/Repos/vaults/Intership2026/HalLMediaPipe && uv run python web/scripts/mock_backend.py <escena>
+
+# Screenshot headless del frontend (verificación rápida)
+cd ~/Documents/Repos/vaults/Intership2026/HalLMediaPipe/web && node scripts/shot.mjs http://localhost:5173/?nointro=1 /tmp/shot.png 3000 && xdg-open /tmp/shot.png
+
+# Modo clásico: ventana cv2 local (q para salir)
+cd ~/Documents/Repos/vaults/Intership2026/HalLMediaPipe && uv run python src/main.py
+
+$ escena: echo -e 'menu\nsphere\nsixseven\npicker\nslingshot\nslingaim\nblackhole'
+
+% hall, legacy, stream
+
+; Modos previos al kiosk — siguen funcionando como fallback.
+
+# Remote inference: cámara de la laptop -> Jetson infiere -> browser (Ctrl-C para todo)
+cd ~/Documents/Repos/vaults/Intership2026/HalLMediaPipe/deploy/hall-app && ./remote-infer.sh
+
+# Stream anotado clásico (cv2 dibuja, sin frontend web)
+ssh jetson@<ip> 'HALL_OUTPUT=stream HALL_CAMERA=0 nohup ~/.local/bin/hallrun >/tmp/hall-app.log 2>&1 </dev/null & sleep 2'; xdg-open http://<ip>:<outport>/
+
+# App en el monitor del Jetson con ventana cv2 (-t para que Ctrl-C llegue al remoto)
 ssh -t jetson@<ip> 'DISPLAY=:0 ~/.local/bin/hallrun'
 
-# Expose just this laptop's webcam on the tailnet (server only; Ctrl-C stops)
+# Exponer solo la webcam de esta laptop en el tailnet
 cd ~/Documents/Repos/vaults/Intership2026/HalLMediaPipe/deploy/hall-app && ./laptop-camera.sh
 
-# Stop the app on the Jetson (kills any running main.py)
-ssh jetson@<ip> 'pkill -f "src/main.py" || true'
-
-# Deploy / update the app on the Jetson (code + models + launcher + deps)
+# Deploy rsync legacy (solo para modelos / provisioning inicial; el código va por git)
 cd ~/Documents/Repos/vaults/Intership2026/HalLMediaPipe/deploy/hall-app && ./deploy.sh
+
+# Matar cualquier main.py suelto en el Jetson (fuera del kiosk)
+ssh jetson@<ip> 'pkill -f "src/main.py" || true'
 
 $ ip: echo 100.91.206.114
 $ outport: echo 8092
