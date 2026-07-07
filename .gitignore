@@ -75,3 +75,10 @@ recordings/
 build/
 dist/
 *.egg-info/
+
+# ...but the built web frontend IS committed on purpose: the Jetson kiosk
+# auto-updates by `git pull` and never runs Node, so web/dist must travel in
+# the repo. This negation re-includes it despite the `dist/` rule above
+# (web/.gitignore documents the same intent; the rule here was silently
+# dropping it, so frontend changes never reached the device via git).
+!web/dist/

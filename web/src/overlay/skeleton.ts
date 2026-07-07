@@ -43,6 +43,10 @@ export function drawSkeleton(
   w: number,
   h: number,
 ) {
+  // In vtuber mode the puppet replaces the raw skeleton — drawing both would
+  // clutter the character with its own tracking lines.
+  if (state.objects.some((o) => o.type === "vtuber")) return;
+
   ctx.lineCap = "round";
   ctx.lineJoin = "round";
 

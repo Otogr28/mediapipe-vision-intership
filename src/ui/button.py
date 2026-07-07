@@ -16,6 +16,10 @@ class Button:
         self._cooldown = 0
         self.hovered = False
         self.pressed = False
+        # Sticky "this option is chosen" flag for radio-style palettes (e.g.
+        # the Orbitals body-type picker). Purely cosmetic — set by the owner,
+        # read by the renderer; the click logic never looks at it.
+        self.selected = False
 
     def _inside(self, x, y, pad=0):
         return (self.x - pad <= x <= self.x + self.width + pad and
@@ -68,6 +72,7 @@ class Button:
             "rect": [self.x, self.y, self.width, self.height],
             "hovered": self.hovered,
             "pressed": self.pressed,
+            "selected": self.selected,
         }
 
     def draw(self, frame):
@@ -75,6 +80,8 @@ class Button:
             bg_color = (0, 200, 100)
         elif self.hovered:
             bg_color = (50, 130, 220)
+        elif self.selected:
+            bg_color = (70, 60, 20)
         else:
             bg_color = (30, 30, 30)
 

@@ -36,6 +36,9 @@ export interface ButtonState {
   rect: [number, number, number, number];
   hovered: boolean;
   pressed: boolean;
+  /** radio-style "chosen" flag (Orbitals body-type palette); optional so
+   *  older/other button states without it still parse. */
+  selected?: boolean;
 }
 
 export interface SpeedPill {
@@ -101,11 +104,49 @@ export interface SlingshotObject {
   projectiles: SlingshotProjectile[];
 }
 
+export type OrbitalKind = "star" | "planet" | "moon" | "comet";
+
+export interface OrbitalsBody {
+  id: number;
+  x: number;
+  y: number;
+  r: number;
+  rgb: [number, number, number];
+  kind: OrbitalKind;
+  collapsed: boolean;
+}
+
+export interface OrbitalsObject {
+  type: "orbitals";
+  bodies: OrbitalsBody[];
+  count: number;
+  /** currently selected spawn type (for the aim ghost + preview) */
+  kind: OrbitalKind;
+  kind_r: number;
+  kind_rgb: [number, number, number];
+  time_scale: number;
+  aiming: boolean;
+  spawn: Vec2 | null;
+  pull: Vec2 | null;
+  arc: Vec2[];
+  readout: { v0: number; angle: number; kind: string } | null;
+}
+
+export interface VtuberObject {
+  type: "vtuber";
+  /** spawn-relative clock (s), wrapped — drives the idle bob */
+  t: number;
+  /** max pinch progress across hands [0, 1] — drives the mouth */
+  mouth: number;
+}
+
 export type SceneObject =
   | SphereObject
   | SixSevenObject
   | BlackHoleObject
-  | SlingshotObject;
+  | SlingshotObject
+  | OrbitalsObject
+  | VtuberObject;
 
 export interface DebugState {
   render_fps: number;
@@ -124,7 +165,7 @@ export interface AppState {
   pose: PoseState | null;
   session: {
     state: "menu" | "interactables" | "experiments";
-    experiment: "black_hole" | "slingshot" | null;
+    experiment: "black_hole" | "slingshot" | "orbitals" | null;
     hint: { visible: boolean };
   };
   buttons: ButtonState[];

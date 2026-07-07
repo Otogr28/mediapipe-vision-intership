@@ -7,8 +7,8 @@ from ui.button import Button
 from ui.cursor import PinchCursor
 from ui.debug_hud import DebugHUD
 from ui.hints import IntroOverlay, PinchHint
-from ui.interactables import (BlackHole, BouncingSphere, SixSevenCounter,
-                              Slingshot)
+from ui.interactables import (BlackHole, BouncingSphere, Orbitals, Puppet,
+                              SixSevenCounter, Slingshot)
 
 MENU_BTN_W, MENU_BTN_H = 260, 70
 RESET_W, RESET_H = 130, 50
@@ -35,10 +35,13 @@ class UIManager:
         self._gpu_effects = gpu_effects
         self.spheres = []
         # The single experiment currently running in the "experiments" state
-        # (a BlackHole, Slingshot, …), or None while its picker is shown. Only
-        # one experiment is active at a time.
+        # (a BlackHole, Slingshot, Orbitals, …), or None while its picker is
+        # shown. Only one experiment is active at a time.
         self._active_experiment = None
         self._sixseven = None
+        # The vtuber puppet, live only while the user spawns it in the
+        # "interactables" state (None otherwise).
+        self._puppet = None
         # Lazy-initialised the first time the user spawns the black hole —
         # postpones GL context creation until something actually needs it, and
         # keeps startup cost out of the camera-only path.
@@ -87,8 +90,14 @@ class UIManager:
             on_click=self._add_sphere,
         )
 
+        self._vtuber_btn = Button(
+            x=margin + 120 + 10, y=margin, width=150, height=50,
+            label="Vtuber",
+            on_click=self._spawn_puppet,
+        )
+
         self._sixseven_btn = Button(
-            x=margin + 120 + 10, y=margin, width=170, height=50,
+            x=margin + 120 + 10 + 150 + 10, y=margin, width=170, height=50,
             label="6 7 Counter",
             on_click=self._spawn_sixseven,
             font_scale=0.6,
@@ -106,7 +115,13 @@ class UIManager:
             label="Slingshot",
             on_click=self._spawn_slingshot,
         )
-        self._experiment_btns = [self._black_hole_btn, self._slingshot_btn]
+        self._orbitals_btn = Button(
+            x=margin + (150 + 10) * 2, y=margin, width=150, height=50,
+            label="Orbitals",
+            on_click=self._spawn_orbitals,
+        )
+        self._experiment_btns = [self._black_hole_btn, self._slingshot_btn,
+                                 self._orbitals_btn]
 
         # Sim-speed stepper, pinned top-right: [-] 1x [+]. Only shown while
         # the active experiment exposes a `time_scale` (the slingshot).
@@ -148,6 +163,12 @@ class UIManager:
     def _spawn_slingshot(self):
         self._active_experiment = Slingshot(self.frame_w, self.frame_h)
 
+    def _spawn_orbitals(self):
+        self._active_experiment = Orbitals(self.frame_w, self.frame_h)
+
+    def _spawn_puppet(self):
+        self._puppet = Puppet(self.frame_w, self.frame_h)
+
     def _spawn_sixseven(self):
         # Re-pressing the button while a counter is active resets the
         # tally — gives users a way to zero the count without leaving the
@@ -158,7 +179,16 @@ class UIManager:
         self.spheres.clear()
         self._active_experiment = None
         self._sixseven = None
+        self._puppet = None
         self.state = "menu"
+
+    def _experiment_palette(self):
+        """(id, Button) list the active experiment exposes for its own
+        controls (e.g. the Orbitals body-type + preset palette), or empty.
+        Lets an experiment own its buttons without the UIManager knowing the
+        specific experiment type."""
+        exp = self._active_experiment
+        return getattr(exp, "palette", []) if exp is not None else []
 
     def _speed_control_active(self):
         """True while the active experiment has an adjustable sim speed."""
@@ -190,6 +220,7 @@ class UIManager:
 
         elif self.state == "interactables":
             self._sphere_btn.update(hand_result, pose_landmarks, self.frame_w, self.frame_h)
+            self._vtuber_btn.update(hand_result, pose_landmarks, self.frame_w, self.frame_h)
             if POSE_ENABLED:
                 # The 6-7 counter is pose-driven; without body inference its
                 # button would spawn a counter that can never count.
@@ -198,6 +229,8 @@ class UIManager:
                 s.update(hand_result, pose_landmarks)
             if self._sixseven is not None:
                 self._sixseven.update(hand_result, pose_landmarks)
+            if self._puppet is not None:
+                self._puppet.update(hand_result, pose_landmarks)
             self._reset_btn.update(hand_result, pose_landmarks, self.frame_w, self.frame_h)
 
         elif self.state == "experiments":
@@ -209,6 +242,8 @@ class UIManager:
                 if self._speed_control_active():
                     self._speed_minus_btn.update(hand_result, pose_landmarks, self.frame_w, self.frame_h)
                     self._speed_plus_btn.update(hand_result, pose_landmarks, self.frame_w, self.frame_h)
+                for _id, btn in self._experiment_palette():
+                    btn.update(hand_result, pose_landmarks, self.frame_w, self.frame_h)
             self._reset_btn.update(hand_result, pose_landmarks, self.frame_w, self.frame_h)
 
         if self._detect_interaction():
@@ -225,14 +260,17 @@ class UIManager:
         if self.state == "menu":
             return self._menu_interactables_btn.pressed or self._menu_experiments_btn.pressed
         if self.state == "interactables":
-            return (self._sphere_btn.pressed or self._sixseven_btn.pressed
+            return (self._sphere_btn.pressed or self._vtuber_btn.pressed
+                    or self._sixseven_btn.pressed
                     or self._reset_btn.pressed
-                    or any(s.grabbed for s in self.spheres))
+                    or any(s.grabbed for s in self.spheres)
+                    or (self._puppet is not None and self._puppet.grabbed))
         if self.state == "experiments":
             if self._active_experiment is None:
                 return self._reset_btn.pressed or any(b.pressed for b in self._experiment_btns)
             return (self._reset_btn.pressed or self._active_experiment.grabbed
-                    or self._speed_minus_btn.pressed or self._speed_plus_btn.pressed)
+                    or self._speed_minus_btn.pressed or self._speed_plus_btn.pressed
+                    or any(btn.pressed for _id, btn in self._experiment_palette()))
         return False
 
     def to_state(self):
@@ -255,7 +293,8 @@ class UIManager:
             ]
 
         elif self.state == "interactables":
-            buttons = [self._sphere_btn.to_state("spawn.sphere")]
+            buttons = [self._sphere_btn.to_state("spawn.sphere"),
+                       self._vtuber_btn.to_state("spawn.vtuber")]
             if POSE_ENABLED:
                 buttons.append(self._sixseven_btn.to_state("spawn.sixseven"))
             buttons.append(self._reset_btn.to_state("reset"))
@@ -263,12 +302,16 @@ class UIManager:
                        for i, s in enumerate(self.spheres)]
             if self._sixseven is not None:
                 objects.append(self._sixseven.to_state())
+            # The puppet renders last so its dim backdrop sits over the scene.
+            if self._puppet is not None:
+                objects.append(self._puppet.to_state())
 
         elif self.state == "experiments":
             if self._active_experiment is None:
                 buttons = [
                     self._black_hole_btn.to_state("exp.black_hole"),
                     self._slingshot_btn.to_state("exp.slingshot"),
+                    self._orbitals_btn.to_state("exp.orbitals"),
                 ]
             else:
                 exp_state = self._active_experiment.to_state()
@@ -282,6 +325,9 @@ class UIManager:
                     x, y, w, h = self._speed_label_rect
                     speed = {"rect": [x, y, w, h],
                              "text": f"{self._active_experiment.time_scale:g}x"}
+                # Experiment-owned palette buttons (e.g. Orbitals body types).
+                for _id, btn in self._experiment_palette():
+                    buttons.append(btn.to_state(_id))
             buttons.append(self._reset_btn.to_state("reset"))
 
         return {
@@ -314,12 +360,16 @@ class UIManager:
 
         elif self.state == "interactables":
             self._sphere_btn.draw(frame)
+            self._vtuber_btn.draw(frame)
             if POSE_ENABLED:
                 self._sixseven_btn.draw(frame)
             for s in self.spheres:
                 s.draw(frame)
             if self._sixseven is not None:
                 self._sixseven.draw(frame)
+            # The puppet dims the scene, so it draws over the spheres.
+            if self._puppet is not None:
+                self._puppet.draw(frame)
             self._reset_btn.draw(frame)
 
         elif self.state == "experiments":
@@ -331,6 +381,8 @@ class UIManager:
                     self._speed_minus_btn.draw(frame)
                     self._speed_plus_btn.draw(frame)
                     self._draw_speed_label(frame)
+                for _id, btn in self._experiment_palette():
+                    btn.draw(frame)
             else:
                 for btn in self._experiment_btns:
                     btn.draw(frame)

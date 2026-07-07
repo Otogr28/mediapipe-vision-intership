@@ -279,6 +279,57 @@ INTRO_TITLE = "HalLMediaPipe"
 INTRO_SUBTITLE = "Gesture-controlled vision"
 HINT_TEXT = "Close your hand to interact"
 
+# --- Orbitals experiment (n-body gravity sandbox) -----------------------
+# A pinch-driven gravity playground: place stars/planets/moons/comets and
+# watch them orbit, slingshot and merge. The whole sim runs in SCREEN PIXELS
+# (positions px, velocities px/s) with a tunable gravitational constant, so
+# there is no metres<->pixels bridge to carry — everything the renderer
+# needs is already in its own coordinates.
+#
+# Integration mirrors the slingshot's fixed-timestep discipline but uses
+# velocity-Verlet (leapfrog) instead of RK4: it is SYMPLECTIC, so orbital
+# energy stays bounded over long runs (RK4 slowly gains energy and spirals
+# orbits outward). The sim-speed stepper (shared with the slingshot) changes
+# how many sub-steps run per frame, never the step size.
+ORB_G = 4000.0               # gravitational constant (px^3 / (mass * s^2))
+ORB_SOFTENING_PX = 14.0      # Plummer softening: F ~ m1 m2 / (r^2 + eps^2)
+ORB_PHYS_DT = 1.0 / 240.0    # physics sub-step (s); small for fast fly-bys
+ORB_FRAME_DT = 1.0 / 30.0    # simulated time one video frame represents (s)
+ORB_MAX_SUBSTEPS = 40        # per-frame cap; drops sim debt rather than stall
+ORB_TIME_SCALES = (0.25, 0.5, 1.0, 2.0, 4.0, 8.0)  # sim speeds the UI steps
+ORB_MAX_BODIES = 40          # hard cap; oldest placed body drops past it
+ORB_TRAIL_LEN = 64           # client-accumulated trail length (points)
+ORB_PRUNE_MARGIN = 1.6       # bodies beyond this * frame extent are removed
+ORB_LAUNCH_GAIN = 2.6        # pull px -> launch px/s (pinch-drag-release)
+ORB_MAX_PULL_PX = 260        # cap on the aim pull-back distance (px)
+ORB_GRAB_PAD_PX = 26         # grab a body when the pinch lands within r + pad
+ORB_PREDICT_TIME_S = 2.2     # how far ahead the dotted aim preview simulates
+ORB_PREDICT_SAMPLE = 5       # one preview dot every N physics steps
+# Merged mass above which a body "collapses" into a black hole (rendered as
+# a dark disk + accretion ring; the full lensing shader is a later upgrade).
+ORB_COLLAPSE_MASS = 5200.0
+
+# Body-type presets the palette spawns: (mass, radius px, [r, g, b] 0-255).
+# Masses/radii are chosen so a Star holds Planets/Moons in visible orbits
+# and a Comet is a light streaker. Colours are a rough blackbody-ish ramp
+# hot->cool: white-gold star, blue planet, grey moon, icy-cyan comet.
+ORB_BODY_TYPES = {
+    "star":   {"mass": 1200.0, "radius": 26, "rgb": [255, 226, 158]},
+    "planet": {"mass": 42.0,   "radius": 13, "rgb": [110, 170, 255]},
+    "moon":   {"mass": 9.0,    "radius": 8,  "rgb": [200, 205, 215]},
+    "comet":  {"mass": 2.5,    "radius": 6,  "rgb": [150, 240, 255]},
+}
+ORB_DEFAULT_KIND = "planet"
+
+# Vtuber / Puppet interactable.
+# A friendly cosmic mascot puppeteered by the live landmarks: its paws ride
+# the tracked HANDS (always available), its mouth opens with the pinch, and
+# — when body pose is on (HALL_POSE=1) — its arms follow shoulder/elbow/wrist.
+# Pure rendering happens in the browser (and a cv2 fallback); the backend
+# only carries a tiny mode/expression snapshot. `PUPPET_IDLE_BOB_S` is the
+# period of the head's resting bob.
+PUPPET_IDLE_BOB_S = 3.2
+
 
 if __name__ == "__main__":
     print("config file, not supposed to be run directly")

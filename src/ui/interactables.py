@@ -9,10 +9,16 @@ import numpy as np
 from config import (BH_DEFAULT_POS_FACTOR, BH_DISK_BRIGHTNESS,
                     BH_DISK_INNER_FACTOR, BH_DISK_OUTER_FACTOR,
                     BH_DISK_ROTATION_SPEED, BH_DISK_TILT_RAD,
-                    BH_EINSTEIN_RADIUS_PX, BH_GRAB_RADIUS,
-                    SIXSEVEN_FLASH_FRAMES, SIXSEVEN_HYSTERESIS,
-                    SIXSEVEN_MIN_VISIBILITY)
-from detection.gestures import hand_id, pinch_state
+                    BH_EINSTEIN_RADIUS_PX, BH_GRAB_RADIUS, ORB_BODY_TYPES,
+                    ORB_COLLAPSE_MASS, ORB_DEFAULT_KIND, ORB_FRAME_DT, ORB_G,
+                    ORB_GRAB_PAD_PX, ORB_LAUNCH_GAIN, ORB_MAX_BODIES,
+                    ORB_MAX_PULL_PX, ORB_MAX_SUBSTEPS, ORB_PHYS_DT,
+                    ORB_PREDICT_SAMPLE, ORB_PREDICT_TIME_S, ORB_PRUNE_MARGIN,
+                    ORB_SOFTENING_PX, ORB_TIME_SCALES, ORB_TRAIL_LEN,
+                    PUPPET_IDLE_BOB_S, SIXSEVEN_FLASH_FRAMES,
+                    SIXSEVEN_HYSTERESIS, SIXSEVEN_MIN_VISIBILITY)
+from detection.gestures import hand_id, pinch_info, pinch_state
+from ui.button import Button
 
 POSE_LEFT_ELBOW = 13
 POSE_RIGHT_ELBOW = 14
@@ -1056,3 +1062,656 @@ class Slingshot:
                    weight[1] + drag[1] + contact[1])
             self._draw_force_arrow(frame, cx, cy, *net, SLING_COL_NET,
                                    tag="net", dashed=True)
+
+
+# --- Orbitals experiment (n-body gravity sandbox) -----------------------
+# See the ORB_* block in config.py for the physics constants and the design
+# rationale (symplectic velocity-Verlet, Plummer softening, screen-pixel
+# units). Everything below runs in pixels / seconds.
+
+
+def _radius_for_mass(mass):
+    """Screen radius (px) for a body of the given mass — a gentle cube-root
+    law (radius ~ mass^(1/3), i.e. constant density) clamped to a sane band
+    so a merged giant stays on-screen and a speck stays clickable."""
+    return int(max(5, min(46, 4.4 * (mass ** (1.0 / 3.0)))))
+
+
+class _Body:
+    __slots__ = ("id", "x", "y", "vx", "vy", "mass", "radius", "kind", "rgb",
+                 "collapsed", "frozen", "ax", "ay", "trail")
+
+    def __init__(self, bid, x, y, vx, vy, mass, radius, kind, rgb):
+        self.id = bid
+        self.x = x         # position (px)
+        self.y = y
+        self.vx = vx       # velocity (px/s)
+        self.vy = vy
+        self.mass = mass
+        self.radius = radius
+        self.kind = kind
+        self.rgb = rgb     # (r, g, b) 0-255
+        self.collapsed = mass >= ORB_COLLAPSE_MASS
+        # Frozen while grabbed: still a gravity SOURCE, but the integrator
+        # leaves its position/velocity to the hand.
+        self.frozen = False
+        self.ax = 0.0      # cached acceleration between Verlet half-steps
+        self.ay = 0.0
+        # Server-side trail for the cv2 path; the web path re-accumulates it
+        # client-side from the streamed positions (one point per frame).
+        self.trail = deque(maxlen=ORB_TRAIL_LEN)
+
+
+class Orbitals:
+    """Newtonian n-body gravity sandbox driven by pinch gestures.
+
+    Place bodies (star / planet / moon / comet, chosen from a palette) and
+    watch them orbit, slingshot and merge. A pinch on empty space begins a
+    slingshot-style aim: the spawn point is pinned where the fingers closed,
+    the hand pulls back and a dotted arc (forward-simulated in the *live*
+    gravity field) previews the orbit; releasing launches the body opposite
+    the pull. A pinch on an existing body grabs it — drag to reposition, and
+    the release velocity is imparted so you can fling planets into orbit. A
+    grabbed body keeps pulling on the others (it is a fixed gravity source
+    while held). Presets (Solar / Binary / Figure-8) drop a whole
+    configuration in one press.
+
+    Physics runs in screen pixels / seconds: symplectic velocity-Verlet at a
+    fixed ``ORB_PHYS_DT`` sub-step (so ``time_scale`` — shared with the
+    slingshot's -/+ stepper — never changes the step size), Plummer softening
+    so close passes don't explode, and perfectly-inelastic merges that
+    conserve mass and momentum. A merger past ``ORB_COLLAPSE_MASS`` collapses
+    into a black hole (rendered as a dark disk + accretion ring).
+    """
+
+    def __init__(self, frame_width, frame_height):
+        self.w = frame_width
+        self.h = frame_height
+        self.bodies = []
+        self._next_id = 0
+        self._kind = ORB_DEFAULT_KIND
+        # Aim (place-with-velocity) state, mirroring the slingshot.
+        self.aiming = False
+        self.aim_hand = None
+        self.spawn_x = 0.0
+        self.spawn_y = 0.0
+        self.pull_x = 0.0
+        self.pull_y = 0.0
+        # Grab (reposition/fling) state, mirroring BouncingSphere.
+        self.grab_body = None
+        self.grab_hand = None
+        self.grab_offset_x = 0.0
+        self.grab_offset_y = 0.0
+        self._grab_prev = None    # last grabbed cursor, for release velocity
+        # Fixed-timestep integration state (see the slingshot note).
+        self._scale_idx = ORB_TIME_SCALES.index(1.0)
+        self._time_acc = 0.0
+        self._eps2 = ORB_SOFTENING_PX * ORB_SOFTENING_PX
+        # Body-type palette + preset buttons, laid out top-left. Each type
+        # button carries `selected` so the active spawn kind is highlighted.
+        self._build_palette()
+        self._apply_selection()
+
+    # ---- palette -------------------------------------------------------
+
+    def _build_palette(self):
+        margin = int(self.h * 0.12)
+        bw, bh, gap = 116, 46, 8
+        x0, y0 = margin, margin
+        types = [("star", "Star"), ("planet", "Planet"),
+                 ("moon", "Moon"), ("comet", "Comet")]
+        self._type_btns = []
+        for i, (kind, label) in enumerate(types):
+            btn = Button(
+                x=x0 + i * (bw + gap), y=y0, width=bw, height=bh,
+                label=label, on_click=(lambda k=kind: self._select(k)),
+                font_scale=0.6,
+            )
+            self._type_btns.append((f"orb.type.{kind}", kind, btn))
+
+        y1 = y0 + bh + gap
+        presets = [("solar", "Solar", self._preset_solar),
+                   ("binary", "Binary", self._preset_binary),
+                   ("figure8", "Figure 8", self._preset_figure8),
+                   ("clear", "Clear", self.clear)]
+        self._preset_btns = []
+        for i, (pid, label, fn) in enumerate(presets):
+            btn = Button(
+                x=x0 + i * (bw + gap), y=y1, width=bw, height=bh,
+                label=label, on_click=fn, font_scale=0.6,
+            )
+            self._preset_btns.append((f"orb.preset.{pid}", btn))
+
+    @property
+    def palette(self):
+        """(id, Button) list the UIManager updates / draws / serializes —
+        the experiment owns its own buttons so main.py stays thin."""
+        return ([(bid, btn) for bid, _kind, btn in self._type_btns]
+                + self._preset_btns)
+
+    def _select(self, kind):
+        self._kind = kind
+        self._apply_selection()
+
+    def _apply_selection(self):
+        for _bid, kind, btn in self._type_btns:
+            btn.selected = (kind == self._kind)
+
+    # ---- sim-speed stepper (same interface as the slingshot) -----------
+
+    @property
+    def time_scale(self):
+        return ORB_TIME_SCALES[self._scale_idx]
+
+    def speed_up(self):
+        self._scale_idx = min(self._scale_idx + 1, len(ORB_TIME_SCALES) - 1)
+
+    def speed_down(self):
+        self._scale_idx = max(self._scale_idx - 1, 0)
+
+    @property
+    def grabbed(self):
+        # Retires the onboarding hint while actively placing or dragging.
+        return self.aiming or self.grab_body is not None
+
+    # ---- spawning / presets --------------------------------------------
+
+    def _spawn(self, x, y, vx, vy, kind, mass=None, radius=None, rgb=None):
+        spec = ORB_BODY_TYPES[kind]
+        mass = spec["mass"] if mass is None else mass
+        radius = spec["radius"] if radius is None else radius
+        rgb = list(spec["rgb"]) if rgb is None else list(rgb)
+        body = _Body(self._next_id, x, y, vx, vy, mass, radius, kind, rgb)
+        self._next_id += 1
+        self.bodies.append(body)
+        if len(self.bodies) > ORB_MAX_BODIES:
+            self.bodies.pop(0)
+        return body
+
+    def clear(self):
+        self.bodies.clear()
+        self.aiming = False
+        self.aim_hand = None
+        self.grab_body = None
+        self.grab_hand = None
+
+    def _circular_v(self, cx, cy, x, y, central_mass, sign=1.0):
+        """Tangential speed for a circular orbit of a test body at (x, y)
+        around a central mass at (cx, cy): v = sqrt(G M / r), perpendicular
+        to the radius (sign picks the orbit direction)."""
+        dx, dy = x - cx, y - cy
+        r = math.hypot(dx, dy) or 1.0
+        v = math.sqrt(ORB_G * central_mass / r)
+        # Perpendicular to (dx, dy).
+        return (-dy / r * v * sign, dx / r * v * sign)
+
+    def _preset_solar(self):
+        self.clear()
+        cx, cy = self.w * 0.5, self.h * 0.5
+        star = ORB_BODY_TYPES["star"]["mass"]
+        self._spawn(cx, cy, 0.0, 0.0, "star")
+        # Planets on progressively wider circular orbits, seeded at spread
+        # starting angles so they don't all line up on one side. Their mass
+        # is kept tiny (near test-particles) so mutual perturbation can't
+        # slowly eject or merge them — the preset should read as a clean,
+        # stable system (the sandbox is where heavy bodies interact).
+        orbits = [(140, "planet", 0.0), (235, "planet", 2.3),
+                  (330, "moon", 4.6)]
+        for r, kind, ang in orbits:
+            px, py = cx + r * math.cos(ang), cy + r * math.sin(ang)
+            vx, vy = self._circular_v(cx, cy, px, py, star, sign=1.0)
+            self._spawn(px, py, vx, vy, kind, mass=4.0)
+
+    def _preset_binary(self):
+        self.clear()
+        cx, cy = self.w * 0.5, self.h * 0.5
+        m = ORB_BODY_TYPES["star"]["mass"]
+        d = 220.0                       # separation
+        v = 0.5 * math.sqrt(ORB_G * (2 * m) / d)  # each star's orbital speed
+        # Two equal stars waltzing about their common centre of mass. A
+        # circumbinary planet close enough to stay on-screen sits inside the
+        # binary's chaotic zone (it would be ejected), so the preset is just
+        # the clean, indefinitely-stable two-star dance.
+        self._spawn(cx - d / 2, cy, 0.0, -v, "star")
+        self._spawn(cx + d / 2, cy, 0.0, v, "star")
+
+    def _preset_figure8(self):
+        """The Chenciner–Montgomery three-body choreography: three equal
+        masses chasing each other along a single figure-eight. The canonical
+        G=m=1 initial conditions are scaled to screen pixels (length scale L,
+        derived velocity scale sqrt(G m / L)); screen-y grows downward, which
+        just mirrors the eight vertically."""
+        self.clear()
+        cx, cy = self.w * 0.5, self.h * 0.5
+        L = 230.0
+        m = 240.0
+        V = math.sqrt(ORB_G * m / L)
+        r = 16
+        x1, y1 = 0.97000436, -0.24308753
+        v1x, v1y = 0.4662036850, 0.4323657300
+        cols = [[255, 214, 120], [130, 200, 255], [235, 150, 220]]
+        specs = [
+            (x1, y1, v1x, v1y),
+            (-x1, -y1, v1x, v1y),
+            (0.0, 0.0, -2 * v1x, -2 * v1y),
+        ]
+        for (px, py, vx, vy), rgb in zip(specs, cols):
+            self._spawn(cx + px * L, cy + py * L,
+                        vx * V, vy * V, "star", mass=m, radius=r, rgb=rgb)
+
+    # ---- interaction ---------------------------------------------------
+
+    def _clamp_pull(self, mx, my):
+        dx, dy = mx - self.spawn_x, my - self.spawn_y
+        dist = math.hypot(dx, dy)
+        if dist > ORB_MAX_PULL_PX and dist > 0:
+            s = ORB_MAX_PULL_PX / dist
+            dx, dy = dx * s, dy * s
+        return self.spawn_x + dx, self.spawn_y + dy
+
+    def _launch_velocity(self):
+        # Fires opposite the pull, like the slingshot.
+        return ((self.spawn_x - self.pull_x) * ORB_LAUNCH_GAIN,
+                (self.spawn_y - self.pull_y) * ORB_LAUNCH_GAIN)
+
+    def _fire(self):
+        vx, vy = self._launch_velocity()
+        sx, sy = self.spawn_x, self.spawn_y
+        self.aiming = False
+        self.aim_hand = None
+        self._spawn(sx, sy, vx, vy, self._kind)
+
+    def _body_at(self, px, py):
+        """The nearest body whose disk (plus a small pad) contains (px, py),
+        or None — used to disambiguate grab-a-body from place-a-new-one."""
+        best, best_d = None, None
+        for b in self.bodies:
+            d = math.hypot(b.x - px, b.y - py)
+            if d <= b.radius + ORB_GRAB_PAD_PX and (best_d is None or d < best_d):
+                best, best_d = b, d
+        return best
+
+    def update(self, hand_result, pose_landmarks):
+        # 1) Continue an in-progress grab or aim (owner-latched, like the
+        #    slingshot / sphere): the pinch machine outlives a brief tracking
+        #    dropout, and the gesture ends when the fingers open.
+        if self.grab_body is not None:
+            _, held, (mx, my) = pinch_state(self.grab_hand)
+            if held and self.grab_body in self.bodies:
+                nx = mx + self.grab_offset_x
+                ny = my + self.grab_offset_y
+                if self._grab_prev is not None:
+                    px, py = self._grab_prev
+                    self.grab_body.vx = (nx - px) / ORB_FRAME_DT
+                    self.grab_body.vy = (ny - py) / ORB_FRAME_DT
+                self.grab_body.x, self.grab_body.y = nx, ny
+                self._grab_prev = (nx, ny)
+            else:
+                if self.grab_body in self.bodies:
+                    self.grab_body.frozen = False
+                self.grab_body = None
+                self.grab_hand = None
+                self._grab_prev = None
+
+        if self.aiming:
+            _, held, (mx, my) = pinch_state(self.aim_hand)
+            if held:
+                self.pull_x, self.pull_y = self._clamp_pull(mx, my)
+            else:
+                self._fire()
+
+        # 2) Start a new gesture on a fresh pinch: grab a body if the close
+        #    landed on one, otherwise begin aiming a new body.
+        if (not self.aiming and self.grab_body is None
+                and hand_result is not None):
+            for i in range(len(hand_result.hand_landmarks)):
+                hid = hand_id(hand_result, i)
+                pinching, _, (mx, my) = pinch_state(hid)
+                if not pinching:
+                    continue
+                hit = self._body_at(mx, my)
+                if hit is not None:
+                    self.grab_body = hit
+                    self.grab_hand = hid
+                    self.grab_offset_x = hit.x - mx
+                    self.grab_offset_y = hit.y - my
+                    hit.frozen = True
+                    self._grab_prev = (hit.x, hit.y)
+                else:
+                    self.aim_hand = hid
+                    self.spawn_x, self.spawn_y = mx, my
+                    self.pull_x, self.pull_y = mx, my
+                    self.aiming = True
+                break
+
+        # 3) Advance the sim: bank this frame's simulated time (scaled by the
+        #    sim-speed setting) and step in whole ORB_PHYS_DT sub-steps. The
+        #    acceleration is seeded ONCE here for the whole substep loop; each
+        #    _step then carries a(t+dt) forward as the next step's a(t), so the
+        #    O(n^2) force sum runs once per step, not twice.
+        self._time_acc += self.time_scale * ORB_FRAME_DT
+        if self.bodies and self._time_acc >= ORB_PHYS_DT:
+            self._accelerate()
+        steps = 0
+        while self._time_acc >= ORB_PHYS_DT and steps < ORB_MAX_SUBSTEPS:
+            self._time_acc -= ORB_PHYS_DT
+            self._step(ORB_PHYS_DT)
+            steps += 1
+        if steps == ORB_MAX_SUBSTEPS:
+            self._time_acc = 0.0
+
+        self._merge()
+        self._prune()
+        for b in self.bodies:
+            b.trail.append((int(b.x), int(b.y)))
+
+    def _accelerate(self):
+        """Fill every body's (ax, ay) with the softened gravitational
+        acceleration from all the others. Frozen (grabbed) bodies still act
+        as sources; only their own motion is suppressed later."""
+        bodies = self.bodies
+        n = len(bodies)
+        for b in bodies:
+            b.ax = 0.0
+            b.ay = 0.0
+        eps2 = self._eps2
+        G = ORB_G
+        for i in range(n):
+            bi = bodies[i]
+            xi, yi = bi.x, bi.y
+            for j in range(i + 1, n):
+                bj = bodies[j]
+                dx = bj.x - xi
+                dy = bj.y - yi
+                inv_r = 1.0 / ((dx * dx + dy * dy + eps2) ** 1.5)
+                fi = G * bj.mass * inv_r
+                fj = G * bi.mass * inv_r
+                bi.ax += fi * dx
+                bi.ay += fi * dy
+                bj.ax -= fj * dx
+                bj.ay -= fj * dy
+
+    def _step(self, dt):
+        """One symplectic velocity-Verlet (leapfrog) step, 2nd-order and
+        energy-stable. Each body's (ax, ay) ENTERS holding a(current position)
+        — seeded before the substep loop and carried from the previous step's
+        recomputation — so the O(n^2) force sum is evaluated once per step
+        (a(t+dt)), not twice."""
+        if not self.bodies:
+            return
+        half = 0.5 * dt
+        for b in self.bodies:
+            if b.frozen:
+                continue
+            b.x += b.vx * dt + b.ax * half * dt   # drift with a(t)
+            b.y += b.vy * dt + b.ay * half * dt
+            b.vx += b.ax * half                   # half-kick with a(t)
+            b.vy += b.ay * half
+        self._accelerate()                        # a(t+dt) = next step's a(t)
+        for b in self.bodies:
+            if b.frozen:
+                continue
+            b.vx += b.ax * half                   # half-kick with a(t+dt)
+            b.vy += b.ay * half
+
+    def _merge(self):
+        """Perfectly-inelastic merges: overlapping bodies coalesce conserving
+        mass and momentum. The survivor keeps the more massive body's id +
+        trail so its history is continuous; radius recombines by volume."""
+        bodies = self.bodies
+        i = 0
+        while i < len(bodies):
+            a = bodies[i]
+            j = i + 1
+            while j < len(bodies):
+                b = bodies[j]
+                if math.hypot(a.x - b.x, a.y - b.y) < a.radius + b.radius:
+                    keep, drop = (a, b) if a.mass >= b.mass else (b, a)
+                    M = a.mass + b.mass
+                    keep.x = (a.mass * a.x + b.mass * b.x) / M
+                    keep.y = (a.mass * a.y + b.mass * b.y) / M
+                    keep.vx = (a.mass * a.vx + b.mass * b.vx) / M
+                    keep.vy = (a.mass * a.vy + b.mass * b.vy) / M
+                    # Mass-weighted colour blend, volume-combined radius.
+                    keep.rgb = [int((a.mass * a.rgb[k] + b.mass * b.rgb[k]) / M)
+                                for k in range(3)]
+                    keep.radius = _radius_for_mass(M)
+                    keep.mass = M
+                    keep.collapsed = keep.collapsed or M >= ORB_COLLAPSE_MASS
+                    keep.frozen = a.frozen or b.frozen
+                    bodies[i] = keep
+                    a = keep
+                    if drop is self.grab_body:
+                        # The grabbed body was absorbed — hand now owns the
+                        # survivor so the drag continues seamlessly.
+                        self.grab_body = keep
+                        keep.frozen = True
+                    bodies.pop(j)
+                else:
+                    j += 1
+            i += 1
+
+    def _prune(self):
+        """Drop bodies that have flung far off-screen so the body count and
+        cost stay bounded (a grabbed body is never pruned)."""
+        mx = self.w * ORB_PRUNE_MARGIN
+        my = self.h * ORB_PRUNE_MARGIN
+        kept = []
+        for b in self.bodies:
+            if b is self.grab_body or (-mx < b.x < mx and -my < b.y < my):
+                kept.append(b)
+        self.bodies = kept
+
+    # ---- aim preview ---------------------------------------------------
+
+    def _predicted_arc(self):
+        """Forward-simulate the pending body through the CURRENT (held-fixed)
+        gravity field for a short horizon, so the dotted preview matches the
+        orbit it will actually fall into."""
+        vx, vy = self._launch_velocity()
+        x, y = self.spawn_x, self.spawn_y
+        eps2 = self._eps2
+        sources = [(b.x, b.y, b.mass) for b in self.bodies]
+        pts = []
+        steps = int(ORB_PREDICT_TIME_S / ORB_PHYS_DT)
+        dt = ORB_PHYS_DT
+        mx, my = self.w * ORB_PRUNE_MARGIN, self.h * ORB_PRUNE_MARGIN
+        for i in range(steps):
+            ax = ay = 0.0
+            for sx, sy, sm in sources:
+                dx, dy = sx - x, sy - y
+                inv = ORB_G * sm / ((dx * dx + dy * dy + eps2) ** 1.5)
+                ax += inv * dx
+                ay += inv * dy
+            vx += ax * dt
+            vy += ay * dt
+            x += vx * dt
+            y += vy * dt
+            if i % ORB_PREDICT_SAMPLE == 0:
+                pts.append((int(x), int(y)))
+            if not (-mx < x < mx and -my < y < my):
+                break
+        return pts
+
+    # ---- serialization -------------------------------------------------
+
+    def to_state(self):
+        """Serializable snapshot for the web frontend. The sim is authoritative
+        here (velocity-Verlet + merges cannot be recomputed client-side), so
+        resolved positions travel; trails are re-accumulated client-side from
+        the stable body ids, exactly like the slingshot's projectiles."""
+        spec = ORB_BODY_TYPES[self._kind]
+        state = {
+            "type": "orbitals",
+            "bodies": [{
+                "id": b.id,
+                "x": round(b.x, 1), "y": round(b.y, 1),
+                "r": b.radius, "rgb": b.rgb, "kind": b.kind,
+                "collapsed": b.collapsed,
+            } for b in self.bodies],
+            "count": len(self.bodies),
+            "kind": self._kind,
+            "kind_r": spec["radius"],
+            "kind_rgb": list(spec["rgb"]),
+            "time_scale": self.time_scale,
+            "aiming": self.aiming,
+            "spawn": None,
+            "pull": None,
+            "arc": [],
+            "readout": None,
+        }
+        if self.aiming:
+            vx, vy = self._launch_velocity()
+            speed = math.hypot(vx, vy)
+            state["spawn"] = [round(self.spawn_x, 1), round(self.spawn_y, 1)]
+            state["pull"] = [round(self.pull_x, 1), round(self.pull_y, 1)]
+            state["arc"] = [[x, y] for x, y in self._predicted_arc()]
+            state["readout"] = {
+                "v0": round(speed, 1),
+                "angle": round(math.degrees(math.atan2(-vy, vx)), 1),
+                "kind": self._kind,
+            }
+        return state
+
+    # ---- cv2 drawing (window / stream fallback) ------------------------
+
+    def _draw_body(self, frame, b):
+        cx, cy = int(b.x), int(b.y)
+        r, g, bl = b.rgb
+        if b.collapsed:
+            cv2.circle(frame, (cx, cy), b.radius + 8, (60, 40, 90), 2, cv2.LINE_AA)
+            cv2.circle(frame, (cx, cy), b.radius, (12, 10, 16), -1, cv2.LINE_AA)
+            cv2.circle(frame, (cx, cy), b.radius, (180, 150, 220), 2, cv2.LINE_AA)
+            return
+        # A cheap glow: a dim outer halo, the body, and a bright core.
+        cv2.circle(frame, (cx, cy), b.radius + 6,
+                   (int(bl * 0.35), int(g * 0.35), int(r * 0.35)), -1, cv2.LINE_AA)
+        cv2.circle(frame, (cx, cy), b.radius, (bl, g, r), -1, cv2.LINE_AA)
+        cv2.circle(frame, (cx - b.radius // 4, cy - b.radius // 4),
+                   max(2, b.radius // 3),
+                   (min(255, bl + 60), min(255, g + 60), min(255, r + 60)),
+                   -1, cv2.LINE_AA)
+
+    def draw(self, frame):
+        # Trails (fading toward the body's colour).
+        for b in self.bodies:
+            n = len(b.trail)
+            r, g, bl = b.rgb
+            for i, (tx, ty) in enumerate(b.trail):
+                t = (i + 1) / n if n else 0.0
+                cv2.circle(frame, (tx, ty),
+                           max(1, int(b.radius * 0.28 * t)),
+                           (int(bl * t), int(g * t), int(r * t)), -1)
+        for b in self.bodies:
+            self._draw_body(frame, b)
+
+        if self.aiming:
+            sx, sy = int(self.spawn_x), int(self.spawn_y)
+            px, py = int(self.pull_x), int(self.pull_y)
+            spec = ORB_BODY_TYPES[self._kind]
+            r, g, bl = spec["rgb"]
+            cv2.line(frame, (sx, sy), (px, py), (200, 200, 200), 2, cv2.LINE_AA)
+            for tx, ty in self._predicted_arc():
+                cv2.circle(frame, (tx, ty), 2, (bl, g, r), -1)
+            # Ghost of the body to be launched + a velocity vector.
+            cv2.circle(frame, (sx, sy), spec["radius"], (bl, g, r), 2, cv2.LINE_AA)
+            vx, vy = self._launch_velocity()
+            mag = math.hypot(vx, vy)
+            if mag > 1:
+                ex = int(sx + vx / mag * min(mag * 0.25, 140))
+                ey = int(sy + vy / mag * min(mag * 0.25, 140))
+                cv2.arrowedLine(frame, (sx, sy), (ex, ey), (bl, g, r), 2,
+                                cv2.LINE_AA, tipLength=0.25)
+            cv2.putText(frame, f"{self._kind}  v0 {mag:.0f} px/s",
+                        (sx + 12, sy - 12), cv2.FONT_HERSHEY_SIMPLEX, 0.55,
+                        (240, 240, 240), 2, cv2.LINE_AA)
+
+
+# --- Vtuber / Puppet interactable ---------------------------------------
+
+
+class Puppet:
+    """A cosmic-mascot avatar puppeteered by the live landmarks.
+
+    Pure rendering happens in the browser (and a cv2 fallback); this class
+    only carries a tiny per-frame snapshot (a spawn clock for the idle bob,
+    the pinch strength for the mouth). The renderer reads the hands (always
+    tracked) — and the body pose when ``HALL_POSE=1`` — straight from the
+    published state, so no landmark data is duplicated here. When the puppet
+    is active the frontend hides the raw skeleton and dims the camera so the
+    character stands alone.
+    """
+
+    def __init__(self, frame_width, frame_height):
+        self.w = frame_width
+        self.h = frame_height
+        self._spawn_time = time.monotonic()
+        # Latest max pinch progress across hands — drives the mouth. Held
+        # here (not just in the browser) so the cv2 fallback can react too.
+        self._mouth = 0.0
+        self._hand_result = None
+        self._pose = None
+
+    @property
+    def grabbed(self):
+        # Not a grab-target, but reporting True while a hand is pinching
+        # retires the onboarding hint once the user drives the mouth.
+        return self._mouth > 0.5
+
+    def update(self, hand_result, pose_landmarks):
+        self._hand_result = hand_result
+        self._pose = pose_landmarks
+        mouth = 0.0
+        if hand_result is not None:
+            for i in range(len(hand_result.hand_landmarks)):
+                info = pinch_info(hand_id(hand_result, i))
+                if info is not None:
+                    mouth = max(mouth, info.progress)
+        self._mouth = mouth
+
+    def to_state(self):
+        return {
+            "type": "vtuber",
+            "t": round((time.monotonic() - self._spawn_time) % 1000.0, 3),
+            "mouth": round(self._mouth, 3),
+        }
+
+    def draw(self, frame):
+        # cv2 fallback: dim the scene, then a minimal face + paws so the
+        # window/stream path still shows *something* coherent. The web path
+        # renders the rich avatar.
+        overlay = frame.copy()
+        cv2.rectangle(overlay, (0, 0), (self.w, self.h), (12, 8, 18), -1)
+        cv2.addWeighted(overlay, 0.6, frame, 0.4, 0, frame)
+
+        hands = []
+        if self._hand_result is not None:
+            for lms in self._hand_result.hand_landmarks:
+                wrist = lms[0]
+                hands.append((int(wrist.x * self.w), int(wrist.y * self.h)))
+
+        if hands:
+            hx = sum(p[0] for p in hands) // len(hands)
+            hy = sum(p[1] for p in hands) // len(hands)
+        else:
+            hx, hy = self.w // 2, self.h // 2
+        bob = int(10 * math.sin((time.monotonic() - self._spawn_time)
+                                * 2 * math.pi / PUPPET_IDLE_BOB_S))
+        head_y = max(120, hy - 200) + bob
+        head = (hx, head_y)
+        rr = 90
+        cv2.circle(frame, head, rr + 6, (90, 60, 130), -1, cv2.LINE_AA)
+        cv2.circle(frame, head, rr, (245, 220, 170), -1, cv2.LINE_AA)
+        # Eyes.
+        for ex in (-32, 32):
+            cv2.circle(frame, (head[0] + ex, head_y - 14), 12,
+                       (40, 30, 30), -1, cv2.LINE_AA)
+        # Mouth: opens with the pinch.
+        mh = int(6 + 26 * self._mouth)
+        cv2.ellipse(frame, (head[0], head_y + 34), (30, mh), 0, 0, 360,
+                    (40, 30, 30), -1, cv2.LINE_AA)
+        # Paws at each hand + noodle arms to the head.
+        for hp in hands:
+            cv2.line(frame, head, hp, (245, 220, 170), 10, cv2.LINE_AA)
+            cv2.circle(frame, hp, 26, (245, 220, 170), -1, cv2.LINE_AA)
+            cv2.circle(frame, hp, 26, (90, 60, 130), 3, cv2.LINE_AA)

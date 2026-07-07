@@ -9,9 +9,15 @@ import type { ButtonState, SpeedPill } from "../state/types";
 
 const Button = memo(function Button({ btn }: { btn: ButtonState }) {
   const [x, y, w, h] = btn.rect;
-  const cls =
-    "gbtn brackets" +
-    (btn.pressed ? " pressed" : btn.hovered ? " hovered" : "");
+  // Hover/press take precedence over the idle "selected" (chosen) look.
+  const mods = btn.pressed
+    ? " pressed"
+    : btn.hovered
+      ? " hovered"
+      : btn.selected
+        ? " selected"
+        : "";
+  const cls = "gbtn brackets" + mods;
   return (
     <div
       className={cls}
