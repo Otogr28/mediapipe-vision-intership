@@ -928,3 +928,33 @@ ffmpeg x11grab): fullscreen browser UI, live C920 feed, menu buttons.
 - Kiosk usage: `hallkiosk` on the Jetson (or
   `ssh jetson@100.91.206.114 'DISPLAY=:0 ~/.local/bin/hallkiosk'`);
   laptop can co-view at http://100.91.206.114:8092/.
+
+## Update - 2026-07-07 17:15 - [Claude (Fable 5)]
+
+### What I did
+**The Jetson is now a boot-to-kiosk, self-updating appliance** (user has no
+peripherals on it — everything is remote now).
+
+- Pushed the whole web-frontend feature to main (748abde): includes
+  `web/dist` COMMITTED on purpose — the device updates via git and never
+  runs Node. Push to main = deploy.
+- `~/HalLMediaPipe` on the Jetson is now a git checkout of origin/main
+  (setup-boot.sh converted it; models/ + .trt_cache/ untracked, survive).
+- systemd user units (deploy/hall-app/systemd/): `hallkiosk.service`
+  (WantedBy=graphical-session.target → starts at boot via the GDM
+  autologin that was already enabled) and `hall-update.timer` → every 60 s
+  `hall-update.sh` fetches origin/main, hard-resets on new commits and
+  restarts the kiosk. Linger enabled; screen blanking/lock disabled.
+- VERIFIED end-to-end: test push 5dae635 → journal shows
+  "hall-update: 748abde -> 5dae635", kiosk restarted, screengrab OK.
+
+### Important context for the other agent
+- **Workflow now: edit → (npm run build if web/ changed) → commit → push
+  to main → Jetson live in ≤60 s.** deploy.sh (rsync) is legacy/provision.
+- Launchers on the device point INTO the checkout
+  (~/HalLMediaPipe/deploy/hall-app/); the rsync-era copies at the repo
+  root were removed.
+- Kiosk control: `systemctl --user {status,restart,stop} hallkiosk` on
+  the Jetson (XDG_RUNTIME_DIR=/run/user/1000 when over ssh).
+- Remember: the git working tree on the device is sacred-ish — the
+  updater hard-resets it; never hand-edit files there.
