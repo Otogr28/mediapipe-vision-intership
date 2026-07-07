@@ -41,6 +41,14 @@ if [ ! -f "$APP_DIR/web/dist/index.html" ]; then
   exit 1
 fi
 
+# Wait for the camera to be released by a previous instance: reopening
+# the C920 while the old process still holds it can wedge the V4L2 driver
+# and freeze the new backend (see hall-update.sh's watchdog).
+for _ in $(seq 1 20); do
+  fuser /dev/video0 >/dev/null 2>&1 || break
+  sleep 0.5
+done
+
 # Backend in the background; the browser is the foreground process.
 # hallrun is resolved next to THIS script, so the pair works both in the
 # old rsync layout (repo root) and the git checkout (deploy/hall-app/).
