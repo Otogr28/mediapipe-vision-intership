@@ -1,6 +1,6 @@
 import cv2
 
-from config import DEBUG_HUD
+from config import DEBUG_HUD, POSE_ENABLED
 from detection.gestures import update_pinches
 from rendering.gl_lensing import LensingRenderer
 from ui.button import Button
@@ -190,7 +190,10 @@ class UIManager:
 
         elif self.state == "interactables":
             self._sphere_btn.update(hand_result, pose_landmarks, self.frame_w, self.frame_h)
-            self._sixseven_btn.update(hand_result, pose_landmarks, self.frame_w, self.frame_h)
+            if POSE_ENABLED:
+                # The 6-7 counter is pose-driven; without body inference its
+                # button would spawn a counter that can never count.
+                self._sixseven_btn.update(hand_result, pose_landmarks, self.frame_w, self.frame_h)
             for s in self.spheres:
                 s.update(hand_result, pose_landmarks)
             if self._sixseven is not None:
@@ -210,7 +213,11 @@ class UIManager:
 
         if self._detect_interaction():
             self._has_interacted = True
-        self._pinch_hint.update(pose_landmarks is not None, self._has_interacted)
+        # Person presence for the onboarding hint: pose when available,
+        # otherwise any tracked hand (pose is optional since HALL_POSE=0).
+        person_detected = pose_landmarks is not None or (
+            hand_result is not None and len(hand_result.hand_landmarks) > 0)
+        self._pinch_hint.update(person_detected, self._has_interacted)
 
     def _detect_interaction(self):
         """True on a frame where the user pressed a button or grabbed an
@@ -248,11 +255,10 @@ class UIManager:
             ]
 
         elif self.state == "interactables":
-            buttons = [
-                self._sphere_btn.to_state("spawn.sphere"),
-                self._sixseven_btn.to_state("spawn.sixseven"),
-                self._reset_btn.to_state("reset"),
-            ]
+            buttons = [self._sphere_btn.to_state("spawn.sphere")]
+            if POSE_ENABLED:
+                buttons.append(self._sixseven_btn.to_state("spawn.sixseven"))
+            buttons.append(self._reset_btn.to_state("reset"))
             objects = [dict(s.to_state(), id=i)
                        for i, s in enumerate(self.spheres)]
             if self._sixseven is not None:
@@ -308,7 +314,8 @@ class UIManager:
 
         elif self.state == "interactables":
             self._sphere_btn.draw(frame)
-            self._sixseven_btn.draw(frame)
+            if POSE_ENABLED:
+                self._sixseven_btn.draw(frame)
             for s in self.spheres:
                 s.draw(frame)
             if self._sixseven is not None:

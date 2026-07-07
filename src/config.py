@@ -6,6 +6,13 @@ POSE_MODEL_PATH = "models/pose_landmarker_lite.task"
 HAND_MODEL_PATH = "models/hand_landmarker.task"
 IMAGE_FORMAT = mp.ImageFormat.SRGB
 
+# Body-pose inference (HALL_POSE). OFF by default since 2026-07-07: nothing
+# in the current UI needs the body skeleton (the pinch pipeline is entirely
+# hand-relative), and MediaPipe pose on CPU was the single biggest CPU cost
+# (~1.5 cores at ~13 fps). Setting HALL_POSE=1 re-enables it and brings back
+# the pose-driven "6 7 Counter" (its button hides when pose is off).
+POSE_ENABLED = os.environ.get("HALL_POSE", "0") == "1"
+
 # Inference backend for the HAND pipeline (HALL_INFERENCE):
 #   "mediapipe" — default; MediaPipe HandLandmarker (.task), CPU on the Jetson.
 #   "gpu"       — onnxruntime palm-detection + handpose, able to use the CUDA

@@ -5,8 +5,8 @@ import cv2
 from mediapipe.tasks.python import vision
 
 from capture import FreshestFrame
-from config import (CAMERA_STALL_S, SELECTED_CAMERA, STATE_FPS, WINDOW_HEIGHT,
-                    WINDOW_WIDTH)
+from config import (CAMERA_STALL_S, POSE_ENABLED, SELECTED_CAMERA, STATE_FPS,
+                    WINDOW_HEIGHT, WINDOW_WIDTH)
 from detection import detectors
 from detection.detectors import build_hand_detector, build_pose_detector
 from output import make_sink
@@ -35,7 +35,9 @@ def main():
     (HALL_OUTPUT): an on-screen window ('q' to quit) or a headless MJPEG server
     for a remote browser. Ctrl-C also quits.
     """
-    pose_detector = build_pose_detector()
+    # Pose is optional (HALL_POSE, off by default): the UI is fully
+    # hand-driven and body inference was the biggest CPU cost on the Jetson.
+    pose_detector = build_pose_detector() if POSE_ENABLED else None
     hand_detector = build_hand_detector()
 
     source = _camera_source(SELECTED_CAMERA)
@@ -132,10 +134,11 @@ def main():
                 timestamps_ms = max(int((time.monotonic() - start_time) * 1000), last_timestamp_ms + 1)
                 last_timestamp_ms = timestamps_ms
 
-                pose_detector.detect_async(image=mp_image, timestamp_ms=timestamps_ms)
+                if pose_detector is not None:
+                    pose_detector.detect_async(image=mp_image, timestamp_ms=timestamps_ms)
                 hand_detector.detect_async(image=mp_image, timestamp_ms=timestamps_ms)
 
-                pose_result = detectors.latest_pose_result
+                pose_result = detectors.latest_pose_result if pose_detector is not None else None
                 hand_result, hand_received_t = detectors.latest_hand_packet
 
                 pose_landmarks = None
@@ -175,7 +178,8 @@ def main():
         pass
     finally:
         camera.release()
-        pose_detector.close()
+        if pose_detector is not None:
+            pose_detector.close()
         hand_detector.close()
         sink.close()
 
