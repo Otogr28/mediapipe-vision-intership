@@ -958,3 +958,30 @@ peripherals on it — everything is remote now).
   the Jetson (XDG_RUNTIME_DIR=/run/user/1000 when over ssh).
 - Remember: the git working tree on the device is sacred-ish — the
   updater hard-resets it; never hand-edit files there.
+
+## Update - 2026-07-07 18:20 - [Claude (Fable 5)]
+
+### What I did (perf/reliability afternoon — all live on the Jetson)
+- 720p kiosk profile (HALL_CAPTURE_W/H); polkitd runaway restarted.
+- Self-healing: camera-free wait in hallkiosk; hall-update watchdog FIXED
+  (mawk %d int32-truncated µs → negative ages → never fired; now pure-bash
+  seconds); backend self-exits after 10 s without a NEW camera frame
+  (HALL_CAMERA_STALL_S; FreshestFrame.frame_age); hallkiosk dies with
+  either half and the unit is Restart=always; units auto-refresh on update.
+- MJPEG serving rewritten: clients block on a Condition and get each frame
+  EXACTLY once (no duplicate re-sends, no fixed-clock latency) — measured
+  30 fps exact delivered on-device (was ~19 with jitter). Kiosk JPEG q60.
+- **Body pose inference OFF by default (HALL_POSE=0)** — UI is fully
+  hand-driven; frees ~1.5 cores. 6-7 counter button hides (pose-driven);
+  onboarding hint presence now comes from tracked hands. HALL_POSE=1
+  restores. python: 158% → ~112% CPU.
+- IDEAS.md expanded: "Orbitals" n-body astro simulator designed as the
+  next experiment (velocity-Verlet, merge collisions, pinch-drag-release
+  launch reusing slingshot aiming, BH collapse reusing the shader).
+- Session report: vault Logs/interactive-display/2026-07-07.md.
+
+### Important context for the other agent
+- NEVER start the app with the LAPTOP camera unless the user asks — they
+  explicitly said not to activate it. Use web/scripts/mock_backend.py.
+- The felt slowness was NOT the camera (C920 negotiated MJPG 720p@30):
+  it was duplicate-frame serving + 1080p pixel costs + pose CPU.
