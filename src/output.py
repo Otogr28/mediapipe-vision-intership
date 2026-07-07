@@ -96,7 +96,14 @@ class MjpegSink:
         self._quality = int(quality)
         self._fps = max(int(fps), 1)
         self._lock = threading.Lock()
+        # New-frame signaling: stream clients BLOCK until a fresh JPEG
+        # exists instead of polling on a fixed clock. This stops the old
+        # behaviour of re-sending duplicate frames (wasted encode/decode on
+        # both ends) and removes up to a frame-interval of artificial
+        # latency per part — the difference is very visible on the Jetson.
+        self._cond = threading.Condition()
         self._jpg = None
+        self._jpg_seq = 0
 
         bind_ip = _resolve_bind(bind)
         self._server = ThreadingHTTPServer((bind_ip, port), self._make_handler())
@@ -108,8 +115,10 @@ class MjpegSink:
     def present(self, frame):
         ok, buf = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, self._quality])
         if ok:
-            with self._lock:
+            with self._cond:
                 self._jpg = buf.tobytes()
+                self._jpg_seq += 1
+                self._cond.notify_all()
 
     def should_quit(self):
         # Headless service: runs until SIGINT/SIGTERM (handled in main()).
@@ -119,8 +128,18 @@ class MjpegSink:
         self._server.shutdown()
 
     def _latest(self):
-        with self._lock:
+        with self._cond:
             return self._jpg
+
+    def _wait_frame(self, last_seq, timeout=1.0):
+        """Block until a JPEG newer than ``last_seq`` exists (or timeout).
+        Returns ``(jpg, seq)`` — same seq as passed means nothing new."""
+        with self._cond:
+            self._cond.wait_for(
+                lambda: self._jpg is not None and self._jpg_seq != last_seq,
+                timeout=timeout,
+            )
+            return self._jpg, self._jpg_seq
 
     def _make_handler(self):
         sink = self
@@ -150,17 +169,17 @@ class MjpegSink:
                     self.send_header("Cache-Control", "no-cache, private")
                     self.end_headers()
                     try:
+                        last_seq = 0
                         while True:
-                            jpg = sink._latest()
-                            if jpg is None:
-                                time.sleep(0.05)
-                                continue
+                            jpg, seq = sink._wait_frame(last_seq)
+                            if jpg is None or seq == last_seq:
+                                continue  # timeout tick — no new frame yet
+                            last_seq = seq
                             self.wfile.write(
                                 b"--frame\r\nContent-Type: image/jpeg\r\n"
                                 b"Content-Length: " + str(len(jpg)).encode()
                                 + b"\r\n\r\n" + jpg + b"\r\n"
                             )
-                            time.sleep(1.0 / sink._fps)
                     except (BrokenPipeError, ConnectionResetError):
                         pass
 

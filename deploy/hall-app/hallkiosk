@@ -26,6 +26,9 @@ export HALL_OUTPUT=web
 # models do NOT — they resize internally). 720p cuts pixel work ~2.25x.
 export HALL_CAPTURE_W="${HALL_CAPTURE_W:-1280}"
 export HALL_CAPTURE_H="${HALL_CAPTURE_H:-720}"
+# Lighter JPEGs: q60 encodes ~faster on ARM and decodes faster in Firefox;
+# indistinguishable at kiosk viewing distance.
+export HALL_STREAM_QUALITY="${HALL_STREAM_QUALITY:-60}"
 
 # When started over SSH there is no X cookie in the environment; reuse the
 # local graphical session's so the window lands on the attached monitor.
