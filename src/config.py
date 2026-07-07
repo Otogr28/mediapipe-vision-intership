@@ -96,8 +96,13 @@ DEBUG_HUD = os.environ.get("HALL_DEBUG", "0") == "1"
 # Requested capture resolution for the webcam. The actual frame size is read
 # back after `cv2.VideoCapture.set(...)` because some drivers silently snap
 # to the nearest supported mode. The cv2 display window inherits this size.
-WINDOW_WIDTH = 1920
-WINDOW_HEIGHT = 1080
+# Overridable per deployment (HALL_CAPTURE_W/H): inference cost does NOT
+# depend on this (models resize internally), but JPEG encode/decode, the
+# BGR->RGB copy and the browser's canvas work all scale with it — the
+# Jetson kiosk runs 1280x720 (set in hallkiosk) to keep the board from
+# saturating; the laptop default stays 1080p.
+WINDOW_WIDTH = int(os.environ.get("HALL_CAPTURE_W", "1920"))
+WINDOW_HEIGHT = int(os.environ.get("HALL_CAPTURE_H", "1080"))
 
 NUM_POSES = 1
 MIN_POSE_DETECTION_CONFIDENCE = 0.5
