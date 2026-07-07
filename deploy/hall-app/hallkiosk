@@ -21,6 +21,11 @@ APP_DIR="${HALL_APP_DIR:-$HOME/HalLMediaPipe}"
 PORT="${HALL_STREAM_PORT:-8092}"
 export DISPLAY="${DISPLAY:-:0}"
 export HALL_OUTPUT=web
+# 720p kiosk profile: at 1080p the Orin saturates (python JPEG encode +
+# Firefox MJPEG decode + canvas compositing all scale with pixels; the
+# models do NOT — they resize internally). 720p cuts pixel work ~2.25x.
+export HALL_CAPTURE_W="${HALL_CAPTURE_W:-1280}"
+export HALL_CAPTURE_H="${HALL_CAPTURE_H:-720}"
 
 # When started over SSH there is no X cookie in the environment; reuse the
 # local graphical session's so the window lands on the attached monitor.
