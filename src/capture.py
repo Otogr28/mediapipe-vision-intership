@@ -1,4 +1,5 @@
 import threading
+import time
 
 
 class FreshestFrame:
@@ -27,6 +28,10 @@ class FreshestFrame:
         self._frame = None
         self._ok = False
         self._running = True
+        # Monotonic instant the newest frame ARRIVED — lets the main loop
+        # detect a stalled camera (driver wedge: reads stop returning but
+        # nothing errors) and bail out so the supervisor can restart it.
+        self._last_frame_t = time.monotonic()
         # daemon=True so a stuck reader can never keep the process alive.
         self._thread = threading.Thread(target=self._reader, daemon=True)
         self._thread.start()
@@ -45,6 +50,12 @@ class FreshestFrame:
             with self._lock:
                 self._frame = frame
                 self._ok = True
+                self._last_frame_t = time.monotonic()
+
+    def frame_age(self):
+        """Seconds since the last NEW frame arrived from the camera."""
+        with self._lock:
+            return time.monotonic() - self._last_frame_t
 
     def read(self):
         """Return ``(ok, frame)`` for the freshest frame, like VideoCapture."""

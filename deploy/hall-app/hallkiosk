@@ -56,8 +56,9 @@ SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
 "$SCRIPT_DIR/hallrun" &
 BACKEND_PID=$!
 # Kill the hallrun wrapper AND the python it spawned (hallrun pipes python
-# through tee, so killing the wrapper alone orphans the interpreter).
-trap 'kill "$BACKEND_PID" 2>/dev/null; pkill -f "python3 -u src/main\.py" 2>/dev/null || true' EXIT INT TERM
+# through tee, so killing the wrapper alone orphans the interpreter), plus
+# the browser once it exists.
+trap 'kill "$BACKEND_PID" "${BROWSER_PID:-}" 2>/dev/null; pkill -f "python3 -u src/main\.py" 2>/dev/null || true' EXIT INT TERM
 
 # Wait for the HTTP server. Generous timeout: the FIRST launch after a
 # deploy may spend ~2 min building TensorRT engines before it comes up.
@@ -88,8 +89,16 @@ fi
 
 echo "hallkiosk: opening $BROWSER in kiosk mode"
 if [ "$BROWSER" = "firefox" ]; then
-  "$BROWSER" --kiosk "http://127.0.0.1:$PORT/"
+  "$BROWSER" --kiosk "http://127.0.0.1:$PORT/" &
 else
   "$BROWSER" --kiosk --noerrdialogs --disable-session-crashed-bubble \
-    --disable-infobars "http://127.0.0.1:$PORT/"
+    --disable-infobars "http://127.0.0.1:$PORT/" &
 fi
+BROWSER_PID=$!
+
+# Live only as long as BOTH halves live: if either the backend (e.g. the
+# camera-stall self-exit in main.py) or the browser dies, exit non-zero so
+# systemd (Restart=always) brings the whole pair back in seconds.
+wait -n "$BACKEND_PID" "$BROWSER_PID"
+echo "hallkiosk: a component exited — restarting the pair" >&2
+exit 1
