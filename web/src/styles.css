@@ -206,6 +206,17 @@ body {
   transform: scale(0.97);
 }
 
+/* Radio-style chosen state (Orbitals body-type palette). Lower priority
+   than hover/pressed since those come later in the class list and share
+   specificity, but a selected+idle button reads as the active option. */
+.gbtn.selected {
+  --bracket: var(--trace);
+  border-color: rgba(127, 180, 255, 0.7);
+  background: rgba(24, 40, 70, 0.6);
+  box-shadow: inset 0 0 18px rgba(127, 180, 255, 0.25);
+  color: #dbe8ff;
+}
+
 .speed-pill {
   display: flex;
   align-items: center;

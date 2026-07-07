@@ -985,3 +985,47 @@ peripherals on it — everything is remote now).
   explicitly said not to activate it. Use web/scripts/mock_backend.py.
 - The felt slowness was NOT the camera (C920 negotiated MJPG 720p@30):
   it was duplicate-frame serving + 1080p pixel costs + pose CPU.
+
+## Update - 2026-07-07 20:05 - [Claude (Opus 4.8)]
+
+### What I did
+Implemented BOTH open IDEAS.md features + an optimization, and fixed a
+latent deploy bug so it actually reaches the Jetson via git.
+
+- **Orbitals** (Experiments → "Orbitals"): n-body gravity sandbox.
+  `Orbitals` in `ui/interactables.py`. Symplectic velocity-Verlet
+  (optimized to ONE force-eval per step by carrying a(t+dt) → next a(t):
+  measured 2.305 → 1.178 ms/frame at 40 bodies), Plummer softening,
+  inelastic merges (mass+momentum conserved, colour/volume combined),
+  collapse→black-hole look past `ORB_COLLAPSE_MASS`. Pinch-drag-release
+  launch (pull-opposite, arc previewed through the LIVE gravity field),
+  grab-to-fling, body-type palette + presets (Solar/Binary/Figure-8 — all
+  verified bound for 60 s; Solar planets are near-massless and Binary is
+  bare 2-star, both on purpose for on-screen stability) + Clear, shared
+  sim-speed stepper (adds 8×). Frontend `drawOrbitals` in
+  `web/src/overlay/scene.ts`; trails accumulated client-side by body id.
+- **Vtuber** (Interactable Figures → "Vtuber"): `Puppet` in
+  `ui/interactables.py` + `drawPuppet` in `scene.ts`. Cosmic-mascot avatar,
+  paws on the hands, mouth from pinch, eyes track hands, pose-driven arms
+  when HALL_POSE=1 (soft arms when off). Dims camera + hides raw skeleton
+  (skeleton.ts gate). cv2 fallback puppet included.
+- Generic experiment-palette plumbing in `ui/manager.py`
+  (`_experiment_palette()` reads `exp.palette` — the experiment owns its
+  buttons). `Button.selected` flag (radio look) + CSS `.gbtn.selected`.
+- Contract kept in sync: `types.ts` (OrbitalsObject/VtuberObject,
+  ButtonState.selected), `interp.ts` (orbital body lerp), mock_backend
+  scenes `orbitals`/`orbaim`/`vtuber` (+ picker now has Orbitals).
+
+### Important context for the other agent
+- **DEPLOY BUG FIXED:** root `.gitignore` `dist/` was silently ignoring
+  `web/dist` despite `web/.gitignore` saying it's committed — so the
+  git-pull auto-updater NEVER carried the frontend (it survived only via an
+  old rsync'd untracked copy on the device). Added `!web/dist/` negation;
+  `web/dist` is now tracked (65 files) and travels via `git pull`. Verify
+  future frontend changes with `git status web/dist` before pushing.
+- Workflow reminder: web/ change → `npm run build` → commit dist → push.
+- Verified headlessly (no camera, per the user's rule): mock_backend +
+  shot.mjs screenshots for orbitals/orbaim/vtuber/picker (no console
+  errors), UIManager to_state across all states, physics stability.
+- NOT done: GPU pose backend (IDEAS backlog) — blocked on a BlazePose
+  landmark ONNX (only palm+handpose are vendored). Purely model-sourcing.

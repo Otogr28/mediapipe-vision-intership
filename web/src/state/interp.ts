@@ -93,6 +93,19 @@ export function interpolate(pair: SnapshotPair, now: number): AppState {
           }),
         };
       }
+      case "orbitals": {
+        if (po.type !== "orbitals") return o;
+        const prevBodies = new Map(po.bodies.map((b) => [b.id, b]));
+        return {
+          ...o,
+          pull: o.pull && po.pull ? lerpVec(po.pull, o.pull, t) : o.pull,
+          bodies: o.bodies.map((b) => {
+            const pb = prevBodies.get(b.id);
+            if (!pb) return b;
+            return { ...b, x: lerp(pb.x, b.x, t), y: lerp(pb.y, b.y, t) };
+          }),
+        };
+      }
       default:
         return o;
     }

@@ -8,7 +8,8 @@ Run from the repo root (needs the repo venv for cv2/numpy):
 
     uv run python web/scripts/mock_backend.py [scene]
 
-Scenes: menu (default), sphere, sixseven, slingshot, blackhole, picker.
+Scenes: menu (default), sphere, sixseven, slingshot, blackhole, picker,
+orbitals, orbaim, vtuber.
 Then point the vite dev server at it:  npm run dev  (same port 8092).
 """
 
@@ -120,6 +121,7 @@ def scene_state(t):
         base["buttons"] = [
             btn("exp.black_hole", "Black Hole", margin, margin, 150, 50, hovered=hover),
             btn("exp.slingshot", "Slingshot", margin + 160, margin, 150, 50),
+            btn("exp.orbitals", "Orbitals", margin + 320, margin, 150, 50),
             btn("reset", "Reset", W - 130 - margin, H - 50 - margin, 130, 50),
         ]
 
@@ -178,6 +180,88 @@ def scene_state(t):
                     "f_c": [0.0, 0.0],
                 })
         base["objects"] = [sling]
+
+    elif SCENE in ("orbitals", "orbaim"):
+        base["session"]["state"] = "experiments"
+        base["session"]["experiment"] = "orbitals"
+        bw, bh, gap = 116, 46, 8
+        x0 = y0 = margin
+        y1 = y0 + bh + gap
+        types = [("star", "Star"), ("planet", "Planet"),
+                 ("moon", "Moon"), ("comet", "Comet")]
+        for i, (k, lab) in enumerate(types):
+            b = btn(f"orb.type.{k}", lab, x0 + i * (bw + gap), y0, bw, bh)
+            b["selected"] = (k == "planet")
+            base["buttons"].append(b)
+        presets = [("solar", "Solar"), ("binary", "Binary"),
+                   ("figure8", "Figure 8"), ("clear", "Clear")]
+        for i, (pid, lab) in enumerate(presets):
+            base["buttons"].append(
+                btn(f"orb.preset.{pid}", lab, x0 + i * (bw + gap), y1, bw, bh))
+        sb, lw = 46, 92
+        plus_x = W - margin - sb
+        base["buttons"] += [
+            btn("speed.minus", "-", plus_x - lw - sb, margin, sb, sb),
+            btn("speed.plus", "+", plus_x, margin, sb, sb),
+            btn("reset", "Reset", W - 130 - margin, H - 50 - margin, 130, 50),
+        ]
+        base["speed"] = {"rect": [plus_x - lw, margin, lw, sb], "text": "1x"}
+        cx, cy = W / 2, H / 2
+        bodies = [{"id": 0, "x": round(cx, 1), "y": round(cy, 1), "r": 26,
+                   "rgb": [255, 226, 158], "kind": "star", "collapsed": False}]
+        for i in range(3):
+            ang = t * 0.6 + i * 2.1
+            r = 120 + i * 72
+            bodies.append({
+                "id": i + 1,
+                "x": round(cx + r * math.cos(ang), 1),
+                "y": round(cy + r * math.sin(ang), 1),
+                "r": 13, "rgb": [110, 170, 255], "kind": "planet",
+                "collapsed": False,
+            })
+        aiming = SCENE == "orbaim"
+        orb = {
+            "type": "orbitals", "bodies": bodies, "count": len(bodies),
+            "kind": "planet", "kind_r": 13, "kind_rgb": [110, 170, 255],
+            "time_scale": 1.0, "aiming": aiming,
+            "spawn": None, "pull": None, "arc": [], "readout": None,
+        }
+        if aiming:
+            sx, sy = cx - 240, cy - 40
+            orb["spawn"] = [sx, sy]
+            orb["pull"] = [sx - 120, sy + 100]
+            orb["arc"] = [[sx + i * 26, sy - int(70 * math.sin(i / 16 * math.pi))]
+                          for i in range(28)]
+            orb["readout"] = {"v0": 286.0, "angle": 39.0, "kind": "planet"}
+        base["objects"] = [orb]
+
+    elif SCENE == "vtuber":
+        base["session"]["state"] = "interactables"
+        base["buttons"] = [
+            btn("spawn.sphere", "Sphere", margin, margin, 120, 50),
+            btn("spawn.vtuber", "Vtuber", margin + 130, margin, 150, 50, pressed=True),
+            btn("reset", "Reset", W - 130 - margin, H - 50 - margin, 130, 50),
+        ]
+        # Two hands so both paws + arms render; landmarks null -> the puppet
+        # anchors to the pinch cursor.
+        base["hands"] = [
+            {"id": "Left", "cursor": [round(W * 0.36 + 60 * math.cos(t), 1),
+                                      round(H * 0.62 + 50 * math.sin(t * 1.3), 1)],
+             "press_cursor": [W * 0.36, H * 0.62], "state": "open",
+             "progress": round(0.5 * (1 - math.cos(t * 1.7)), 3),
+             "ratio": 0.7, "pinching": False, "held": False,
+             "seen_ms": 0.0, "landmarks": None},
+            {"id": "Right", "cursor": [round(W * 0.64 + 60 * math.cos(t + 1), 1),
+                                       round(H * 0.6 + 50 * math.sin(t * 1.1), 1)],
+             "press_cursor": [W * 0.64, H * 0.6], "state": "open",
+             "progress": round(0.5 * (1 - math.cos(t * 2.1)), 3),
+             "ratio": 0.7, "pinching": False, "held": False,
+             "seen_ms": 0.0, "landmarks": None},
+        ]
+        base["objects"] = [{
+            "type": "vtuber", "t": round(t % 1000.0, 3),
+            "mouth": round(0.5 * (1 - math.cos(t * 1.8)), 3),
+        }]
 
     return base
 
