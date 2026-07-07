@@ -408,3 +408,523 @@ Coding values: clean, beginner-friendly, secure, and maintainable.
   internally.
 - Force arrows can look busy with 8 balls; `SLING_FORCE_PX_PER_N` / the min-draw
   threshold tune density. Drag arrow is short at low speed (physically correct).
+
+## Update - 2026-07-06 10:30 - Claude (Fable)
+
+### What I did
+Reworked the Slingshot to use standard real-time simulation techniques, fixed
+the two reported UI issues (legend text overflowing its box, ugly force
+arrows), and added the top-right sim-speed control.
+
+- **Fixed-timestep accumulator:** each frame banks `time_scale * SLING_FRAME_DT`
+  (1/30 s) of sim time; the world advances in whole `SLING_PHYS_DT` (1/120 s)
+  sub-steps, capped at `SLING_MAX_SUBSTEPS`. Speed changes alter the step
+  COUNT, never the step size, so stability is identical at every speed.
+- **RK4 integration** (`_rk4_step`) replaces semi-implicit Euler for free
+  flight; the aim-preview arc uses the same step, so it matches the flight.
+- **Quadratic aerodynamic drag** `F = -1/2 rho Cd A |v| v` (rho 1.225, Cd 0.47,
+  A = pi r^2) replaces the linear `-b v`; terminal velocity ~15 m/s, shown in
+  the legend. `SLING_DRAG_COEF`/`SLING_DT` are gone.
+- **Legend box** is now sized from `cv2.getTextSize` measurements — nothing can
+  overflow; footer lists g/m/r, Cd/rho/vt, and "RK4 @ 120 Hz".
+- **Force arrows** redrawn: start at the ball's edge, dark under-stroke +
+  fixed-size filled head, length capped at `SLING_FORCE_MAX_PX=130` (bounce
+  impulses used to draw 1000+ px arrows across the screen). Contact impulses
+  are averaged over the frame's simulated time.
+- **Sim-speed stepper:** `Slingshot.time_scale` property + `speed_up/down`
+  through `SLING_TIME_SCALES` (0.25-4x); `UIManager` shows `[-] 1x [+]`
+  top-right for any experiment exposing `time_scale` (duck-typed).
+- Ran `uv run python -m isort src/` (project formatter) — it also re-sorted
+  imports in untouched files; those hunks are import-order only.
+
+### Verification
+Scratchpad test (RK4 vs analytic parabola: error <1e-9 over 1 s; terminal
+velocity sim 14.97 vs sqrt(mg/k) 14.97; substeps/frame 1/2/4/8/16 at
+0.25/0.5/1/2/4x; UIManager button wiring) + rendered aim/flight/bounce/UI
+PNGs and inspected them. `main.py` imports clean.
+
+### Files changed
+- `src/ui/interactables.py` (Slingshot physics + drawing)
+- `src/ui/manager.py` (speed buttons, `_draw_speed_label`, cv2 import)
+- docs: `documentation/modules/interactables.md`, `modules/ui_manager.md`
+  (also refreshed the stale `_black_hole` -> `_active_experiment` rows),
+  `documentation/architecture.md`
+- import-sort-only: everything else isort touched under `src/`
+
+### Notes / knobs for the next agent
+- The venv's bin scripts still carry shebangs from the repo's old path
+  (`/home/oto/Intership2026/...`) — `uv run isort` fails to spawn; use
+  `uv run python -m isort src/` or recreate `.venv`.
+- Ball is 1 kg / 0.22 m -> light-foam-ball density; drag is strong near max
+  launch (14 m/s ~ vt). Raise `SLING_BALL_MASS` to make shots more ballistic.
+- 0.25x is genuinely useful for reading the force arrows during a bounce.
+
+## Update - 2026-07-06 10:45 - [Claude (Fable 5)]
+
+### What I did
+Upgraded the Slingshot to research-grounded physics and fixed the force-vector
+readability the user flagged:
+
+- **Launch = slingshot energy model** (Yeats, arXiv:1604.00049): Hooke band
+  `F = k·x`, stores `E = ½kx²`, delivers `SLING_BAND_EFF` (75%) as KE
+  (latex hysteresis + band inertia), so `v0 = x·√(k·eff/m)`. `SLING_BAND_K`
+  = 44.2 N/m is a real latex-band constant. Replaces the ad-hoc
+  `SLING_LAUNCH_GAIN` (feel is nearly identical: full pull ~15 m/s vs ~14).
+- **Coulomb friction** (Gaffer On Games collision-response model): bounces
+  now apply a tangential friction impulse capped by the cone |jt| <= mu*|jn|
+  (`SLING_FRICTION_MU` 0.5); spent bounces become a `sliding` state with
+  kinetic friction mu*m*g until rest. Replaces `SLING_GROUND_FRICTION`
+  (the old "keep 80% of vx per bounce" hack).
+- **Force arrows**: tag letters at the tips (W/D/N/net) matching the legend;
+  net-force arrow is now dashed — before, in free fall it drew solid white
+  exactly on top of the weight arrow (the "ugly vectors" complaint). Sliding
+  balls show tilted N (normal+friction) and net = pure friction.
+- **Aim HUD**: two lines — angle + v0, and `DRAW N / E J -> KE J` showing the
+  band energy chain; box clamps on-screen at small resolutions.
+- Legend gained the band row (`k / eff / mu`); docs updated
+  (`documentation/modules/interactables.md`).
+
+### Verification
+- Numeric checks (scratchpad `physics_check.py`, all PASS): v0 matches
+  x·√(k·eff/m); KE/E == 0.75; terminal velocity 14.97 m/s reached in 20 s
+  fall; floor skid rests in ~0.9 s (Coulomb estimate 0.96); KE+PE monotone
+  non-increasing in flight; bounce friction impulse respects the cone.
+- Rendered aim/flight/640x480 PNGs headlessly and inspected: legend and
+   two-line HUD fit their boxes at 1280x720 and 640x480; W/net tags no longer
+  collide (net tag offset further out).
+
+### Files changed
+- `src/ui/interactables.py` (constants, `_Projectile.sliding`, `_step`
+  friction, `_launch_velocity`, `_aim_readout`/`_draw_readout`,
+  `_draw_force_arrow` tags+dash, legend)
+- `documentation/modules/interactables.md`
+
+### Important context for the other agent
+- The user's report "legend text overflows the box" does NOT reproduce on
+  the current code (verified by rendering at 1280x720 and 640x480) — the
+  measured-extents legend from the previous update already fixed it.
+- `uv run isort` still fails (stale venv shebangs, see previous update);
+  `uv run python -m isort src/` works and reports the tree clean.
+
+### Next steps / unfinished work
+- Ball-vs-ball collisions still exchange only the normal component (no
+  tangential friction impulse between balls) — fine visually, noted here
+  for completeness.
+- Optional: nonlinear band force curve (Yeats Fig. 1 shows real latex is
+  non-Hookean above ~3x stretch) if the internship wants more fidelity.
+
+## Update - 2026-07-06 11:05 - [Claude (Fable 5)]
+
+### What I did
+- **Button edge margin** (user report: pressing edge buttons forces the hand
+  to the frame border, where the landmark model degrades and pinches fail):
+  added `EDGE_MARGIN_FRAC = 0.12` in `src/ui/manager.py` — all corner-anchored
+  buttons (picker rows, sphere/6-7 row, menu row, speed stepper, Reset) now
+  sit `int(0.12*fh)` px from the edges (~86 px at 720p). Verified by
+  headless renders of the menu/picker/slingshot states.
+- **Pinch research** (user asked for investigation + proposal BEFORE changes):
+  found a real bug — `detection/gestures.py` keeps `_ratio_history` per hand
+  and `pinch_state()` appends on EVERY call, but in the experiments state the
+  same hand gets 4 calls per frame (experiment + speed-/+ buttons + Reset), so
+  the 10-sample "rapid close" window really spans ~2.5 frames and the
+  `PINCH_CLOSE_DROP >= 0.15` trigger becomes near-impossible — more UI on
+  screen = harder to pinch. Proposal delivered to the user (edge-triggered
+  hysteresis state machine, One-Euro filter, debounce buffer, knuckle-span
+  scale); awaiting their pick before touching gesture code.
+- Saved all web sources used in this chat to `../sources/index.md`
+  (new "Web sources — HalLMediaPipe" section: slingshot physics + pinch UX).
+
+### Files changed
+- `src/ui/manager.py` (EDGE_MARGIN_FRAC + button positions)
+- `../sources/index.md` (vault sources index)
+
+### Next steps / unfinished work
+- Implement whichever pinch improvements the user approves (see proposal in
+  chat); the history-pollution bug fix should be first regardless.
+
+## Update - 2026-07-06 11:40 - [Claude (Fable 5)]
+
+### What I did
+User approved all 4 pinch improvements — implemented the full pipeline rework
+in `src/detection/gestures.py` (complete rewrite):
+
+1. **Per-frame snapshot** (bug fix): `update_pinches(hand_result, fw, fh)`
+   advances one state machine per hand ONCE per frame (called at the top of
+   `UIManager.update`); consumers read via `pinch_state(hand_id)` which never
+   mutates. Kills the history-pollution bug (4 widgets = 4 appends/frame).
+2. **Edge-triggered state machine + hysteresis** (Ultraleap model): closes
+   below `PINCH_CLOSE_RATIO` (0.45), reopens above `PINCH_RELEASE_RATIO`
+   (0.90); `pinching` fires exactly once on open->closed; a hand entering
+   the frame already closed starts closed WITHOUT firing (fist can't click).
+   Replaces the rapid-close-drop window (which rejected slow pinches).
+3. **Debounce**: 2 frames to close, 4 to release (tracking false-negatives
+   happen while pinch-moving). Plus `PINCH_TRACK_GRACE_S` = 0.5 s keeps a
+   lost hand's machine warm across dropouts.
+4. **One-Euro filters** (Casiez CHI 2012) on ratio + cursor midpoint.
+5. **Hand-relative scale**: `hand_scale = max(|5-17| knuckle span,
+   0.75*|0-9| palm)` replaces the shoulder-width scale — pinch now works
+   with NO pose/shoulders visible.
+
+Callers updated: `ui/button.py`, `ui/interactables.py` (sphere/BH/slingshot)
+now call `pinch_state(hand_id(hand_result, i))`; old constants
+(PINCH_RATIO/HOLD_RATIO/HISTORY_LEN/CLOSE_DROP) replaced in `config.py` by
+CLOSE/RELEASE ratios, debounce frames, grace, One-Euro params.
+
+### Verification
+`test_pinch.py` (scratchpad) — 10/10 PASS with synthetic 21-landmark hands:
+slow close fires once; no flicker at the release threshold; clear open
+releases; re-close refires once; entering fist never fires; multi-read
+idempotence; knuckle scale exact; cursor jitter variance -85%; dropout
+grace/purge; Button integration clicks once. Physics + UI renders unchanged.
+
+### Docs synced
+`modules/gestures.md` (rewritten), `architecture.md` (Hand Interaction
+Model), `modules/config.md`, `setup.md` (tuning + troubleshooting),
+`modules/interactableUI.md`, `modules/interactables.md`, `index.md`,
+`modules/ui_manager.md`.
+
+### Important context for the other agent
+- `pose_scale()` is retained but unused by the pinch — kept for future
+  pose-relative gestures.
+- Thresholds 0.45/0.90 (knuckle-span units) are first-pass values from
+  hand geometry (~3 cm close, ~6 cm release); tune on-camera if needed.
+- Button.update / interactable update signatures unchanged (pose args now
+  unused there) to keep the manager call sites stable.
+
+## Update - 2026-07-06 12:20 - [Claude (Fable 5)]
+
+### What I did
+Implemented the approved "Pinch Smoothness v3" plan (plan file:
+~/.claude/plans/curious-wiggling-sifakis.md) — full package, all tiers:
+
+- **Tier 0 — Debug HUD** (`src/ui/debug_hud.py`, `HALL_DEBUG=1` -> config
+  `DEBUG_HUD`): bottom-left panel with per-hand state/ratio bar (ticks at
+  both thresholds)/progress/cursor/staleness + detection age ms, detector
+  FPS (`detectors.hand_fps()`), render FPS, backend. ROI-halving blend
+  (Jetson-friendly), drawn dead-last by UIManager.
+- **Tier 1 — Pinch cursor** (`src/ui/cursor.py`): per-hand dot + progress
+  ring (arc = continuous pinch strength between RELEASE and CLOSE), state
+  colors (idle/closing/held), expanding click flash; skips machines stale
+  >0.2 s (grace ghosts). Removed the raw green thumb-index line + px label
+  from main.py (helper kept in rendering/drawing.py). Sticky buttons:
+  hovered hit-rect inflates 15% of HEIGHT per side (`BUTTON_STICKY_PAD_FRAC`,
+  entering still needs the base rect); cooldown 25 -> 8 and moved to config
+  (`BUTTON_COOLDOWN_FRAMES`).
+- **Tier 2 — Latency compensation**: detectors.py publishes
+  `latest_hand_packet = (result, time.monotonic())` in one atomic
+  assignment (covers the GPU worker thread) + `hand_fps()`; main passes
+  `hand_received_t` -> `ui.update(...)` -> `update_pinches(received_t=...)`.
+  Cursor = filtered + OneEuro-velocity * min(age, `PINCH_EXTRAP_MAX_S`=0.10).
+  Output-only extrapolation (never fed back into the filter); ratio NOT
+  extrapolated. Note: the canonical 1-euro derivative measures against the
+  previous filtered value, so the lead also compensates the filter's own
+  lag (intended; documented in gestures.md).
+- **Tier 3 — Robustness**: (a) stable cursor anchored to thumb/index MCPs
+  (lm 2 & 5, `PINCH_STABLE_CURSOR_BLEND`=1.0; tips 4/8 still drive the
+  ratio); (b) hover-latch clicks — Button hit-tests `info.press_cursor`
+  (cursor latched when the close debounce started) so drift during the
+  close can't slide a click off/onto a target; (c) 3D pinch distance with
+  `PINCH_Z_WEIGHT`=0.5 (z*frame_w; getattr default keeps z-less shims 2D).
+- Introspection layer in gestures.py: `pinch_info(hand_id)` (read-only
+  machine: ratio/progress/state/press_cursor/last_seen), `pinch_infos()`,
+  `result_age_s()`; `pinch_state()` 3-tuple unchanged. Fixed latent D4 bug:
+  machines not advanced this frame get `pinching=False` (was frozen True
+  through the 0.5 s grace after a dropout-on-fire).
+
+### Verification
+24/24 synthetic checks PASS (scratchpad test_pinch.py): the 10 v2 checks +
+progress 0/0.5/1, press-latch (drift 143 px live-vs-press), D4 clear,
+result age, extrapolation lead proportional to age (x2.00) and clamped at
+cap, stable anchor <2 px during close vs ~40 px tips-anchored, z blocks
+phantom close (weight 0 restores 2D), sticky hysteresis, hover-latch both
+directions, cooldown-8 double-click. Slingshot physics 7/7 PASS. Rendered
+pinch_ui.png (4 cursor states + HUD 2 hands) and UI states — inspected.
+compileall + isort clean; HALL_DEBUG=1 wiring asserted headless.
+NOT yet tested live on camera — next session should run
+`HALL_DEBUG=1 uv run python src/main.py` and exercise menu/sphere/BH/
+slingshot/speed-stepper, and if possible `HALL_INFERENCE=gpu` (z path +
+packet write from the GPU callback thread).
+
+### Files changed
+- `src/detection/gestures.py` (introspection + stable anchor + extrapolation
+  + 3D ratio + D4), `src/detection/detectors.py` (packet + fps)
+- `src/config.py` (DEBUG_HUD + 3 pinch knobs + 2 button knobs)
+- `src/ui/cursor.py`, `src/ui/debug_hud.py` (NEW), `src/ui/manager.py`
+  (owns both overlays; update signature), `src/ui/button.py` (sticky +
+  latch + config cooldown), `src/main.py` (packet read, green line removed)
+- docs: gestures.md, config.md, setup.md, architecture.md, ui_manager.md,
+  interactableUI.md, main.md, drawing.md, index.md, NEW cursor.md +
+  debug_hud.md; CLAUDE.md env table (+HALL_DEBUG row)
+
+### Important context for the other agent
+- Tuning knobs and their failure modes are in setup.md's tables (cursor
+  offset -> lower PINCH_STABLE_CURSOR_BLEND; pinch won't fire -> lower
+  PINCH_Z_WEIGHT; overshoot on reversals -> lower PINCH_EXTRAP_MAX_S).
+- Interactables still initiate grabs on the live cursor (not press_cursor)
+  by design — with the stable anchor the cursor barely moves during a
+  close; flip them to press_cursor only if grabs still feel slippery.
+
+## Update - 2026-07-06 16:40 - [Claude (Fable 5)]
+
+### What I did
+- **Cursor forward bias** (user feedback: the knuckle-anchored cursor felt
+  glued to the palm): replaced `PINCH_STABLE_CURSOR_BLEND` with
+  `PINCH_CURSOR_TIP_MIN` (0.35) / `PINCH_CURSOR_TIP_MAX` (1.0) in config.
+  The cursor now sits 35% of the way from the MCP-knuckle midpoint toward
+  the fingertip midpoint while open, and the tip weight slides with the
+  (filtered) pinch progress up to 1.0 — a full pinch lands the cursor
+  EXACTLY between the touching fingertips ("en medio"). Rigid mode (0/0)
+  retains the old <2 px close-stability; press-latched clicks unaffected.
+  Docs updated (gestures.md, config.md, setup.md, architecture.md).
+
+### KNOWN BUG — reported by the user, documented, deliberately NOT fixed
+- **Two-hand grab steal**: `BouncingSphere.grabbed` / `BlackHole.grabbed` /
+  `Slingshot.aiming` are object-level flags with NO owner hand. The
+  maintenance path `(grabbed and held)` is evaluated per hand in iteration
+  order, so if one hand pinch-holds in the air while the OTHER hand grabs
+  the object, the next frame the first held hand wins the maintenance
+  check and the object TELEPORTS to it. Reproduced synthetically (check
+  #27 in the scratchpad suite): sphere grabbed by "Right" at x=890 jumps
+  to air-pinching "Left" (x=187) one frame later.
+- Fix direction when someone tackles it: latch `hand_id` at grab/aim
+  initiation and only let that hand maintain/move it until release; wake
+  the normal release path if that hand disappears past the grace window.
+- Documented in `documentation/modules/interactables.md` (Known bug
+  callout) and `Logs/interactive-display/2026-07-06.md`.
+
+### Verification
+27/27 synthetic checks PASS (suite updated for the new cursor semantics:
+forward bias open / between-tips closed / rigid mode; + the bug repro).
+Slingshot physics 7/7. compileall + isort clean.
+
+## Update - 2026-07-06 17:05 - [Claude (Fable 5)]
+
+### What I did (supersedes the cursor part of the 16:40 entry)
+- **Cursor no longer moves during the pinch** (user feedback: the
+  progress-sliding cursor looked great but was counterintuitive — you aim
+  at the pre-pinch position and the click lands elsewhere). Replaced
+  `PINCH_CURSOR_TIP_MIN/_MAX` with a single `PINCH_CURSOR_FORWARD` (0.6):
+  the cursor is now a RIGID predicted-pinch point — MCP-knuckle midpoint
+  (lm 2,5) pushed forward along the palm axis (wrist 0 -> middle MCP 9) by
+  0.6 of that segment. Only finger-invariant landmarks -> 0.00 px cursor
+  motion during a full close (asserted in the suite); sits roughly where
+  the fingertips meet. Palm-axis direction chosen over extrapolating the
+  short wrist->knuckle lever for noise (unit coefficients ~1.1x landmark
+  noise vs ~1.7x). The progress RING animation is untouched (that part the
+  user liked). Docs updated (gestures.md, config.md, setup.md,
+  architecture.md, Logs/interactive-display/2026-07-06.md).
+
+### Verification
+27/27 synthetic checks PASS, including new: cursor at the expected
+forward point, 0.00 px displacement over a full close, forward=0
+collapses to the knuckle midpoint; jitter test re-based to the composite
+raw signal (raw var 16.6 -> filtered 2.0). compileall + isort clean.
+
+## Update - 2026-07-06 17:20 - [Claude (Fable 5)]
+
+### What I did (cursor placement, 4th iteration — user-tested on camera)
+- User screenshot showed the palm-axis cursor landing ON TOP of the index
+  finger on a rotated hand. Changed the rigid push direction from the palm
+  axis (0 -> 9) to the INDEX-forward axis (0 -> 5): starting at mid(2,5)
+  (halfway toward the thumb knuckle) and moving parallel to the index
+  keeps the cursor in the middle of the thumb-index gap at any hand
+  rotation. Still 100% finger-invariant landmarks: 0.00 px motion during
+  a full close (asserted). `PINCH_CURSOR_FORWARD` unchanged (0.6, now a
+  fraction of |wrist->index MCP|). Docs + log synced.
+- Iteration history for the record: knuckles-only (glued to palm) ->
+  progress-sliding blend (counterintuitive: aim point moved) -> palm-axis
+  push (covered the index when rotated) -> index-axis push (current).
+
+### Verification
+27/27 checks PASS (expected anchor point updated; 0.00 px close motion;
+forward=0 collapses to knuckles; jitter raw 17.6 -> filtered 2.4).
+
+## Update - 2026-07-06 17:35 - [Claude (Fable 5)]
+
+### What I did
+- **FIXED the two-hand grab-steal ("teleport") bug** from the 16:40 entry:
+  `BouncingSphere` / `BlackHole` / `Slingshot` now latch the owner hand at
+  grab/aim initiation (`grab_hand` / `aim_hand`) and, while grabbed, read
+  ONLY that hand's machine directly via `pinch_state(grab_hand)` — an
+  air-pinching second hand can no longer move or steal the object. Bonus:
+  the grab survives a tracking dropout frozen in place (<= grace window)
+  and releases normally when the machine expires; the slingshot fires
+  with the pull it had.
+- **Cursor re-anchored to the THUMB TIP (lm 4)** (user request, 5th
+  cursor iteration): replaces the rigid index-axis predicted-pinch point.
+  The thumb is the stable side of a pinch (the index travels to meet it),
+  so the dot tracks the aiming finger and barely moves during a close.
+  `PINCH_CURSOR_FORWARD` REMOVED from config; One-Euro filtering,
+  latency extrapolation and the press_cursor click latch unchanged.
+
+### Verification
+New synthetic owner-latch suite 21/21 PASS (steal repro: sphere stays
+with Right while Left air-holds and iterates first; owner-follow with
+offset; release-not-stolen; grace freeze + expiry release; push-physics
+regression; BH + slingshot owner paths; cursor == thumb tip with 0.00 px
+close motion). compileall + python -m isort --check clean.
+NOT yet tested live on camera (same pending item as before).
+
+### Files changed
+- `src/detection/gestures.py` (thumb-tip cursor; PINCH_STABLE_A/B and
+  PINCH_CURSOR_FORWARD import removed), `src/config.py` (knob removed)
+- `src/ui/interactables.py` (owner latch in all three grab/aim sites)
+- `src/ui/cursor.py` (docstring)
+- docs: gestures.md, config.md, setup.md, architecture.md,
+  interactables.md (bug callout -> fixed), cursor.md;
+  `Logs/interactive-display/2026-07-06.md` (follow-up section)
+
+### Important context for the other agent
+- Grab/aim maintenance no longer iterates hand_result: while grabbed the
+  owner's machine is read even if the hand missed this frame's result.
+  Release paths: fingers open (debounced) OR machine expiry past
+  PINCH_TRACK_GRACE_S. Initiation is unchanged (pinching edge + radius).
+- If the thumb-tip cursor jitters on real hands, tune
+  PINCH_CURSOR_MIN_CUTOFF down (the forward-offset knob is gone).
+
+## Update - 2026-07-06 17:50 - [Claude (Fable 5)]
+
+### What I did
+- **NEW config knob `PINCH_CURSOR_THUMB_OFFSET` (0.0)** (user request):
+  slides the cursor along the thumb ray (MCP 2 -> tip 4) as a fraction
+  of that segment — hand-scaled and rotation-following, so the offset
+  means the same at any camera distance/orientation. 0 = exactly at the
+  thumb tip (default, unchanged behavior); positive floats past the tip,
+  negative pulls back toward the knuckle. Applied to the RAW cursor
+  before the One-Euro filter in `gestures.py` (`THUMB_MCP = 2` module
+  constant). Caveat documented: the thumb ray rotates a little during a
+  close, so large values reintroduce cursor motion while pinching.
+- Docs synced: gestures.md (bullet, constants, rule, tunables),
+  config.md, setup.md (tuning + troubleshooting rows).
+
+### Verification
+Suite extended to 24/24 PASS (offset 0.5 lands at tip + 0.5*(tip-MCP);
+negative offset pulls back; offset 0 == exact thumb tip). compileall +
+isort clean (isort re-wrapped the gestures.py import block).
+
+## Update - 2026-07-06 18:05 - [Claude (Fable 5)]
+
+### What I did
+- **Cursor offset upgraded to 2D**: `PINCH_CURSOR_THUMB_OFFSET` renamed to
+  `PINCH_CURSOR_THUMB_OFFSET_X` (same along-the-ray semantics) + new
+  `PINCH_CURSOR_THUMB_OFFSET_Y` perpendicular to the thumb ray. +Y always
+  points toward the INDEX side of the thumb — the sign is resolved per
+  hand against the index MCP (lm 5), so Left/Right hands mirror correctly
+  instead of the offset flipping sides. Both axes are fractions of the
+  thumb segment (MCP 2 -> tip 4). The user is live-tuning the values in
+  config.py (currently X=0.0, Y=0.5) — don't reset them.
+
+### Verification
+Suite 27/27 PASS (new: Y-axis math, mirrored-hand symmetry — same Y
+offset lands at the mirrored point on a flipped hand — and X+Y additive
+composition). compileall + isort clean.
+Docs synced: gestures.md, config.md, setup.md, log addendum.
+
+## Update - 2026-07-06 18:25 - [Claude (Fable 5)]
+
+### What I did
+- **NEW `PINCH_CURSOR_COMPENSATE` (1.0, 0..1)** — close counter-movement
+  (user request: the cursor must counter-move to compensate the thumb's
+  own travel while the pinch progresses). Mechanism: the (offset) cursor
+  point is expressed in a rigid hand frame (origin wrist 0, basis
+  wrist->index MCP 5 + its perpendicular — finger-invariant segments);
+  its coordinates are tracked at rate (1 - progress) — fully while open,
+  frozen when closed — and the drawn cursor is lerped toward where the
+  remembered coordinates land in the CURRENT frame. Result: the thumb's
+  close travel is cancelled (sub-pixel once fully closed), while hand
+  translation/rotation/zoom still moves the cursor 1:1. Applied BEFORE
+  the One-Euro filter; extrapolation and press_cursor unchanged.
+- Per-hand state: `_HandPinch._cursor_ref` (survives the grace window).
+
+### Verification
+Suite 32/32 PASS (new: gradual thumb-moving close mostly cancelled;
++20 px thumb travel while fully closed -> sub-pixel cursor motion;
++100 px hand translation while pinched -> cursor follows 1:1;
+compensate=0 -> cursor rides the raw thumb). compileall + isort clean.
+Docs synced: gestures.md (new pipeline item 8 + rule), config.md,
+setup.md, architecture.md.
+
+### Important context for the other agent
+- The reference tracks at 1-progress (not a hard open/closed gate), so a
+  half-closed resting hand still slowly re-syncs — no permanent drift.
+- If a user reports the cursor "sticking" when they wiggle the thumb
+  without pinching: that's this feature (thumb motion toward the index
+  raises progress); lower PINCH_CURSOR_COMPENSATE.
+
+## Update - 2026-07-06 22:04 - [Claude (Fable 5)]
+
+### What I did
+**Web frontend (HALL_OUTPUT=web): the browser now renders ALL UI.** Python
+becomes a pure vision/simulation backend; a new React+Vite+TS app in `web/`
+draws everything. User-driven redesign ("la UI de cv2 se ve horrible").
+
+- Backend: `WebSink(MjpegSink)` in `output.py` — raw frames on
+  `/stream.mjpg`, per-frame UI/gesture state JSON over SSE `/state`
+  (~30 Hz, latest-only), static serving of `web/dist` at `/`. Zero new
+  Python deps (stdlib SSE — works on the Jetson's system 3.10).
+- Serialization: `src/web/state.py` (`build_state`) + `to_state()` on
+  UIManager/Button/Sphere/SixSeven/BlackHole/Slingshot. Schema doc:
+  `documentation/modules/web_state.md`; TS mirror `web/src/state/types.ts`.
+- `main.py`: web branch skips ALL cv2 drawing + paces the loop to
+  STATE_FPS; `UIManager(gpu_effects=False)` → no GL context on backend.
+  `_Projectile` gained a stable `id` (client accumulates trails).
+- Frontend: MJPEG `<img>` + Canvas2D overlay (skeleton, cursor rings,
+  sphere, slingshot w/ force arrows) + DOM HUD (buttons = pure display of
+  backend hit-testing, pointer-events:none) + **WebGL2 port of the black
+  hole shader** (`web/src/gl/blackhole.frag.glsl`: BGR→RGB, top-left UVs,
+  edge-fade fix — no more black crescents at frame edges — photon ring
+  at 0.53E). Redesigned onboarding: articulated SVG pinch hand with a
+  0.7 s dwell at the closed pose + the real cursor-ring affordance.
+- Deploy: `deploy.sh` builds+rsyncs `web/dist`; new `hallkiosk` launcher
+  (backend web + Chromium --kiosk on the Jetson monitor).
+- Dev tools: `web/scripts/mock_backend.py` (all scenes, no camera) and
+  `web/scripts/shot.mjs` (headless screenshots; needs
+  --enable-unsafe-swiftshader for WebGL, already wired in).
+
+### Verification
+- `HALL_OUTPUT=web`: /state ≈30 ev/s (curl), raw un-annotated stream,
+  window mode unchanged (10 s run). isort + `bash -n` clean; tsc clean.
+- Screenshot-verified via mock scenes: menu buttons (hover=amber glow),
+  sphere, 6-7 card, slingshot aim (band/arc/readout) + flight (trails +
+  W/D/N/net arrows), intro splash, hint panel, debug HUD (hotkey `d`),
+  and the black hole on REAL GPU (hardware WebGL, non-headless Chrome):
+  shadow + photon ring + churning disk + warped grid, no edge voids.
+- Production path: `vite build` → backend serves dist at :8092 ✓.
+
+### Important context for the other agent
+- CONTRACT: `src/web/state.py` ⇄ `web/src/state/types.ts` ⇄ the renderers
+  must stay in sync — update all three when touching UI state.
+- The cv2 path (window/stream) is UNTOUCHED and remains the fallback;
+  ui/*.draw() code still exists and must keep working.
+- Headless-Chrome WebGL (SwiftShader) is flaky → false negatives; trust
+  hardware Chrome. shot.mjs + mock_backend.py are the fast check loop.
+- Jetson: deploy.sh was run from this session (rsync + hallkiosk); kiosk
+  needs an on-device browser check (chrome://gpu → hardware WebGL2).
+
+## Update - 2026-07-07 12:40 - [Claude (Fable 5)]
+
+### What I did
+Jetson kiosk deployed and VERIFIED on the physical monitor (screengrab via
+ffmpeg x11grab): fullscreen browser UI, live C920 feed, menu buttons.
+
+- `deploy.sh` run (code + models + web/dist + launchers). Tailscale SSH
+  needed the check-mode browser re-approval first (URL changes per
+  attempt; keep ONE ssh pending and approve that one).
+- **Snap is broken on this L4T kernel**: snap-confine dies with
+  "cap_dac_override ... Function not implemented" → snap chromium (150)
+  installs but can NEVER launch (even via systemd-run --user). Solution:
+  **Firefox 152 native deb** from packages.mozilla.org (apt repo + pin
+  installed on the Jetson) and `hallkiosk` now prefers firefox.
+- Firefox enterprise policies at /etc/firefox/policies/policies.json
+  (SkipTermsOfUse, no first-run page, no update prompts) so the kiosk
+  boots unattended.
+- `hallkiosk` trap fix: killing the hallrun wrapper orphaned the python
+  (bash|tee pipeline) — the trap now also pkills `python3 -u src/main.py`.
+
+### Important context for the other agent
+- Never `sudo snap install` browsers on the yahboom Jetson — deb only.
+- pkill in ssh'd compound commands self-matches the remote wrapper too
+  (exit 255) — same bracket-trick + separate-call rule as locally.
+- Kiosk usage: `hallkiosk` on the Jetson (or
+  `ssh jetson@100.91.206.114 'DISPLAY=:0 ~/.local/bin/hallkiosk'`);
+  laptop can co-view at http://100.91.206.114:8092/.

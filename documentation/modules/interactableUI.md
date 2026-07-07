@@ -11,13 +11,9 @@ Provides the `Button` class: a rectangular UI element that responds to hand pinc
 
 ---
 
-## Module-Level Constants
+## Constants
 
-| Constant | Default | Description |
-|---|---|---|
-| `COOLDOWN_FRAMES` | `25` | Frames the button cannot fire again after a click (prevents repeat-fire) |
-
-The pinch threshold itself lives in [[config]] as `PINCH_RATIO` and is consumed via `pinch_state(...)` from [[gestures]] — see that module for the scale-aware detection rule.
+All button tunables live in [[config]]: `BUTTON_COOLDOWN_FRAMES` (`8` — the pinch edge-trigger + release debounce is the real double-fire guard, this only absorbs tracking glitches) and `BUTTON_STICKY_PAD_FRAC` (`0.15` — sticky-target inflation, see below). The pinch thresholds (`PINCH_CLOSE_RATIO` / `PINCH_RELEASE_RATIO`) are consumed inside [[gestures]] — buttons just read the per-frame snapshot via `pinch_info(hand_id)`.
 
 ---
 
@@ -37,17 +33,16 @@ The pinch threshold itself lives in [[config]] as `PINCH_RATIO` and is consumed 
 
 ### `update(hand_result, pose_landmarks, frame_w, frame_h)`
 
-Processes one frame of hand detection results. `pose_landmarks` is the first pose's landmark list (or `None` if no pose was detected), supplied so the pinch check can scale against shoulder width.
+Processes one frame of hand detection results. `pose_landmarks` and the frame dimensions are no longer used by the pinch (the pipeline is a per-frame snapshot in [[gestures]], scaled by the hand's own knuckle span); the signature is kept uniform with the other per-frame updates.
 
 **Logic per detected hand:**
 
-1. Derive a stable `hand_id` via `gestures.hand_id(hand_result, i)`.
-2. Call `pinch_state(hand_landmarks, pose_landmarks, frame_w, frame_h, PINCH_RATIO, hand_id=...)` from [[gestures]] to get `(pinching, _held, (cx, cy))`. Only the `pinching` flag matters for buttons — it is True only on the frames where the user *actively closes* their fingers, not when the hand is already closed and just moving around.
-3. If cursor is inside the button rect → `hovered = True`.
-4. If additionally `pinching` and `_cooldown == 0` → fire `on_click()`, set `pressed = True`, start cooldown.
-5. Only one hand is needed to trigger a click (`break` after first hit).
+1. Derive a stable `hand_id` via `gestures.hand_id(hand_result, i)` and read the full snapshot: `pinch_info(hand_id)` (skip `None`). `UIManager.update` has already advanced the machines this frame via `update_pinches(...)`.
+2. **Sticky target**: if the button was hovered last frame, the hit rect inflates by `int(BUTTON_STICKY_PAD_FRAC × height)` per side — cursor jitter at the border can't flicker the hover or drop a click. *Entering* still requires the base rect (hysteresis). The pad comes from the height so it stays under every button gap (layout constraint: keep gaps > 0.15 × button height).
+3. If the live cursor (`info.cursor`) is inside the (possibly inflated) rect → `hovered = True`.
+4. **Hover-latch click**: on `info.pinching` (fires exactly once, on the open→closed transition) with `_cooldown == 0`, the click is hit-tested against **`info.press_cursor`** — the cursor where the close gesture *started* — so the hand drifting during the close cannot slide the click off its target, nor fake one onto it (a close begun outside doesn't count even if it ends inside). On success: `on_click()`, `pressed = True`, start cooldown, `break`.
 
-Cooldown decrements by 1 each frame regardless of hand presence. When `pose_landmarks` is `None` or the shoulders are occluded, `pinching` is always `False` — buttons can still hover but cannot fire. A fist sliding across the button is rejected because the per-hand ratio history shows no recent closing motion.
+Cooldown decrements by 1 each frame regardless of hand presence. A fist sliding across the button is rejected because a hand that appears already closed is initialised in the closed state without firing the transition event.
 
 ---
 
@@ -70,24 +65,21 @@ Label: white, centred horizontally and vertically.
 
 ```
 Each frame:
-  hovered = False
-  pressed = False
+  was_hovered = hovered
+  hovered = False; pressed = False
   cooldown -= 1 (if > 0)
+  pad = int(BUTTON_STICKY_PAD_FRAC * height) if was_hovered else 0
 
-  for i, hand in enumerate(hands):
-    hid = hand_id(hand_result, i)            # "Left" / "Right" / fallback
-    pinching, _held, cursor = pinch_state(
-        hand, pose, frame_w, frame_h, PINCH_RATIO, hand_id=hid
-    )
-    # pinching = (closed now) AND (ratio dropped >= PINCH_CLOSE_DROP recently)
-
-    if cursor inside rect:
+  for i in range(len(hands)):
+    info = pinch_info(hand_id(hand_result, i))   # read-only snapshot
+    if info.cursor inside rect+pad:
       hovered = True
-      if pinching and cooldown == 0:
-        pressed = True
-        cooldown = COOLDOWN_FRAMES
-        on_click()
-        break
+    # click is tested where the close STARTED, not where it fired:
+    if info.pinching and cooldown == 0 and info.press_cursor inside rect+pad:
+      pressed = True
+      cooldown = BUTTON_COOLDOWN_FRAMES
+      on_click()
+      break
 ```
 
 See also: [[modules/ui_manager]], [[modules/gestures]], [[architecture#Hand Interaction Model]]

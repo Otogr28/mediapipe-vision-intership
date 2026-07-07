@@ -1,0 +1,4 @@
+# dist/ IS committed on purpose: the Jetson auto-updates by `git pull` and
+# never runs Node, so the built frontend must travel in the repo.
+node_modules/
+*.local

@@ -1,0 +1,16 @@
+[Unit]
+Description=HalLMediaPipe kiosk (web backend + fullscreen browser)
+# Tied to the graphical session: starts when the desktop comes up (with GDM
+# autologin that means straight after boot) and stops with it.
+PartOf=graphical-session.target
+After=graphical-session.target
+
+[Service]
+Type=simple
+ExecStart=%h/HalLMediaPipe/deploy/hall-app/hallkiosk
+Restart=on-failure
+RestartSec=5
+Environment=DISPLAY=:0
+
+[Install]
+WantedBy=graphical-session.target

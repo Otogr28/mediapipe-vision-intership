@@ -65,11 +65,33 @@ SELECTED_CAMERA = os.environ.get("HALL_CAMERA", "0")
 #   "window" — an on-screen cv2 window (needs a display); press 'q' to quit.
 #   "stream" — a headless MJPEG HTTP server, viewable in a remote browser.
 #              Used on the Jetson when driving it from a laptop (no monitor).
+#   "web"    — the browser frontend: the same HTTP server additionally serves
+#              the built React app (web/dist), streams the RAW camera frame
+#              (no cv2 drawing — the browser renders all UI) and pushes the
+#              per-frame UI/gesture state as JSON over an SSE endpoint.
 OUTPUT_MODE = os.environ.get("HALL_OUTPUT", "window")
-# MJPEG server settings for OUTPUT_MODE == "stream":
-STREAM_BIND = os.environ.get("HALL_STREAM_BIND", "auto")    # "auto" -> Tailscale IP
+# MJPEG server settings for OUTPUT_MODE in ("stream", "web").
+# Web mode defaults the bind to 0.0.0.0 instead of the Tailscale IP: the
+# Jetson kiosk browser connects to http://localhost:8092/, which an
+# auto-resolved Tailscale bind would refuse (Tailscale access still works
+# on 0.0.0.0 — it binds every interface).
+STREAM_BIND = os.environ.get(
+    "HALL_STREAM_BIND", "0.0.0.0" if OUTPUT_MODE == "web" else "auto")
 STREAM_PORT = int(os.environ.get("HALL_STREAM_PORT", "8092"))
 STREAM_QUALITY = int(os.environ.get("HALL_STREAM_QUALITY", "80"))  # JPEG 1..100
+# Web mode: where the built frontend lives (vite build -> web/dist) and how
+# often the /state SSE endpoint pushes a fresh snapshot to each client.
+WEB_DIST_DIR = os.environ.get(
+    "HALL_WEB_DIST",
+    os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                 "web", "dist"),
+)
+STATE_FPS = int(os.environ.get("HALL_STATE_FPS", "30"))
+
+# Debug overlay (HALL_DEBUG=1): draws the live pinch pipeline on the frame —
+# per-hand ratio vs thresholds, machine state, pinch progress, detection
+# result age and detector/render FPS. For tuning; off by default.
+DEBUG_HUD = os.environ.get("HALL_DEBUG", "0") == "1"
 
 # Requested capture resolution for the webcam. The actual frame size is read
 # back after `cv2.VideoCapture.set(...)` because some drivers silently snap
@@ -87,30 +109,92 @@ MIN_HAND_DETECTION_CONFIDENCE = 0.5
 MIN_HAND_PRESENCE_CONFIDENCE = 0.5
 MIN_HAND_TRACKING_CONFIDENCE = 0.5
 
-# Gesture detection
-# Pinch fires when distance(thumb_tip, index_tip) < PINCH_RATIO * pose_scale,
-# where pose_scale is the shoulder-to-shoulder pixel distance from the pose
-# landmarks. A ratio (not pixels) keeps detection consistent at any camera
-# distance; using the pose for scale instead of the hand prevents a closed
-# fist from collapsing the reference and misfiring as a pinch.
-PINCH_RATIO = 0.09
+# Gesture detection (see detection/gestures.py for the full pipeline).
+# The thumb-index distance is normalized by the HAND's own size (knuckle
+# span |5-17| vs 0.75x palm length |0-9|, whichever is larger). Those
+# segments do not move when the fingers close, so a fist cannot collapse
+# the reference; the ratio tracks camera distance automatically; and unlike
+# the old shoulder-width scale, the pinch works even when the shoulders /
+# pose are not visible.
+#
+# Ultraleap-style hysteresis: the pinch *closes* below PINCH_CLOSE_RATIO
+# and only *reopens* above the looser PINCH_RELEASE_RATIO, so jitter at
+# the threshold cannot flicker the state. In knuckle-span units, 0.45 is
+# roughly "tips within ~3 cm", 0.90 "tips ~6 cm apart".
+PINCH_CLOSE_RATIO = 0.45
+PINCH_RELEASE_RATIO = 0.90
 
-# Hysteresis: once a gesture is *triggered* by a tight pinch (PINCH_RATIO),
-# it is *held* as long as the ratio stays below PINCH_HOLD_RATIO. Making the
-# hold threshold looser than the trigger threshold means a grabbed object
-# stays grabbed even when the user's fingers drift a bit open — only a
-# clear release motion drops the gesture. Use the same value as PINCH_RATIO
-# to disable hysteresis entirely.
-PINCH_HOLD_RATIO = 0.25
+# Debounce: consecutive agreeing frames required before the state flips.
+# Hand tracking gives brief false negatives exactly while the user pinches
+# and moves at once, so releasing demands more evidence than closing.
+PINCH_DEBOUNCE_CLOSE_FRAMES = 2
+PINCH_DEBOUNCE_RELEASE_FRAMES = 4
 
-# Rapid-close requirement: a pinch only fires when, in addition to being
-# currently closed, the ratio (pinch_dist / pose_scale) dropped by at least
-# PINCH_CLOSE_DROP from its peak within the last PINCH_HISTORY_LEN frames.
-# This stops a hand that is already closed (e.g. a fist passing over a
-# button) from registering a phantom pinch — the gesture must include an
-# actual closing motion, not just a closed shape.
-PINCH_HISTORY_LEN = 10
-PINCH_CLOSE_DROP = 0.15
+# Keep a lost hand's pinch state warm for this long (s): a short tracking
+# dropout resumes mid-hold instead of cold-starting the state machine.
+PINCH_TRACK_GRACE_S = 0.5
+
+# One-Euro filter (Casiez et al., CHI 2012) — adaptive low-pass: strong
+# smoothing at rest (kills jitter), light while moving fast (no lag).
+# min_cutoff in Hz; beta grows the cutoff per unit of signal speed.
+PINCH_CURSOR_MIN_CUTOFF = 1.5   # cursor midpoint (px)
+PINCH_CURSOR_BETA = 0.01
+PINCH_RATIO_MIN_CUTOFF = 2.0    # pinch ratio (lighter, keeps clicks snappy)
+PINCH_RATIO_BETA = 0.5
+
+# Cursor anchor: the THUMB TIP (landmark 4, hard-wired in gestures.py).
+# The thumb is the stable side of a thumb-index pinch — the index does
+# most of the closing travel — so the cursor tracks the finger the user
+# aims with and stays nearly still through the close. Buttons hit-test
+# the press-latched cursor, so residual thumb travel can't slide a click.
+
+# 2D cursor offset in the THUMB's own frame (origin: the thumb tip).
+# Both axes are fractions of the visible thumb segment (MCP 2 -> tip 4),
+# so they scale with hand size and follow hand rotation automatically:
+#   X — along the thumb ray. 0 = at the tip; positive floats the cursor
+#       past the tip (0.2 ~ a fingertip ahead), negative pulls it back
+#       toward the knuckle.
+#   Y — perpendicular to the ray. Positive always pushes toward the
+#       INDEX side of the thumb (the sign is resolved per hand, so
+#       Left/Right mirror correctly); negative toward the outer edge.
+# Keep both small: the thumb ray rotates a little while the fingers
+# close, so large offsets reintroduce cursor motion during the pinch.
+PINCH_CURSOR_THUMB_OFFSET_X = 0.0
+PINCH_CURSOR_THUMB_OFFSET_Y = 0.5
+
+# Pinch counter-movement compensation (0..1). As the fingers close, the
+# thumb itself travels toward the index and drags a thumb-anchored
+# cursor with it. The cursor point is expressed in a rigid hand frame
+# (wrist 0 -> index MCP 5 — segments the fingers cannot move); while the
+# hand is open its coordinates in that frame are remembered, and as the
+# pinch PROGRESSES the cursor is pulled back toward the remembered point
+# — a counter-movement that cancels the thumb's own close travel while
+# still following real hand motion (translation, rotation, zoom).
+# 1.0 = full compensation (cursor holds still through the close),
+# 0.0 = off (cursor rides the raw thumb tip).
+PINCH_CURSOR_COMPENSATE = 1.0
+
+# Latency compensation: the cursor is extrapolated forward by its One-Euro
+# velocity times the detection result's age, capped here (s). Simple linear
+# extrapolation — at short horizons it beats Kalman on jitter.
+PINCH_EXTRAP_MAX_S = 0.10
+
+# 3D pinch distance: weight on the landmark z difference (wrist-relative,
+# ~x-normalized units, scaled by frame width) mixed into the thumb-index
+# distance. Guards against phantom closes when hand rotation aligns the
+# fingertips along the camera axis. 0.0 = pure 2D distance (old behavior).
+PINCH_Z_WEIGHT = 0.5
+
+# Buttons.
+BUTTON_COOLDOWN_FRAMES = 8     # frames before a button can fire again; the
+                               # pinch edge-trigger + release debounce is the
+                               # real double-fire guard, this only absorbs
+                               # tracking glitches
+BUTTON_STICKY_PAD_FRAC = 0.15  # sticky targets: while hovered, the hit rect
+                               # inflates by this fraction of the button
+                               # HEIGHT per side. Height (not width) keeps
+                               # the inflation under every button gap — keep
+                               # layout gaps > 0.15 * button height.
 
 # Black Hole interactable.
 # `BH_EINSTEIN_RADIUS_PX` is the screen-space Einstein radius used by the

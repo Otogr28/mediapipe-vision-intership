@@ -1,0 +1,8 @@
+[Unit]
+Description=HalLMediaPipe auto-update from git origin/main
+# Network may not be up on the first post-boot run; the timer just fires
+# again a minute later, so failures here are non-fatal by design.
+
+[Service]
+Type=oneshot
+ExecStart=%h/HalLMediaPipe/deploy/hall-app/hall-update.sh

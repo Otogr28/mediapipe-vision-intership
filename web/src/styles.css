@@ -1,0 +1,557 @@
+/* ------------------------------------------------------------------ */
+/* HalLMediaPipe — instrument-panel design tokens                      */
+/*                                                                     */
+/* The live camera feed IS the background, so the system is built from */
+/* translucent dark-glass panels + light ink strokes that survive any  */
+/* video content. Accents follow the app's gesture language:           */
+/*   amber  = action in progress (closing pinch, hints, readouts)      */
+/*   green  = confirmed (held pinch, click, fresh count)               */
+/*   blue   = passive traces (skeleton, idle objects)                  */
+/* Type: IBM Plex — Sans for UI, Condensed for engraved-style labels,  */
+/* Mono for every number (instrument heritage, tabular digits).        */
+/* ------------------------------------------------------------------ */
+
+:root {
+  --glass: rgba(10, 13, 19, 0.62);
+  --glass-heavy: rgba(8, 10, 15, 0.82);
+  --hairline: rgba(237, 241, 247, 0.22);
+  --ink: #edf1f7;
+  --ink-dim: #9aa3b2;
+  --amber: #ffb84d;
+  --go: #63e6a4;
+  --trace: #7fb4ff;
+  --danger: #ff7d6b;
+
+  --font-ui: "IBM Plex Sans", system-ui, sans-serif;
+  --font-label: "IBM Plex Sans Condensed", var(--font-ui);
+  --font-data: "IBM Plex Mono", ui-monospace, monospace;
+
+  --radius: 6px;
+}
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  background: #06080c;
+  color: var(--ink);
+  font-family: var(--font-ui);
+  overflow: hidden;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* ---- stage: aspect-ratio box all layers share ---------------------- */
+
+.viewport {
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.stage {
+  position: relative;
+  /* aspect-ratio is set inline from the backend's frame size */
+  max-width: 100vw;
+  max-height: 100vh;
+  width: 100vw;
+  height: auto;
+}
+
+@media (min-aspect-ratio: 16/9) {
+  .stage {
+    width: auto;
+    height: 100vh;
+  }
+}
+
+.stage > .layer {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+}
+
+.stage > img.layer {
+  object-fit: fill; /* stage already matches the frame aspect */
+  user-select: none;
+  -webkit-user-drag: none;
+}
+
+.stage > canvas.layer {
+  pointer-events: none;
+}
+
+/* ---- shared panel grammar: dark glass + viewfinder brackets -------- */
+
+.panel {
+  position: absolute;
+  background: var(--glass);
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+}
+
+/* Corner tick marks — the camera-viewfinder signature. Applied via two
+   pseudo-elements per box (top-left+top-right on ::before via borders,
+   bottom pair on ::after). */
+.brackets::before,
+.brackets::after {
+  content: "";
+  position: absolute;
+  left: -1px;
+  right: -1px;
+  height: 9px;
+  pointer-events: none;
+}
+
+.brackets::before {
+  top: -1px;
+  border-top: 2px solid var(--ink);
+  -webkit-mask: linear-gradient(90deg, #000 9px, transparent 9px calc(100% - 9px), #000 calc(100% - 9px));
+  mask: linear-gradient(90deg, #000 9px, transparent 9px calc(100% - 9px), #000 calc(100% - 9px));
+}
+
+.brackets::after {
+  bottom: -1px;
+  border-bottom: 2px solid var(--ink);
+  -webkit-mask: linear-gradient(90deg, #000 9px, transparent 9px calc(100% - 9px), #000 calc(100% - 9px));
+  mask: linear-gradient(90deg, #000 9px, transparent 9px calc(100% - 9px), #000 calc(100% - 9px));
+}
+
+/* ---- text roles ----------------------------------------------------- */
+
+.label {
+  font-family: var(--font-label);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.09em;
+}
+
+.data {
+  font-family: var(--font-data);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---- HUD layer: DOM in frame-pixel coordinates ---------------------- */
+
+.hud-layer {
+  position: absolute;
+  top: 0;
+  left: 0;
+  transform-origin: 0 0;
+  pointer-events: none;
+}
+
+.hud-layer > * {
+  position: absolute;
+}
+
+/* ---- gesture buttons ------------------------------------------------- */
+
+.gbtn {
+  --bracket: var(--ink);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--glass);
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  font-family: var(--font-label);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  font-size: 21px;
+  color: var(--ink);
+  text-align: center;
+  transition:
+    border-color 120ms ease,
+    background-color 120ms ease,
+    box-shadow 120ms ease,
+    transform 120ms ease;
+}
+
+.gbtn.brackets::before,
+.gbtn.brackets::after {
+  border-color: var(--bracket);
+  transition: border-color 120ms ease;
+}
+
+.gbtn.hovered {
+  --bracket: var(--amber);
+  border-color: rgba(255, 184, 77, 0.75);
+  background: rgba(64, 44, 12, 0.55);
+  box-shadow: 0 0 22px rgba(255, 184, 77, 0.28);
+  color: #ffd9a1;
+}
+
+.gbtn.pressed {
+  --bracket: var(--go);
+  border-color: var(--go);
+  background: rgba(15, 66, 40, 0.6);
+  box-shadow: 0 0 26px rgba(99, 230, 164, 0.45);
+  color: #c9ffe3;
+  transform: scale(0.97);
+}
+
+.speed-pill {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--glass);
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius);
+  color: var(--amber);
+  font-size: 20px;
+  font-weight: 500;
+}
+
+/* ---- 6-7 counter card ------------------------------------------------ */
+
+.sixseven {
+  padding: 14px 34px 18px;
+  text-align: center;
+  transition: border-color 200ms ease;
+}
+
+.six-label {
+  font-size: 15px;
+  color: var(--ink-dim);
+  margin-bottom: 2px;
+}
+
+.six-count {
+  font-size: 64px;
+  font-weight: 500;
+  line-height: 1.1;
+  transition: transform 120ms ease;
+}
+
+/* ---- slingshot panels ------------------------------------------------ */
+
+.aim-readout {
+  padding: 10px 16px;
+  font-size: 18px;
+  line-height: 1.55;
+  white-space: nowrap;
+}
+
+.aim-readout .dim {
+  color: var(--ink-dim);
+  font-size: 14px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.sling-legend {
+  left: 20px;
+  top: 84px;
+  padding: 14px 18px 12px;
+  font-size: 15px;
+}
+
+.legend-title {
+  font-size: 13px;
+  color: var(--ink-dim);
+  margin-bottom: 8px;
+}
+
+.legend-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  line-height: 1.7;
+}
+
+.legend-row .swatch {
+  width: 20px;
+  height: 4px;
+  border-radius: 2px;
+  flex: none;
+}
+
+.legend-footer {
+  margin-top: 10px;
+  padding-top: 8px;
+  border-top: 1px solid rgba(237, 241, 247, 0.12);
+  color: var(--ink-dim);
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+/* ---- animated pinch-demo hand (PinchHand.tsx) ----------------------- */
+/* 2.4 s cycle with a DWELL at the closed pose:
+   0-16.7% open hold · 16.7-37.5% close · 37.5-66.7% closed dwell ·
+   66.7-83.3% open · 83.3-100% hold. */
+
+.pinch-hand {
+  display: block;
+  overflow: visible;
+}
+
+.ph-body {
+  fill: rgba(237, 241, 247, 0.13);
+  stroke: rgba(237, 241, 247, 0.85);
+  stroke-width: 2.5;
+  stroke-linejoin: round;
+}
+
+.ph-index,
+.ph-thumb,
+.ph-ring-progress,
+.ph-ripple {
+  transform-box: view-box;
+}
+
+.ph-index {
+  transform-origin: 118px 108px;
+  animation: ph-index 2.4s cubic-bezier(0.45, 0, 0.25, 1) infinite;
+}
+
+.ph-thumb {
+  transform-origin: 134px 152px;
+  animation: ph-thumb 2.4s cubic-bezier(0.45, 0, 0.25, 1) infinite;
+}
+
+.ph-ring-base {
+  fill: none;
+  stroke: rgba(237, 241, 247, 0.4);
+  stroke-width: 2;
+}
+
+.ph-ring-progress {
+  fill: none;
+  stroke: var(--amber);
+  stroke-width: 3;
+  stroke-linecap: round;
+  stroke-dasharray: 81.7;
+  stroke-dashoffset: 81.7;
+  animation: ph-progress 2.4s cubic-bezier(0.45, 0, 0.25, 1) infinite;
+}
+
+.ph-ripple {
+  fill: none;
+  stroke: #ffffff;
+  stroke-width: 2.5;
+  opacity: 0;
+  transform-origin: 152px 56px;
+  animation: ph-ripple 2.4s linear infinite;
+}
+
+@keyframes ph-index {
+  0%, 16.7% { transform: rotate(0deg); }
+  37.5%, 66.7% { transform: rotate(30deg); }
+  83.3%, 100% { transform: rotate(0deg); }
+}
+
+@keyframes ph-thumb {
+  0%, 16.7% { transform: rotate(0deg); }
+  37.5%, 66.7% { transform: rotate(-12deg); }
+  83.3%, 100% { transform: rotate(0deg); }
+}
+
+@keyframes ph-progress {
+  0%, 16.7% { stroke-dashoffset: 81.7; stroke: var(--amber); }
+  37.5% { stroke-dashoffset: 0; stroke: var(--amber); }
+  40%, 66.7% { stroke-dashoffset: 0; stroke: var(--go); }
+  83.3%, 100% { stroke-dashoffset: 81.7; stroke: var(--amber); }
+}
+
+@keyframes ph-ripple {
+  0%, 37% { opacity: 0; transform: scale(1); }
+  38% { opacity: 0.9; transform: scale(1); }
+  56% { opacity: 0; transform: scale(2.1); }
+  100% { opacity: 0; transform: scale(2.1); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ph-index { animation: none; transform: rotate(30deg); }
+  .ph-thumb { animation: none; transform: rotate(-12deg); }
+  .ph-ring-progress { animation: none; stroke-dashoffset: 0; stroke: var(--go); }
+  .ph-ripple { animation: none; }
+}
+
+/* ---- intro splash ---------------------------------------------------- */
+
+.intro {
+  position: absolute;
+  inset: 0;
+  z-index: 30;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  background: rgba(6, 8, 12, 0.55);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+  animation: intro-fade 4.6s ease both;
+}
+
+.intro-title {
+  font-size: clamp(28px, 4.5vw, 54px);
+  letter-spacing: 0.16em;
+}
+
+.intro-sub {
+  color: var(--ink-dim);
+  font-size: clamp(14px, 1.6vw, 19px);
+  margin-bottom: 12px;
+}
+
+.intro-hint {
+  font-size: clamp(13px, 1.5vw, 18px);
+  color: var(--amber);
+  margin-top: 6px;
+}
+
+.intro-bar {
+  width: min(38vw, 420px);
+  height: 3px;
+  margin-top: 22px;
+  background: rgba(237, 241, 247, 0.18);
+  border-radius: 2px;
+  overflow: hidden;
+}
+
+.intro-bar-fill {
+  height: 100%;
+  background: var(--amber);
+  animation: intro-bar 4.6s linear both;
+}
+
+@keyframes intro-fade {
+  0% { opacity: 0; }
+  10%, 88% { opacity: 1; }
+  100% { opacity: 0; }
+}
+
+@keyframes intro-bar {
+  from { width: 0; }
+  to { width: 100%; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .intro { animation: intro-fade 4.6s step-end both; }
+  .intro-bar-fill { animation-timing-function: linear; }
+}
+
+/* ---- pinch hint panel ------------------------------------------------ */
+
+.hint-panel {
+  width: 296px;
+  padding: 20px 18px 16px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  border-color: rgba(255, 184, 77, 0.55);
+  animation: hint-in 320ms ease both;
+}
+
+.hint-text {
+  font-size: 16px;
+  color: var(--ink);
+  text-align: center;
+}
+
+@keyframes hint-in {
+  from {
+    opacity: 0;
+    translate: 0 14px;
+  }
+  to {
+    opacity: 1;
+    translate: 0 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .hint-panel { animation: none; }
+}
+
+/* ---- debug HUD -------------------------------------------------------- */
+
+.debug-hud {
+  padding: 12px 16px;
+  font-size: 14px;
+  line-height: 1.6;
+  min-width: 380px;
+  background: var(--glass-heavy);
+}
+
+.debug-hud .dim {
+  color: var(--ink-dim);
+}
+
+.dbg-hand {
+  margin-top: 8px;
+  padding-top: 6px;
+  border-top: 1px solid rgba(237, 241, 247, 0.12);
+}
+
+.dbg-bar {
+  position: relative;
+  height: 8px;
+  margin: 5px 0;
+  background: rgba(237, 241, 247, 0.14);
+  border-radius: 2px;
+}
+
+.dbg-fill {
+  height: 100%;
+  border-radius: 2px;
+}
+
+.dbg-tick {
+  position: absolute;
+  top: -2px;
+  bottom: -2px;
+  width: 1.5px;
+  background: var(--ink);
+}
+
+/* ---- connection banner ---------------------------------------------- */
+
+.conn-banner {
+  position: absolute;
+  top: 14px;
+  left: 50%;
+  transform: translateX(-50%);
+  padding: 8px 18px;
+  background: var(--glass-heavy);
+  border: 1px solid var(--danger);
+  border-radius: var(--radius);
+  color: var(--danger);
+  font-family: var(--font-label);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.09em;
+  font-size: 13px;
+  z-index: 40;
+  animation: conn-pulse 1.6s ease-in-out infinite;
+}
+
+@keyframes conn-pulse {
+  50% {
+    opacity: 0.55;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .conn-banner {
+    animation: none;
+  }
+}

@@ -1,0 +1,82 @@
+#!/usr/bin/env bash
+# Kiosk mode: run HalLMediaPipe as a web appliance on the Jetson's monitor.
+#
+# Starts the app in HALL_OUTPUT=web (backend = pure vision: raw MJPEG frames
+# + per-frame UI state over SSE on :8092, no cv2 drawing) and opens Chromium
+# fullscreen on the attached display pointing at the React frontend the
+# backend serves from web/dist. All visuals — skeleton, cursor, buttons,
+# slingshot, the WebGL black hole — render in the browser.
+#
+#   hallkiosk               # from a terminal on the Jetson desktop
+#   DISPLAY=:0 hallkiosk    # over SSH, draw on the attached monitor
+#
+# Closing the browser (Alt+F4) stops the backend too. A laptop can watch the
+# same session at http://<jetson-tailscale-ip>:8092/ while the kiosk runs.
+#
+# Note: the camera-stream service and this app both want the C920 — run
+# `camctl off` first if the always-on stream is holding the camera.
+set -euo pipefail
+
+APP_DIR="${HALL_APP_DIR:-$HOME/HalLMediaPipe}"
+PORT="${HALL_STREAM_PORT:-8092}"
+export DISPLAY="${DISPLAY:-:0}"
+export HALL_OUTPUT=web
+
+# When started over SSH there is no X cookie in the environment; reuse the
+# local graphical session's so the window lands on the attached monitor.
+if [ -z "${XAUTHORITY:-}" ]; then
+  for xa in "$HOME/.Xauthority" "/run/user/$(id -u)/gdm/Xauthority"; do
+    if [ -r "$xa" ]; then export XAUTHORITY="$xa"; break; fi
+  done
+fi
+
+if [ ! -f "$APP_DIR/web/dist/index.html" ]; then
+  echo "hallkiosk: $APP_DIR/web/dist is missing — deploy it from the laptop" >&2
+  echo "           (deploy/hall-app/deploy.sh builds and rsyncs the frontend)" >&2
+  exit 1
+fi
+
+# Backend in the background; the browser is the foreground process.
+# hallrun is resolved next to THIS script, so the pair works both in the
+# old rsync layout (repo root) and the git checkout (deploy/hall-app/).
+SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
+"$SCRIPT_DIR/hallrun" &
+BACKEND_PID=$!
+# Kill the hallrun wrapper AND the python it spawned (hallrun pipes python
+# through tee, so killing the wrapper alone orphans the interpreter).
+trap 'kill "$BACKEND_PID" 2>/dev/null; pkill -f "python3 -u src/main\.py" 2>/dev/null || true' EXIT INT TERM
+
+# Wait for the HTTP server. Generous timeout: the FIRST launch after a
+# deploy may spend ~2 min building TensorRT engines before it comes up.
+echo "hallkiosk: waiting for the backend on :$PORT ..."
+for _ in $(seq 1 300); do
+  if curl -sf "http://127.0.0.1:$PORT/healthz" >/dev/null 2>&1; then
+    break
+  fi
+  if ! kill -0 "$BACKEND_PID" 2>/dev/null; then
+    echo "hallkiosk: backend exited before serving — see /tmp/hall-app.log" >&2
+    exit 1
+  fi
+  sleep 1
+done
+
+# Firefox (native deb from packages.mozilla.org) comes FIRST: snap-confine
+# is broken on this L4T kernel ("cap_dac_override ... Function not
+# implemented"), so the snap-packaged chromium/firefox cannot launch at all
+# — install the real deb via the Mozilla apt repo, not snap.
+BROWSER=""
+for b in firefox chromium-browser chromium google-chrome; do
+  if command -v "$b" >/dev/null 2>&1; then BROWSER="$b"; break; fi
+done
+if [ -z "$BROWSER" ]; then
+  echo "hallkiosk: no browser found (tried firefox/chromium-browser/chromium/google-chrome)" >&2
+  exit 1
+fi
+
+echo "hallkiosk: opening $BROWSER in kiosk mode"
+if [ "$BROWSER" = "firefox" ]; then
+  "$BROWSER" --kiosk "http://127.0.0.1:$PORT/"
+else
+  "$BROWSER" --kiosk --noerrdialogs --disable-session-crashed-bubble \
+    --disable-infobars "http://127.0.0.1:$PORT/"
+fi

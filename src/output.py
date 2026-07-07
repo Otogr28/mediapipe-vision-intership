@@ -1,17 +1,24 @@
 """Output sinks: where the final annotated frame is presented.
 
-Two interchangeable sinks, picked by `make_sink()` from config (HALL_OUTPUT):
+Three interchangeable sinks, picked by `make_sink()` from config (HALL_OUTPUT):
 
 * ``WindowSink`` — an on-screen cv2 window. Needs a display; press 'q' to quit.
 * ``MjpegSink``  — a headless MJPEG HTTP server. View the annotated feed in a
   browser. This is the Jetson's *remote-inference* mode: a laptop sends its
   camera in (``HALL_CAMERA=<laptop mjpg url>``) and watches the result here, so
   the Jetson needs no monitor.
+* ``WebSink``    — MjpegSink + the browser frontend: additionally serves the
+  built React app (``web/dist``) and pushes the per-frame UI/gesture state
+  as JSON over an SSE ``/state`` endpoint. In this mode the streamed frame
+  is RAW (no cv2 drawing) — the browser renders all UI on top of it.
 
 Keeping this out of ``main.py`` follows the project rule that the entry point
-stays thin — it just calls ``sink.present(frame)`` / ``sink.should_quit()``.
+stays thin — it just calls ``sink.present(frame)`` / ``sink.should_quit()``
+(plus ``sink.publish_state(...)`` in web mode).
 """
 
+import mimetypes
+import os
 import socket
 import subprocess
 import threading
@@ -20,7 +27,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import cv2
 
-from config import OUTPUT_MODE, STREAM_BIND, STREAM_PORT, STREAM_QUALITY
+from config import (OUTPUT_MODE, STATE_FPS, STREAM_BIND, STREAM_PORT,
+                    STREAM_QUALITY, WEB_DIST_DIR)
 
 
 class WindowSink:
@@ -174,8 +182,123 @@ class MjpegSink:
         return Handler
 
 
+# Shown at "/" in web mode when web/dist has not been built yet.
+_NO_DIST_PAGE = b"""<!doctype html><html><head><meta charset="utf-8">
+<title>HalLMediaPipe - frontend not built</title>
+<style>html,body{margin:0;height:100%;background:#111;color:#ddd;
+font:16px/1.6 system-ui,sans-serif}body{display:flex;justify-content:center;
+align-items:center}code{background:#222;padding:2px 6px;border-radius:4px}
+</style></head><body><div><h2>Frontend not built</h2>
+<p>The backend is running in web mode, but <code>web/dist</code> is missing.</p>
+<p>Build it with <code>cd web &amp;&amp; npm run build</code>, or develop
+against this backend with <code>npm run dev</code>.</p>
+<p>The raw feed is still available at <a href="/stream.mjpg"
+style="color:#6cf">/stream.mjpg</a>.</p></div></body></html>"""
+
+
+class WebSink(MjpegSink):
+    """MjpegSink + the web frontend.
+
+    Adds two things to the MJPEG server:
+
+    * ``GET /state`` — an SSE stream pushing the latest per-frame UI state
+      JSON (built by ``web/state.py``) at up to ``STATE_FPS`` events/s. The
+      same latest-only pattern as the MJPEG loop: a slow client skips
+      snapshots instead of building a backlog.
+    * Static serving of the built frontend (``web/dist``) at ``/``.
+
+    ``present()`` still streams the frame — but ``main.py`` passes the RAW
+    flipped frame in web mode, so the browser composites all UI itself.
+    """
+
+    def __init__(self, bind="auto", port=8092, quality=80, fps=30,
+                 state_fps=STATE_FPS, dist_dir=WEB_DIST_DIR):
+        # Set before super().__init__ — the HTTP server starts serving in
+        # there, and its handler reads these through the `sink` closure.
+        self._state_fps = max(int(state_fps), 1)
+        self._dist_dir = os.path.realpath(dist_dir) if dist_dir else None
+        self._state = None       # latest state JSON (bytes)
+        self._state_seq = 0
+        super().__init__(bind=bind, port=port, quality=quality, fps=fps)
+
+    def publish_state(self, data):
+        """Store this frame's state JSON (bytes) for /state clients.
+
+        ``main.py`` calls this once per frame right after ``ui.update``;
+        the presence of this method is also how it detects web mode.
+        """
+        with self._lock:
+            self._state = data
+            self._state_seq += 1
+
+    def _latest_state(self):
+        with self._lock:
+            return self._state, self._state_seq
+
+    def _make_handler(self):
+        base_handler = super()._make_handler()
+        sink = self
+
+        class Handler(base_handler):
+
+            def do_GET(self):
+                path = self.path.split("?", 1)[0]
+                if path == "/state":
+                    self._serve_state()
+                elif path in ("/stream.mjpg", "/stream", "/snapshot.jpg",
+                              "/healthz"):
+                    base_handler.do_GET(self)
+                else:
+                    self._serve_static(path)
+
+            def _serve_state(self):
+                """SSE loop — same latest-only shape as the MJPEG stream."""
+                self.send_response(200)
+                self.send_header("Content-Type", "text/event-stream")
+                self.send_header("Cache-Control", "no-cache, private")
+                self.end_headers()
+                last_seq = 0
+                try:
+                    while True:
+                        data, seq = sink._latest_state()
+                        if data is None or seq == last_seq:
+                            time.sleep(0.01)
+                            continue
+                        last_seq = seq
+                        self.wfile.write(b"data: " + data + b"\n\n")
+                        time.sleep(1.0 / sink._state_fps)
+                except (BrokenPipeError, ConnectionResetError):
+                    pass
+
+            def _serve_static(self, path):
+                """Serve the built frontend, path-traversal-safe."""
+                root = sink._dist_dir
+                if path == "/":
+                    path = "/index.html"
+                if root is not None:
+                    full = os.path.realpath(
+                        os.path.join(root, path.lstrip("/")))
+                    inside = full == root or full.startswith(root + os.sep)
+                    if inside and os.path.isfile(full):
+                        ctype = (mimetypes.guess_type(full)[0]
+                                 or "application/octet-stream")
+                        with open(full, "rb") as f:
+                            self._send(200, ctype, f.read())
+                        return
+                if path == "/index.html":
+                    # dist/ not built yet — explain instead of a bare 404.
+                    self._send(200, "text/html; charset=utf-8", _NO_DIST_PAGE)
+                    return
+                self.send_error(404)
+
+        return Handler
+
+
 def make_sink(frame_w, frame_h):
     """Build the output sink selected by config (HALL_OUTPUT)."""
+    if OUTPUT_MODE == "web":
+        return WebSink(bind=STREAM_BIND, port=STREAM_PORT,
+                       quality=STREAM_QUALITY)
     if OUTPUT_MODE == "stream":
         return MjpegSink(bind=STREAM_BIND, port=STREAM_PORT, quality=STREAM_QUALITY)
     return WindowSink("Camera", frame_w, frame_h)

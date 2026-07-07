@@ -20,7 +20,6 @@ from pathlib import Path
 import moderngl
 import numpy as np
 
-
 SHADER_DIR = Path(__file__).parent / "shaders"
 
 

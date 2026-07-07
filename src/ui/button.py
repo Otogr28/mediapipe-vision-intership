@@ -1,9 +1,7 @@
 import cv2
 
-from config import PINCH_RATIO
-from detection.gestures import pinch_state, hand_id
-
-COOLDOWN_FRAMES = 25   # frames before the button can fire again
+from config import BUTTON_COOLDOWN_FRAMES, BUTTON_STICKY_PAD_FRAC
+from detection.gestures import hand_id, pinch_info
 
 
 class Button:
@@ -19,7 +17,15 @@ class Button:
         self.hovered = False
         self.pressed = False
 
+    def _inside(self, x, y, pad=0):
+        return (self.x - pad <= x <= self.x + self.width + pad and
+                self.y - pad <= y <= self.y + self.height + pad)
+
     def update(self, hand_result, pose_landmarks, frame_w, frame_h):
+        # pose_landmarks / frame dims are unused since the pinch pipeline
+        # became a per-frame snapshot (see detection/gestures.py); the
+        # signature is kept uniform with the other per-frame updates.
+        was_hovered = self.hovered
         self.hovered = False
         self.pressed = False
 
@@ -29,23 +35,40 @@ class Button:
         if hand_result is None:
             return
 
-        for i, hand_landmarks in enumerate(hand_result.hand_landmarks):
-            hid = hand_id(hand_result, i)
-            pinching, _held, (cx, cy) = pinch_state(
-                hand_landmarks, pose_landmarks, frame_w, frame_h, PINCH_RATIO,
-                hand_id=hid,
-            )
+        # Sticky target: once hovered, the hit rect inflates a little so
+        # cursor jitter at the border cannot flicker the hover or drop a
+        # click. Entering still requires the base rect (hysteresis); the
+        # pad comes from the HEIGHT so it stays under every button gap.
+        pad = (int(BUTTON_STICKY_PAD_FRAC * self.height)
+               if was_hovered else 0)
 
-            inside = (self.x <= cx <= self.x + self.width and
-                      self.y <= cy <= self.y + self.height)
-
-            if inside:
+        for i in range(len(hand_result.hand_landmarks)):
+            info = pinch_info(hand_id(hand_result, i))
+            if info is None:
+                continue
+            if self._inside(*info.cursor, pad):
                 self.hovered = True
-                if pinching and self._cooldown == 0:
-                    self.pressed = True
-                    self._cooldown = COOLDOWN_FRAMES
-                    self.on_click()
-                break  # one hand is enough
+            # Hover-latch: the click is hit-tested where the close gesture
+            # STARTED (press_cursor), so the hand drifting during the close
+            # cannot slide the click off its target — nor fake one onto it
+            # (a close begun outside doesn't count even if it ends inside).
+            if (info.pinching and self._cooldown == 0
+                    and self._inside(*info.press_cursor, pad)):
+                self.pressed = True
+                self._cooldown = BUTTON_COOLDOWN_FRAMES
+                self.on_click()
+                break
+
+    def to_state(self, btn_id):
+        """Serializable snapshot for the web frontend (pure display: the
+        browser renders this rect/flags verbatim, hit-testing stays here)."""
+        return {
+            "id": btn_id,
+            "label": self.label,
+            "rect": [self.x, self.y, self.width, self.height],
+            "hovered": self.hovered,
+            "pressed": self.pressed,
+        }
 
     def draw(self, frame):
         if self.pressed:

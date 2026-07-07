@@ -17,15 +17,9 @@ import time
 import cv2
 import numpy as np
 
-from config import (
-    HINT_PINCH_PERIOD_S,
-    HINT_TEXT,
-    HINT_TIMEOUT_S,
-    INTRO_DURATION_S,
-    INTRO_FADE_S,
-    INTRO_SUBTITLE,
-    INTRO_TITLE,
-)
+from config import (HINT_PINCH_PERIOD_S, HINT_TEXT, HINT_TIMEOUT_S,
+                    INTRO_DURATION_S, INTRO_FADE_S, INTRO_SUBTITLE,
+                    INTRO_TITLE)
 
 FONT = cv2.FONT_HERSHEY_SIMPLEX
 

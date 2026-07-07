@@ -54,7 +54,7 @@ A connection is skipped if either endpoint has `visibility < 0.5`.
 
 ## `draw_line(individual_detection, frame, startI, endI)`
 
-Draws a green line between two specific landmarks and labels it with the pixel distance at the midpoint.
+Draws a green line between two specific landmarks and labels it with the pixel distance at the midpoint. **No longer called by the main loop** — the raw thumb-index line was superseded by the filtered [[cursor]] overlay (the two would visibly disagree). Kept as an ad-hoc debugging helper.
 
 | Parameter | Type | Description |
 |---|---|---|

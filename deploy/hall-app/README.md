@@ -112,3 +112,27 @@ separately.
   aarch64 builds are reused rather than rebuilt under `uv` (the repo's
   `pyproject.toml` pins Python 3.12 / mediapipe 0.10.35, neither of which has a
   prebuilt aarch64 wheel — building them on-device is slow and brittle).
+
+## Appliance mode: boot-to-kiosk + auto-update (2026-07-07)
+
+The Jetson now runs as a self-updating appliance:
+
+- `setup-boot.sh` (one-time, on the Jetson) converts `~/HalLMediaPipe`
+  into a **git checkout of origin/main**, repoints the launchers, installs
+  user systemd units and disables screen blanking. `models/` and
+  `.trt_cache/` are untracked and survive every update.
+- `systemd/hallkiosk.service` starts the kiosk with the graphical session
+  (with GDM autologin ⇒ straight after boot).
+- `systemd/hall-update.timer` runs `hall-update.sh` every ~60 s: fetch
+  origin/main → on a new commit, `git reset --hard` + restart the kiosk.
+  **`web/dist` is committed to the repo** exactly so this works without
+  Node on the device: build on the laptop, commit, push — the Jetson
+  updates itself within a minute.
+- One-time sudo steps (already applied on yahboom):
+  `sudo loginctl enable-linger jetson` and GDM autologin
+  (`/etc/gdm3/custom.conf`: `AutomaticLoginEnable=true`,
+  `AutomaticLogin=jetson`).
+
+Day-to-day workflow: change code on the laptop → `cd web && npm run build`
+(if the frontend changed) → commit + push to main → done. `deploy.sh`
+(rsync) remains only for models and first-time provisioning.

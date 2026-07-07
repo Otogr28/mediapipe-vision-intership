@@ -9,6 +9,10 @@
 #   hallrun                 # from a terminal on the Jetson desktop
 #   DISPLAY=:0 hallrun      # over SSH, draw on the attached monitor
 #
+# For the browser-rendered UI instead of the cv2 window, use `hallkiosk`
+# (wraps this script with HALL_OUTPUT=web and opens Chromium fullscreen), or
+# run `HALL_OUTPUT=web hallrun` and open http://<jetson>:8092/ yourself.
+#
 # Note: the camera-stream service and this app both want the C920 — only one
 # can hold it at a time. Run `camctl off` before launching if the stream is on.
 set -euo pipefail
