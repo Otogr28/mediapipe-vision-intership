@@ -8,7 +8,10 @@ After=graphical-session.target
 [Service]
 Type=simple
 ExecStart=%h/HalLMediaPipe/deploy/hall-app/hallkiosk
-Restart=on-failure
+# Appliance semantics: the pair always comes back (browser closed, backend
+# self-exited on a camera stall, crash — anything). `systemctl --user stop`
+# still stops it for real.
+Restart=always
 RestartSec=5
 Environment=DISPLAY=:0
 

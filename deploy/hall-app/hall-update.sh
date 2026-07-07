@@ -23,10 +23,13 @@ cd "$APP_DIR"
 # TensorRT engine builds take ~2 min) => restart the kiosk.
 STRIKES_FILE="/tmp/hall-health.strikes"
 if systemctl --user is-active --quiet hallkiosk.service 2>/dev/null; then
+  # Arithmetic in SECONDS via bash only — mawk's %d truncates the µs
+  # uptime to int32 and silently produced negative ages (inert watchdog).
   started_us="$(systemctl --user show -p ActiveEnterTimestampMonotonic --value hallkiosk.service 2>/dev/null || echo 0)"
-  now_us="$(awk '{printf "%d", $1*1000000}' /proc/uptime)"
-  age_s=$(( (now_us - started_us) / 1000000 ))
-  if [ "$started_us" -gt 0 ] && [ "$age_s" -gt 240 ]; then
+  started_s=$(( ${started_us:-0} / 1000000 ))
+  now_s="$(cut -d. -f1 /proc/uptime)"
+  age_s=$(( now_s - started_s ))
+  if [ "$started_s" -gt 0 ] && [ "$age_s" -gt 240 ]; then
     if curl -sf -m 3 "http://127.0.0.1:$PORT/healthz" >/dev/null 2>&1; then
       rm -f "$STRIKES_FILE"
     else
@@ -51,6 +54,14 @@ echo "hall-update: ${LOCAL:0:10} -> ${REMOTE:0:10}"
 git reset --hard --quiet origin/main
 chmod +x deploy/hall-app/hallrun deploy/hall-app/hallkiosk \
   deploy/hall-app/hall-update.sh 2>/dev/null || true
+
+# Refresh the systemd units too (setup-boot.sh COPIES them, so unit changes
+# would otherwise never reach the device).
+cp deploy/hall-app/systemd/hallkiosk.service \
+   deploy/hall-app/systemd/hall-update.service \
+   deploy/hall-app/systemd/hall-update.timer \
+   "$HOME/.config/systemd/user/" 2>/dev/null || true
+systemctl --user daemon-reload 2>/dev/null || true
 
 # Restart the kiosk so the new backend + frontend go live. `|| true`: on a
 # headless boot (no graphical session yet) the service simply isn't active.

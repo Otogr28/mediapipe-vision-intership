@@ -87,6 +87,11 @@ WEB_DIST_DIR = os.environ.get(
                  "web", "dist"),
 )
 STATE_FPS = int(os.environ.get("HALL_STATE_FPS", "30"))
+# Appliance self-healing (web mode only): if the camera stops delivering
+# NEW frames for this many seconds (V4L2 wedge — reads neither error nor
+# return), the process EXITS so the kiosk supervisor can restart it with a
+# fresh camera handle. 0 disables. Window/stream modes never self-exit.
+CAMERA_STALL_S = float(os.environ.get("HALL_CAMERA_STALL_S", "10"))
 
 # Debug overlay (HALL_DEBUG=1): draws the live pinch pipeline on the frame —
 # per-hand ratio vs thresholds, machine state, pinch progress, detection

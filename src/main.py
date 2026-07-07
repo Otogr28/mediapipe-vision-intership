@@ -5,7 +5,8 @@ import cv2
 from mediapipe.tasks.python import vision
 
 from capture import FreshestFrame
-from config import SELECTED_CAMERA, STATE_FPS, WINDOW_HEIGHT, WINDOW_WIDTH
+from config import (CAMERA_STALL_S, SELECTED_CAMERA, STATE_FPS, WINDOW_HEIGHT,
+                    WINDOW_WIDTH)
 from detection import detectors
 from detection.detectors import build_hand_detector, build_pose_detector
 from output import make_sink
@@ -113,6 +114,18 @@ def main():
                 if not success or frame is None:
                     # A network source can momentarily starve; keep polling.
                     continue
+
+                # Appliance self-healing: a wedged camera keeps handing back
+                # the SAME frame forever (no error, no new data) — the kiosk
+                # would show a frozen picture while everything reads healthy.
+                # In web mode, bail out so the supervisor restarts us with a
+                # fresh camera handle.
+                if (publish_state is not None and CAMERA_STALL_S > 0
+                        and camera.frame_age() > CAMERA_STALL_S):
+                    print(f"camera stalled ({CAMERA_STALL_S:.0f}s without a "
+                          "new frame) — exiting for supervisor restart",
+                          flush=True)
+                    break
                 flip_frame = cv2.flip(src=frame, flipCode=1)
                 mp_image = toMpImage(frame=flip_frame)
 
