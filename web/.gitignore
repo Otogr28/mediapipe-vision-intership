@@ -2,4 +2,4 @@
 # never runs Node, so the built frontend must travel in the repo.
 node_modules/
 *.local
-web/tsconfig.tsbuildinfo
+tsconfig.tsbuildinfo
