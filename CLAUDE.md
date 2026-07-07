@@ -18,6 +18,17 @@ uv add <package>              # add a dependency + update the lockfile
 uv run isort src/             # sort imports (isort is the only formatter wired up)
 ```
 
+Web frontend (`HALL_OUTPUT=web` — the browser renders all UI; Node needed on
+the laptop only, never on the Jetson):
+
+```bash
+HALL_OUTPUT=web uv run python src/main.py   # backend: raw MJPEG + /state SSE on :8092
+cd web && npm install && npm run dev        # dev server on :5173, proxies to :8092
+cd web && npm run build                     # → web/dist, served by the backend at :8092/
+uv run python web/scripts/mock_backend.py slingshot   # fake any scene, no camera needed
+node web/scripts/shot.mjs http://localhost:5173/ out.png 3000  # headless screenshot check
+```
+
 **Always run from the repo root**, never from inside `src/`. The model paths in
 `config.py` are relative to the repo root, and Python puts `src/` on `sys.path[0]`
 so the modules import as top-level (`from detection import ...`, not `from src...`).
@@ -45,9 +56,10 @@ or a headless inference appliance. Key knobs:
 | Var | Default | Meaning |
 | --- | --- | --- |
 | `HALL_CAMERA` | `0` | Local device index, **or a stream URL** (`http://host:8091/stream.mjpg`) to infer on a remote camera |
-| `HALL_OUTPUT` | `window` | `window` (on-screen cv2 window) or `stream` (headless MJPEG server for a remote browser) |
+| `HALL_OUTPUT` | `window` | `window` (on-screen cv2 window), `stream` (headless MJPEG server), or `web` (React frontend: raw frames + per-frame state JSON over SSE; serves `web/dist`; backend does NO drawing) |
 | `HALL_INFERENCE` | `mediapipe` | Hand backend: `mediapipe` (CPU `.task`) or `gpu` (onnxruntime CUDA/TensorRT). `hallrun` defaults this to `gpu`. |
 | `HALL_ONNX_PROVIDERS` | `CUDA,CPU` | onnxruntime provider priority. `hallrun` prepends `TensorrtExecutionProvider` (~2.9x faster; first launch pays a ~2 min engine build, then cached to `.trt_cache/`) |
+| `HALL_DEBUG` | `0` | `1` draws the pinch-pipeline debug HUD (live ratio vs thresholds, machine state, detection age/FPS) — for tuning gesture constants |
 
 ## Architecture
 
@@ -71,8 +83,16 @@ The big picture:
 - **GPU rendering.** The black-hole mode (`rendering/gl_lensing.py`) runs a Schwarzschild
   lensing shader (`rendering/shaders/`) via a standalone moderngl EGL context — the one
   piece that genuinely uses the GPU even in headless stream mode.
-- **Output is a swappable sink.** `output.make_sink()` returns either a window or an MJPEG
-  server based on `HALL_OUTPUT`; `main.py` only calls `sink.present()` / `sink.should_quit()`.
+- **Output is a swappable sink.** `output.make_sink()` returns a window, an MJPEG server,
+  or the web sink based on `HALL_OUTPUT`; `main.py` only calls `sink.present()` /
+  `sink.should_quit()` (plus `sink.publish_state()` in web mode).
+- **Web mode splits render from vision.** With `HALL_OUTPUT=web`, Python does no drawing
+  at all: `web/state.py` serializes the per-frame UI/gesture state (built from
+  `UIManager.to_state()` + `gestures.pinch_infos()`) and the React app in `web/` renders
+  everything — skeleton/cursor/scene on Canvas2D, buttons/HUD in DOM, and the black hole
+  as a WebGL2 port of the lensing shader (`web/src/gl/blackhole.frag.glsl`). Python stays
+  authoritative for all logic (state machine, hit-testing, physics); the browser is a pure
+  renderer. Keep `src/web/state.py`, `web/src/state/types.ts` and the shader pair in sync.
 - **Resilient loop.** The per-frame body is wrapped so a single bad frame/draw/GPU call
   logs once and continues rather than taking down a long-running headless appliance.
 

@@ -22,6 +22,19 @@ Single source of truth for all tunable parameters. No logic — only constants. 
 
 ---
 
+## Output (env-driven)
+
+| Constant | Env var | Default | Description |
+|---|---|---|---|
+| `OUTPUT_MODE` | `HALL_OUTPUT` | `window` | `window` (cv2 window) · `stream` (headless MJPEG server) · `web` (React frontend: raw frames + per-frame state JSON over SSE, serves `web/dist` — see [[web_state]] / [[frontend]]) |
+| `STREAM_BIND` | `HALL_STREAM_BIND` | `auto` (`0.0.0.0` in web mode) | `auto` resolves the Tailscale IPv4; web mode defaults to `0.0.0.0` so the on-device kiosk can use `localhost` |
+| `STREAM_PORT` | `HALL_STREAM_PORT` | `8092` | HTTP port for stream/web modes |
+| `STREAM_QUALITY` | `HALL_STREAM_QUALITY` | `80` | JPEG quality 1–100 |
+| `WEB_DIST_DIR` | `HALL_WEB_DIST` | `<repo>/web/dist` | Built frontend served at `/` in web mode |
+| `STATE_FPS` | `HALL_STATE_FPS` | `30` | `/state` SSE push rate; also paces the main loop in web mode |
+
+---
+
 ## Pose Landmarker
 
 | Constant | Default | Description |
@@ -50,12 +63,32 @@ Single source of truth for all tunable parameters. No logic — only constants. 
 
 | Constant | Default | Description |
 |---|---|---|
-| `PINCH_RATIO` | `0.09` | **Trigger** threshold. The fingers are "tightly closed" when `distance(thumb_tip, index_tip) < PINCH_RATIO * pose_scale`, where `pose_scale` is the shoulder-to-shoulder pixel distance from the pose. Used (with the rapid-close check) to *trigger* gestures like clicks and grab initiations. **Higher → easier to fire.** |
-| `PINCH_HOLD_RATIO` | `0.25` | **Hold** threshold (hysteresis). Once a gesture has been triggered, it remains *held* while `distance(thumb_tip, index_tip) < PINCH_HOLD_RATIO * pose_scale`. Making this looser than `PINCH_RATIO` means a grabbed object survives minor finger drift — only an obvious release motion drops the gesture. Set equal to `PINCH_RATIO` to disable hysteresis. |
-| `PINCH_HISTORY_LEN` | `10` | Number of recent frames per hand to retain for the rapid-close check. At ~30 fps this is ~0.33 s. |
-| `PINCH_CLOSE_DROP` | `0.15` | A pinch *event* fires only when the ratio dropped by at least this much from its peak within the history window. Stops an already-closed hand from registering a pinch by sliding across the screen — the gesture must include an actual closing motion. |
+| `PINCH_CLOSE_RATIO` | `0.45` | **Close** threshold. The pinch machine closes when `distance(thumb_tip, index_tip) / hand_scale` drops below this (hand_scale = the hand's own knuckle span / palm length — see [[gestures]]). In knuckle units, 0.45 ≈ "tips within ~3 cm". **Higher → easier to fire.** |
+| `PINCH_RELEASE_RATIO` | `0.90` | **Release** threshold (hysteresis, Ultraleap-style pinch/unpinch split). A closed machine only reopens above this looser value, so jitter at the close threshold cannot flicker the state. |
+| `PINCH_DEBOUNCE_CLOSE_FRAMES` | `2` | Consecutive below-threshold frames required to close (and fire the one-frame `pinching` event). |
+| `PINCH_DEBOUNCE_RELEASE_FRAMES` | `4` | Consecutive above-threshold frames required to release — more evidence than closing, because tracking gives brief false negatives while pinching-and-moving. |
+| `PINCH_TRACK_GRACE_S` | `0.5` | Seconds a lost hand's state machine stays warm, so a short tracking dropout resumes mid-hold instead of cold-starting. |
+| `PINCH_CURSOR_MIN_CUTOFF` / `PINCH_CURSOR_BETA` | `1.5` / `0.01` | One-Euro filter for the cursor (px): cutoff floor in Hz and its growth per unit speed. Lower cutoff = smoother but laggier at rest. |
+| `PINCH_RATIO_MIN_CUTOFF` / `PINCH_RATIO_BETA` | `2.0` / `0.5` | One-Euro filter for the pinch ratio — lighter than the cursor's so clicks stay snappy. |
+| `PINCH_CURSOR_THUMB_OFFSET_X` / `_Y` | `0.0` / `0.0` | 2D cursor offset in the **thumb's own frame** (origin: the thumb tip), both axes as fractions of the thumb segment (MCP 2 → tip 4) — hand-scaled and rotation-following, so they mean the same at any camera distance or hand orientation. **X** = along the thumb ray: positive floats past the tip (`0.2` ≈ a fingertip ahead), negative pulls back toward the knuckle. **Y** = perpendicular: positive always toward the **index side** of the thumb (sign resolved per hand — Left/Right mirror correctly), negative toward the outer edge. Keep both small — the thumb ray rotates slightly while the fingers close, so large values reintroduce cursor motion during the pinch. |
+| `PINCH_CURSOR_COMPENSATE` | `1.0` | Close **counter-movement** (0..1): the cursor's open-pose coordinates in a rigid hand frame (wrist → index MCP) are remembered and, as the pinch progresses, the cursor is pulled back toward that remembered point — cancelling the thumb's own close travel while real hand motion (translation/rotation/zoom) still moves it 1:1. `1.0` = cursor holds still through the close; `0.0` = off (cursor rides the raw thumb tip). |
+| `PINCH_EXTRAP_MAX_S` | `0.10` | Cap (s) on the cursor's latency extrapolation (One-Euro velocity × detection-result age). Lower if fast direction reversals overshoot. |
+| `PINCH_Z_WEIGHT` | `0.5` | Weight of the landmark z difference in the 3D pinch distance — blocks phantom closes when hand rotation aligns the fingertips along the camera axis. 0 = pure 2D (old behavior); lower it if pinches become hard to trigger. |
 
-See [[gestures]] for the implementation and detection rule.
+## Buttons
+
+| Constant | Default | Description |
+|---|---|---|
+| `BUTTON_COOLDOWN_FRAMES` | `8` | Frames before a button can fire again (moved here from `button.py`). The pinch edge-trigger + release debounce is the real double-fire guard; this only absorbs tracking glitches. |
+| `BUTTON_STICKY_PAD_FRAC` | `0.15` | Sticky targets: while hovered, the hit rect inflates by this fraction of the button **height** per side (height, not width, keeps the inflation under every button gap — keep layout gaps > 0.15 × button height). Entering still requires the base rect. |
+
+## Debug
+
+| Constant | Default | Description |
+|---|---|---|
+| `DEBUG_HUD` | `False` (`HALL_DEBUG=1` enables) | Draws the [[debug_hud]] pinch-pipeline panel on the frame. |
+
+See [[gestures]] for the full pipeline (per-frame snapshot, edge-triggered state machine, One-Euro filtering, stable anchor, latency extrapolation, 3D distance).
 
 ---
 

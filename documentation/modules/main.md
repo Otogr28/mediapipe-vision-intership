@@ -56,11 +56,11 @@ Full camera loop. Blocking — runs until the user presses `q`.
 3. `toMpImage()` → convert to `mp.Image` (RGB)
 4. Compute `timestamps_ms` (strictly increasing)
 5. `pose_detector.detect_async(...)` and `hand_detector.detect_async(...)`
-6. Read `detectors.latest_pose_result` / `detectors.latest_hand_result`
+6. Read `detectors.latest_pose_result` / `detectors.latest_hand_packet` (result + receive time)
 7. Draw pose landmarks and connections (if pose detected)
-8. Draw hand landmarks, connections, and thumb–index line (per hand)
-9. Extract `pose_landmarks` (first pose, or `None`) for downstream gesture scaling
-10. `ui.update(hand_result, pose_landmarks)` → process hand interaction
+8. Draw hand landmarks and connections (per hand; the old thumb–index line is superseded by the [[cursor]] overlay)
+9. Extract `pose_landmarks` (first pose, or `None`) for pose-driven features
+10. `ui.update(hand_result, pose_landmarks, hand_received_t)` → process hand interaction (the receive time drives cursor latency compensation)
 11. `ui.draw(frame)` → render UI overlay
 11. `cv2.imshow("Camera", frame)`
 
@@ -78,5 +78,5 @@ Full camera loop. Blocking — runs until the user presses `q`.
 |---|---|
 | `SELECTED_CAMERA` | [[config]] |
 | `detectors` module (for globals), `build_pose_detector`, `build_hand_detector` | [[detectors]] (`detection/detectors.py`) |
-| `toMpImage`, `draw_landmarks`, `draw_connections`, `draw_line` | [[drawing]] (`rendering/drawing.py`) |
+| `toMpImage`, `draw_landmarks`, `draw_connections` | [[drawing]] (`rendering/drawing.py`) |
 | `UIManager` | [[ui_manager]] (`ui/manager.py`) |

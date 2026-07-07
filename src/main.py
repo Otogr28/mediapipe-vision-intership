@@ -4,13 +4,14 @@ import traceback
 import cv2
 from mediapipe.tasks.python import vision
 
-from detection import detectors
-from config import SELECTED_CAMERA, WINDOW_WIDTH, WINDOW_HEIGHT
-from detection.detectors import build_pose_detector, build_hand_detector
-from rendering.drawing import toMpImage, draw_landmarks, draw_connections, draw_line
-from ui.manager import UIManager
-from output import make_sink
 from capture import FreshestFrame
+from config import SELECTED_CAMERA, STATE_FPS, WINDOW_HEIGHT, WINDOW_WIDTH
+from detection import detectors
+from detection.detectors import build_hand_detector, build_pose_detector
+from output import make_sink
+from rendering.drawing import draw_connections, draw_landmarks, toMpImage
+from ui.manager import UIManager
+from web.state import build_state
 
 start_time = time.monotonic()
 last_timestamp_ms = -1
@@ -80,17 +81,34 @@ def main():
     # in the driver queue. Latency stays ~1 frame regardless of loop speed.
     camera = FreshestFrame(camera)
 
-    ui = UIManager(frame_w, frame_h)
     sink = make_sink(frame_w, frame_h)
+    # Web mode is detected by capability, not config: the WebSink takes the
+    # per-frame state JSON, the browser renders all UI, and the backend
+    # neither draws on the frame nor creates a GL context.
+    publish_state = getattr(sink, "publish_state", None)
+    ui = UIManager(frame_w, frame_h, gpu_effects=publish_state is None)
 
     pose_connections = vision.PoseLandmarksConnections.POSE_LANDMARKS
     hand_connections = vision.HandLandmarksConnections.HAND_CONNECTIONS
 
     global last_timestamp_ms
     last_error = None
+    # Web mode paces the loop to STATE_FPS: without cv2 drawing the loop
+    # would spin far faster than the camera delivers frames, re-encoding
+    # the same JPEG and re-running inference on duplicate frames for
+    # nothing (FreshestFrame.read() never blocks). Window/stream modes
+    # keep their historical free-running behaviour.
+    frame_interval = 1.0 / STATE_FPS if publish_state is not None else 0.0
+    next_frame_t = time.monotonic()
     try:
         while True:
             try:
+                if frame_interval:
+                    now = time.monotonic()
+                    if now < next_frame_t:
+                        time.sleep(next_frame_t - now)
+                    next_frame_t = max(now, next_frame_t) + frame_interval
+
                 success, frame = camera.read()
                 if not success or frame is None:
                     # A network source can momentarily starve; keep polling.
@@ -105,22 +123,28 @@ def main():
                 hand_detector.detect_async(image=mp_image, timestamp_ms=timestamps_ms)
 
                 pose_result = detectors.latest_pose_result
-                hand_result = detectors.latest_hand_result
+                hand_result, hand_received_t = detectors.latest_hand_packet
 
                 pose_landmarks = None
                 if pose_result is not None and pose_result.pose_landmarks:
                     pose_landmarks = pose_result.pose_landmarks[0]
-                    draw_landmarks(pose_landmarks, flip_frame)
-                    draw_connections(pose_landmarks, flip_frame, pose_connections)
 
-                if hand_result is not None:
-                    for i in range(len(hand_result.hand_landmarks)):
-                        draw_landmarks(hand_result.hand_landmarks[i], flip_frame)
-                        draw_connections(hand_result.hand_landmarks[i], flip_frame, hand_connections)
-                        draw_line(hand_result.hand_landmarks[i], flip_frame, 4, 8)
+                # Web mode streams the RAW frame — the browser draws the
+                # skeleton and all UI from the published state instead.
+                if publish_state is None:
+                    if pose_landmarks is not None:
+                        draw_landmarks(pose_landmarks, flip_frame)
+                        draw_connections(pose_landmarks, flip_frame, pose_connections)
+                    if hand_result is not None:
+                        for i in range(len(hand_result.hand_landmarks)):
+                            draw_landmarks(hand_result.hand_landmarks[i], flip_frame)
+                            draw_connections(hand_result.hand_landmarks[i], flip_frame, hand_connections)
 
-                ui.update(hand_result, pose_landmarks)
-                ui.draw(flip_frame)
+                ui.update(hand_result, pose_landmarks, hand_received_t)
+                if publish_state is None:
+                    ui.draw(flip_frame)
+                else:
+                    publish_state(build_state(ui, hand_result, pose_landmarks))
 
                 sink.present(flip_frame)
                 if sink.should_quit():

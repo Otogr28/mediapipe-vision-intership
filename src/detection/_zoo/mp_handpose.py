@@ -5,8 +5,8 @@
 # CUDA execution provider. All pre/post-processing math (crop/rotate, landmark
 # de-rotation, bbox) is the upstream implementation unchanged. cv2 is still
 # used for image ops; only the neural-net forward pass moved to onnxruntime.
-import numpy as np
 import cv2 as cv
+import numpy as np
 
 # onnxruntime is imported lazily inside __init__ so the default MediaPipe
 # inference path never requires it to be installed.

@@ -29,14 +29,8 @@ import traceback
 
 import numpy as np
 
-from config import (
-    PALM_ONNX,
-    HAND_ONNX,
-    ONNX_PROVIDERS,
-    NUM_HANDS,
-    MIN_HAND_DETECTION_CONFIDENCE,
-)
-
+from config import (HAND_ONNX, MIN_HAND_DETECTION_CONFIDENCE, NUM_HANDS,
+                    ONNX_PROVIDERS, PALM_ONNX)
 
 # --- result shim classes (attribute-compatible with mediapipe's result) ----
 
@@ -113,8 +107,8 @@ class GpuHandDetector:
         # Imported here (not at module top) so building this detector is what
         # pulls in onnxruntime + the vendored classes; the MediaPipe default
         # path never touches them.
-        from detection._zoo.mp_palmdet import MPPalmDet
         from detection._zoo.mp_handpose import MPHandPose
+        from detection._zoo.mp_palmdet import MPPalmDet
 
         providers = list(providers) if providers is not None else list(ONNX_PROVIDERS)
 
