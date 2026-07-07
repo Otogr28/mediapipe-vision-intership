@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { lazy, Suspense, useEffect, useRef, useState } from "react";
 import { LensedVideo } from "./gl/LensedVideo";
 import { Buttons } from "./hud/Buttons";
 import { DebugHud } from "./hud/DebugHud";
@@ -10,6 +10,12 @@ import { AimReadout, SlingshotLegend } from "./hud/Slingshot";
 import { OverlayCanvas } from "./overlay/OverlayCanvas";
 import type { SixSevenObject, SlingshotObject } from "./state/types";
 import { useAppState } from "./state/useAppState";
+
+// Lazy so three.js + three-vrm (the biggest dependency) only download when
+// the user actually opens Vtuber — the black-hole / orbitals paths stay light.
+const VrmAvatar = lazy(() =>
+  import("./gl/VrmAvatar").then((m) => ({ default: m.VrmAvatar })),
+);
 
 /**
  * Layer stack, bottom to top (all sharing the .stage aspect-ratio box):
@@ -48,6 +54,8 @@ export function App() {
   );
   const hasBlackHole =
     state?.objects.some((o) => o.type === "black_hole") ?? false;
+  const hasVtuber =
+    state?.objects.some((o) => o.type === "vtuber") ?? false;
 
   return (
     <div className="viewport">
@@ -62,6 +70,11 @@ export function App() {
           />
         )}
         <OverlayCanvas pairRef={pairRef} frameW={frameW} frameH={frameH} />
+        {hasVtuber && (
+          <Suspense fallback={null}>
+            <VrmAvatar pairRef={pairRef} frameW={frameW} frameH={frameH} />
+          </Suspense>
+        )}
         <HudLayer frameW={frameW} frameH={frameH}>
           {state && (
             <>

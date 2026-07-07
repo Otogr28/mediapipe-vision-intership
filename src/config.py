@@ -292,7 +292,11 @@ HINT_TEXT = "Close your hand to interact"
 # orbits outward). The sim-speed stepper (shared with the slingshot) changes
 # how many sub-steps run per frame, never the step size.
 ORB_G = 4000.0               # gravitational constant (px^3 / (mass * s^2))
-ORB_SOFTENING_PX = 14.0      # Plummer softening: F ~ m1 m2 / (r^2 + eps^2)
+# Plummer softening only regularises the force at true zero separation; it is
+# kept SMALL (a couple of px) because hard-sphere collisions now stop bodies
+# from ever overlapping, so gravity stays essentially exact (F = G m1 m2 / r^2)
+# right down to contact instead of being fudged soft at close range.
+ORB_SOFTENING_PX = 2.0
 ORB_PHYS_DT = 1.0 / 240.0    # physics sub-step (s); small for fast fly-bys
 ORB_FRAME_DT = 1.0 / 30.0    # simulated time one video frame represents (s)
 ORB_MAX_SUBSTEPS = 40        # per-frame cap; drops sim debt rather than stall
@@ -305,9 +309,18 @@ ORB_MAX_PULL_PX = 260        # cap on the aim pull-back distance (px)
 ORB_GRAB_PAD_PX = 26         # grab a body when the pinch lands within r + pad
 ORB_PREDICT_TIME_S = 2.2     # how far ahead the dotted aim preview simulates
 ORB_PREDICT_SAMPLE = 5       # one preview dot every N physics steps
-# Merged mass above which a body "collapses" into a black hole (rendered as
-# a dark disk + accretion ring; the full lensing shader is a later upgrade).
-ORB_COLLAPSE_MASS = 5200.0
+
+# Collisions are hard-sphere impulses (NOT merges): when two bodies touch they
+# exchange momentum along the contact normal, deflecting each other by their
+# MASS RATIO — a light asteroid barely nudges a star but is flung itself,
+# exactly like a real elastic-ish impact. `ORB_RESTITUTION` is the coefficient
+# of restitution (1 = perfectly elastic / energy-conserving, 0 = perfectly
+# inelastic / bodies stick); 0.6 reads as a firm bounce that still bleeds a
+# little energy so captured pairs settle instead of ringing forever.
+# `ORB_COLLISION_SLOP` is a small overlap tolerance (px) left uncorrected to
+# stop resting stacks from jittering (standard positional-correction slop).
+ORB_RESTITUTION = 0.6
+ORB_COLLISION_SLOP = 0.5
 
 # Body-type presets the palette spawns: (mass, radius px, [r, g, b] 0-255).
 # Masses/radii are chosen so a Star holds Planets/Moons in visible orbits

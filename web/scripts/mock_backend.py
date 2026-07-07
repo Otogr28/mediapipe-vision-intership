@@ -78,6 +78,23 @@ def fake_hand(t):
     }
 
 
+def vtuber_pose(t):
+    """Synthetic 33-landmark pose for the vtuber scene: a person facing the
+    camera waving both arms, so the VRM rig visibly follows shoulder→elbow→
+    wrist without needing a real camera."""
+    lm = [[0.5, 0.5, 0.4] for _ in range(33)]
+    lm[0] = [0.5, 0.28, 0.99]                      # nose
+    lm[11] = [0.40, 0.42, 0.99]                    # L shoulder
+    lm[12] = [0.60, 0.42, 0.99]                    # R shoulder
+    wl = 0.5 * (1 + math.sin(t))
+    wr = 0.5 * (1 + math.sin(t + 1.6))
+    lm[13] = [0.34, 0.55, 0.99]                    # L elbow
+    lm[15] = [0.30, 0.68 - 0.34 * wl, 0.99]        # L wrist (raises)
+    lm[14] = [0.66, 0.55, 0.99]                    # R elbow
+    lm[16] = [0.70, 0.68 - 0.34 * wr, 0.99]        # R wrist (raises)
+    return [[round(a, 4), round(b, 4), round(c, 2)] for a, b, c in lm]
+
+
 def scene_state(t):
     margin = int(H * 0.12)
     hover = int(t) % 2 == 0
@@ -208,7 +225,7 @@ def scene_state(t):
         base["speed"] = {"rect": [plus_x - lw, margin, lw, sb], "text": "1x"}
         cx, cy = W / 2, H / 2
         bodies = [{"id": 0, "x": round(cx, 1), "y": round(cy, 1), "r": 26,
-                   "rgb": [255, 226, 158], "kind": "star", "collapsed": False}]
+                   "rgb": [255, 226, 158], "kind": "star", "m": 1200.0}]
         for i in range(3):
             ang = t * 0.6 + i * 2.1
             r = 120 + i * 72
@@ -216,14 +233,13 @@ def scene_state(t):
                 "id": i + 1,
                 "x": round(cx + r * math.cos(ang), 1),
                 "y": round(cy + r * math.sin(ang), 1),
-                "r": 13, "rgb": [110, 170, 255], "kind": "planet",
-                "collapsed": False,
+                "r": 13, "rgb": [110, 170, 255], "kind": "planet", "m": 42.0,
             })
         aiming = SCENE == "orbaim"
         orb = {
             "type": "orbitals", "bodies": bodies, "count": len(bodies),
             "kind": "planet", "kind_r": 13, "kind_rgb": [110, 170, 255],
-            "time_scale": 1.0, "aiming": aiming,
+            "kind_m": 42.0, "time_scale": 1.0, "aiming": aiming,
             "spawn": None, "pull": None, "arc": [], "readout": None,
         }
         if aiming:
@@ -232,7 +248,8 @@ def scene_state(t):
             orb["pull"] = [sx - 120, sy + 100]
             orb["arc"] = [[sx + i * 26, sy - int(70 * math.sin(i / 16 * math.pi))]
                           for i in range(28)]
-            orb["readout"] = {"v0": 286.0, "angle": 39.0, "kind": "planet"}
+            orb["readout"] = {"v0": 286.0, "angle": 39.0, "kind": "planet",
+                              "mass": 42.0}
         base["objects"] = [orb]
 
     elif SCENE == "vtuber":
@@ -258,6 +275,7 @@ def scene_state(t):
              "ratio": 0.7, "pinching": False, "held": False,
              "seen_ms": 0.0, "landmarks": None},
         ]
+        base["pose"] = vtuber_pose(t)
         base["objects"] = [{
             "type": "vtuber", "t": round(t % 1000.0, 3),
             "mouth": round(0.5 * (1 - math.cos(t * 1.8)), 3),

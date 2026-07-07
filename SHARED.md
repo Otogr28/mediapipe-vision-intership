@@ -1029,3 +1029,38 @@ latent deploy bug so it actually reaches the Jetson via git.
   errors), UIManager to_state across all states, physics stability.
 - NOT done: GPU pose backend (IDEAS backlog) — blocked on a BlazePose
   landmark ONNX (only palm+handpose are vendored). Purely model-sourcing.
+
+## Update - 2026-07-07 21:40 - [Claude (Opus 4.8)]
+
+### What I did (round 2, per user follow-up)
+- **Orbitals collisions are now REALISTIC** (were merges). Hard-sphere
+  impulse response with restitution (`ORB_RESTITUTION=0.6`, unequal masses,
+  positional correction) resolved per sub-step in `Orbitals._resolve_collisions`.
+  An asteroid deflects a planet by the mass ratio; momentum conserved
+  EXACTLY (verified: 750.0→750.0). Softening dropped to 2 px (collisions
+  stop overlap, so gravity is ~exact). Removed merge + collapse-to-BH. Mass
+  now shown per body + in the aim readout. Contract updated (types.ts:
+  body `m`, `kind_m`, readout `mass`; removed `collapsed`).
+- **Vtuber is now a real open-source VRM avatar.** `web/src/gl/VrmAvatar.tsx`
+  loads a CC0 VRoid model (`web/public/avatar.vrm`, madjin/vrm-samples) via
+  three.js + @pixiv/three-vrm and rigs it from our own landmarks (arms
+  shoulder→elbow→wrist, mouth from pinch, idle sway/blink). NO Kalidokit and
+  NO state-contract change (2D image-plane rig). Lazy-loaded (three.js in a
+  separate chunk, out of the main bundle). Canvas mascot (`drawPuppet`) is
+  the fallback (module flag `gl/vrmState.ts`). Verified rendering in headless
+  Chrome (arms follow synthetic pose, face lip-syncs).
+- **Pose inference activates on demand.** `UIManager.wants_pose()` (True when
+  the puppet is live) drives `main.py`, which now lazily builds + runs the
+  pose detector only while needed — default hand UI stays pose-free, Vtuber
+  lights the skeleton up so the avatar's arms track.
+
+### Important context for the other agent
+- New npm deps: `three`, `@pixiv/three-vrm`, `@types/three` (dev). `avatar.vrm`
+  (~12 MB) is committed in BOTH web/public/ and web/dist/ — vite empties dist
+  on build, so the public source must stay committed or a rebuild wipes the
+  served copy. It travels to the Jetson via git (web/dist tracked).
+- Jetson perf: entering Vtuber now runs pose (~1.5 CPU cores) + a three.js
+  VRM scene (GPU). Watch fps on-device; it's on-demand so other modes are
+  unaffected. The arm rig was tuned on synthetic mock pose only (no camera
+  here) — MIRROR_X / ARM_DAMP in VrmAvatar.tsx may want on-device tweaking.
+- The cv2 window/stream path still works (Puppet.draw + Orbitals.draw).

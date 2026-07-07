@@ -4,33 +4,43 @@
 ## Shipped
 
 - [x] **Orbitals — astro simulator** — SHIPPED 2026-07-07. Experiments →
-  "Orbitals". Velocity-Verlet (leapfrog, 1 force-eval/step), Plummer
-  softening, perfectly-inelastic merges, pinch-drag-release launch (pull-
-  opposite, live-field arc preview), grab-to-fling, body-type palette
-  (star/planet/moon/comet) + presets (Solar / Binary / Figure-8) + Clear,
-  shared sim-speed stepper (adds 8×). Renders on Canvas2D (glow bodies,
-  client-side trails, blackbody-ish colours); a merge past
-  `ORB_COLLAPSE_MASS` renders as a black hole (dark disk + accretion ring —
-  the *lightweight* in-renderer version; the full lensing-shader collapse
-  below is still open). Code: `Orbitals` in `ui/interactables.py`,
-  `drawOrbitals` in `web/src/overlay/scene.ts`, `ORB_*` in `config.py`.
-- [x] **Vtuber mode** — SHIPPED 2026-07-07. Interactable Figures → "Vtuber".
-  A cosmic-mascot avatar (`Puppet` in `ui/interactables.py`, `drawPuppet` in
-  `scene.ts`): paws ride the tracked hands, mouth opens with the pinch, eyes
-  track the hands, arms follow shoulder→elbow→wrist when `HALL_POSE=1` (soft
-  curved arms when pose is off, the default). Dims the camera + hides the raw
-  skeleton so the character stands alone. Pure frontend render + a cv2
-  fallback; no new detector (so no FaceLandmarker cost yet — see below).
+  "Orbitals". Symplectic velocity-Verlet (leapfrog, 1 force-eval/step),
+  small Plummer softening, and **realistic hard-sphere collisions** (updated
+  2026-07-07 per request): bodies do NOT merge — they exchange a momentum
+  impulse `j = -(1+e)·v_rel_n / (1/m₁+1/m₂)` (restitution `ORB_RESTITUTION`)
+  so a light asteroid deflects a heavy planet by the mass ratio and is flung
+  itself; momentum is conserved exactly (verified). Pinch-drag-release launch
+  (pull-opposite, arc previewed through the LIVE gravity field), grab-to-
+  fling, body-type palette (star/planet/moon/comet, masses shown) + presets
+  (Solar / Binary / Figure-8, all verified bound 60 s) + Clear, shared
+  sim-speed stepper (adds 8×). Canvas2D render (glow bodies, client trails).
+  Code: `Orbitals` in `ui/interactables.py`, `drawOrbitals` in
+  `web/src/overlay/scene.ts`, `ORB_*` in `config.py`.
+- [x] **Vtuber mode — real VRM avatar** — SHIPPED 2026-07-07. Interactable
+  Figures → "Vtuber". A CC0 VRoid **VRM** model (`web/public/avatar.vrm`,
+  from madjin/vrm-samples) rendered with **three.js + @pixiv/three-vrm**
+  (`web/src/gl/VrmAvatar.tsx`, lazy-loaded so three.js stays out of the main
+  bundle). Rigged by a hand-written image-plane mapping from the app's own
+  landmarks (arms aimed shoulder→elbow→wrist, mouth `aa` from the pinch,
+  idle sway + blink) — no Kalidokit, no contract change. Selecting Vtuber
+  now **turns pose inference on on-demand** (`ui.wants_pose()` → `main.py`
+  builds/runs the pose detector only while Vtuber is active, so the default
+  hand UI stays pose-free). The Canvas2D mascot (`drawPuppet`) is the
+  automatic fallback while the model loads or if it fails; the cv2 puppet is
+  the window/stream fallback. Stretch still open: a FaceLandmarker for real
+  facial expression, and finger rigging.
 
 ## Next up
 
-- [ ] **Orbitals v2 candy** *(follow-ups to the shipped experiment)*
-  - Real lensing on collapse: spawn the existing `BlackHole` / WebGL lensing
-    layer when a merger passes `ORB_COLLAPSE_MASS`, instead of the current
-    flat dark-disk render — the shader already exists, but the web path gates
-    the lensing layer on a `black_hole` object, so it needs the orbitals
-    object to opt a body into that layer.
-  - Bloom on the bodies via the WebGL layer; Roche-limit breakup.
+- [ ] **Vtuber polish** *(follow-ups to the shipped VRM avatar)*
+  - Finger rigging from the hand landmarks (currently the model's rest hands).
+  - FaceLandmarker (a 3rd detector) → real mouth/eye/brow expression instead
+    of the pinch→mouth stand-in; open question is the CPU cost on the Jetson.
+  - Tune the arm-rig mirror/damping on-device with a real camera (the rig
+    was validated on synthetic mock pose only — headless, no camera here).
+- [ ] **Orbitals candy**: bloom on the bodies via a WebGL layer; optional
+  Roche-limit breakup; a "sticky" (perfectly-inelastic) collision mode toggle
+  for accretion demos alongside the default elastic bounce.
 
 ## Backlog
 

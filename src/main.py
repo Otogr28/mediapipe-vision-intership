@@ -37,6 +37,10 @@ def main():
     """
     # Pose is optional (HALL_POSE, off by default): the UI is fully
     # hand-driven and body inference was the biggest CPU cost on the Jetson.
+    # HALL_POSE=1 builds it up front (always on); otherwise it is built
+    # LAZILY the first time a feature asks for it (ui.wants_pose(), e.g. the
+    # Vtuber puppet) and then only run while that feature is active — so pose
+    # costs nothing until the user opts into something that needs a skeleton.
     pose_detector = build_pose_detector() if POSE_ENABLED else None
     hand_detector = build_hand_detector()
 
@@ -96,6 +100,9 @@ def main():
 
     global last_timestamp_ms
     last_error = None
+    # Set once if the lazy pose-detector build fails, so we don't retry (and
+    # skip frames) every tick — the app just stays hand-only in that case.
+    pose_build_failed = False
     # Web mode paces the loop to STATE_FPS: without cv2 drawing the loop
     # would spin far faster than the camera delivers frames, re-encoding
     # the same JPEG and re-running inference on duplicate frames for
@@ -134,11 +141,28 @@ def main():
                 timestamps_ms = max(int((time.monotonic() - start_time) * 1000), last_timestamp_ms + 1)
                 last_timestamp_ms = timestamps_ms
 
-                if pose_detector is not None:
+                # Run pose only when needed: the HALL_POSE=1 override, or a
+                # live feature that asks for it (ui.wants_pose()). Built lazily
+                # on first demand — a one-time model-load hitch when the user
+                # first enters e.g. Vtuber, then free on exit (we simply stop
+                # feeding it; its threads idle). timestamps_ms keeps climbing
+                # every frame, so the stream stays monotonic across on/off gaps.
+                need_pose = POSE_ENABLED or ui.wants_pose()
+                if need_pose and pose_detector is None and not pose_build_failed:
+                    try:
+                        pose_detector = build_pose_detector()
+                        print("pose inference enabled on demand", flush=True)
+                    except Exception:
+                        pose_build_failed = True
+                        print("pose detector build failed; staying hand-only",
+                              flush=True)
+                if need_pose and pose_detector is not None:
                     pose_detector.detect_async(image=mp_image, timestamp_ms=timestamps_ms)
+                    pose_result = detectors.latest_pose_result
+                else:
+                    pose_result = None
                 hand_detector.detect_async(image=mp_image, timestamp_ms=timestamps_ms)
 
-                pose_result = detectors.latest_pose_result if pose_detector is not None else None
                 hand_result, hand_received_t = detectors.latest_hand_packet
 
                 pose_landmarks = None

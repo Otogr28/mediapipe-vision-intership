@@ -1,3 +1,4 @@
+import { isVrmReady } from "../gl/vrmState";
 import type {
   AppState,
   OrbitalsObject,
@@ -294,28 +295,8 @@ function drawOrbBody(
   y: number,
   r: number,
   rgb: RGB,
-  collapsed: boolean,
   ghost = false,
 ) {
-  if (collapsed) {
-    // Accretion glow, then a black event-horizon disk with a bright ring.
-    const ring = ctx.createRadialGradient(x, y, r * 0.5, x, y, r * 2.4);
-    ring.addColorStop(0, "rgba(190,150,255,0)");
-    ring.addColorStop(0.55, "rgba(150,90,230,0.5)");
-    ring.addColorStop(1, "rgba(150,90,230,0)");
-    ctx.fillStyle = ring;
-    ctx.beginPath();
-    ctx.arc(x, y, r * 2.4, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.fillStyle = "#05040a";
-    ctx.beginPath();
-    ctx.arc(x, y, r, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.strokeStyle = "rgba(205,170,255,0.9)";
-    ctx.lineWidth = 2.5;
-    ctx.stroke();
-    return;
-  }
   // Soft glow halo.
   const glow = ctx.createRadialGradient(x, y, r * 0.2, x, y, r * 2.4);
   glow.addColorStop(0, rgbStr(rgb, ghost ? 0.28 : 0.55));
@@ -362,7 +343,7 @@ function drawOrbitals(ctx: CanvasRenderingContext2D, o: OrbitalsObject) {
     }
   }
   for (const b of o.bodies) {
-    drawOrbBody(ctx, b.x, b.y, b.r, b.rgb, b.collapsed);
+    drawOrbBody(ctx, b.x, b.y, b.r, b.rgb);
   }
 
   if (o.aiming && o.spawn) {
@@ -393,7 +374,7 @@ function drawOrbitals(ctx: CanvasRenderingContext2D, o: OrbitalsObject) {
       ctx.fill();
     }
     // Ghost of the body to launch + launch-velocity arrow (opposite pull).
-    drawOrbBody(ctx, sx, sy, o.kind_r, rgb, false, true);
+    drawOrbBody(ctx, sx, sy, o.kind_r, rgb, true);
     if (o.pull) {
       const [px, py] = o.pull;
       const dx = sx - px;
@@ -407,7 +388,7 @@ function drawOrbitals(ctx: CanvasRenderingContext2D, o: OrbitalsObject) {
       }
     }
     if (o.readout) {
-      const label = `${o.readout.kind}  v₀ ${o.readout.v0.toFixed(0)} px/s`;
+      const label = `${o.readout.kind}  m ${o.readout.mass}  v₀ ${o.readout.v0.toFixed(0)} px/s`;
       ctx.font = "600 15px 'IBM Plex Mono', monospace";
       ctx.textAlign = "left";
       ctx.textBaseline = "bottom";
@@ -504,6 +485,10 @@ function drawPuppet(
   bg.addColorStop(1, "rgba(4,3,10,0.92)");
   ctx.fillStyle = bg;
   ctx.fillRect(0, 0, w, h);
+
+  // Once the real VRM avatar is live it draws the character on the WebGL
+  // layer above; the Canvas mascot is only the fallback (loading / failure).
+  if (isVrmReady()) return;
 
   const hands = handAnchors(state, w, h);
   const bob = Math.sin((v.t * 2 * Math.PI) / 3.2) * 12;
