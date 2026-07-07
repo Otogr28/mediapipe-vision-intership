@@ -113,7 +113,8 @@ export interface OrbitalsBody {
   r: number;
   rgb: [number, number, number];
   kind: OrbitalKind;
-  collapsed: boolean;
+  /** mass (sim units) — bodies collide by momentum, so mass is meaningful */
+  m: number;
 }
 
 export interface OrbitalsObject {
@@ -124,12 +125,13 @@ export interface OrbitalsObject {
   kind: OrbitalKind;
   kind_r: number;
   kind_rgb: [number, number, number];
+  kind_m: number;
   time_scale: number;
   aiming: boolean;
   spawn: Vec2 | null;
   pull: Vec2 | null;
   arc: Vec2[];
-  readout: { v0: number; angle: number; kind: string } | null;
+  readout: { v0: number; angle: number; kind: string; mass: number } | null;
 }
 
 export interface VtuberObject {

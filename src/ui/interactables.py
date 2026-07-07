@@ -10,12 +10,12 @@ from config import (BH_DEFAULT_POS_FACTOR, BH_DISK_BRIGHTNESS,
                     BH_DISK_INNER_FACTOR, BH_DISK_OUTER_FACTOR,
                     BH_DISK_ROTATION_SPEED, BH_DISK_TILT_RAD,
                     BH_EINSTEIN_RADIUS_PX, BH_GRAB_RADIUS, ORB_BODY_TYPES,
-                    ORB_COLLAPSE_MASS, ORB_DEFAULT_KIND, ORB_FRAME_DT, ORB_G,
+                    ORB_COLLISION_SLOP, ORB_DEFAULT_KIND, ORB_FRAME_DT, ORB_G,
                     ORB_GRAB_PAD_PX, ORB_LAUNCH_GAIN, ORB_MAX_BODIES,
                     ORB_MAX_PULL_PX, ORB_MAX_SUBSTEPS, ORB_PHYS_DT,
                     ORB_PREDICT_SAMPLE, ORB_PREDICT_TIME_S, ORB_PRUNE_MARGIN,
-                    ORB_SOFTENING_PX, ORB_TIME_SCALES, ORB_TRAIL_LEN,
-                    PUPPET_IDLE_BOB_S, SIXSEVEN_FLASH_FRAMES,
+                    ORB_RESTITUTION, ORB_SOFTENING_PX, ORB_TIME_SCALES,
+                    ORB_TRAIL_LEN, PUPPET_IDLE_BOB_S, SIXSEVEN_FLASH_FRAMES,
                     SIXSEVEN_HYSTERESIS, SIXSEVEN_MIN_VISIBILITY)
 from detection.gestures import hand_id, pinch_info, pinch_state
 from ui.button import Button
@@ -1070,16 +1070,9 @@ class Slingshot:
 # units). Everything below runs in pixels / seconds.
 
 
-def _radius_for_mass(mass):
-    """Screen radius (px) for a body of the given mass — a gentle cube-root
-    law (radius ~ mass^(1/3), i.e. constant density) clamped to a sane band
-    so a merged giant stays on-screen and a speck stays clickable."""
-    return int(max(5, min(46, 4.4 * (mass ** (1.0 / 3.0)))))
-
-
 class _Body:
     __slots__ = ("id", "x", "y", "vx", "vy", "mass", "radius", "kind", "rgb",
-                 "collapsed", "frozen", "ax", "ay", "trail")
+                 "frozen", "ax", "ay", "trail")
 
     def __init__(self, bid, x, y, vx, vy, mass, radius, kind, rgb):
         self.id = bid
@@ -1091,9 +1084,8 @@ class _Body:
         self.radius = radius
         self.kind = kind
         self.rgb = rgb     # (r, g, b) 0-255
-        self.collapsed = mass >= ORB_COLLAPSE_MASS
-        # Frozen while grabbed: still a gravity SOURCE, but the integrator
-        # leaves its position/velocity to the hand.
+        # Frozen while grabbed: still a gravity SOURCE and a collision wall,
+        # but the integrator leaves its position/velocity to the hand.
         self.frozen = False
         self.ax = 0.0      # cached acceleration between Verlet half-steps
         self.ay = 0.0
@@ -1400,7 +1392,6 @@ class Orbitals:
         if steps == ORB_MAX_SUBSTEPS:
             self._time_acc = 0.0
 
-        self._merge()
         self._prune()
         for b in self.bodies:
             b.trail.append((int(b.x), int(b.y)))
@@ -1453,43 +1444,61 @@ class Orbitals:
                 continue
             b.vx += b.ax * half                   # half-kick with a(t+dt)
             b.vy += b.ay * half
+        self._resolve_collisions()
 
-    def _merge(self):
-        """Perfectly-inelastic merges: overlapping bodies coalesce conserving
-        mass and momentum. The survivor keeps the more massive body's id +
-        trail so its history is continuous; radius recombines by volume."""
+    def _resolve_collisions(self):
+        """Hard-sphere collision response between every overlapping pair.
+
+        Bodies do NOT merge — they bounce. Along the contact normal they
+        exchange a momentum impulse
+
+            j = -(1 + e) * v_rel_n / (1/m_a + 1/m_b)
+
+        (Newton's restitution law; ``e`` = ``ORB_RESTITUTION``), so the
+        velocity change each body takes is inversely proportional to its
+        mass: a light asteroid is flung hard while a heavy star barely
+        shifts — momentum is conserved exactly (and kinetic energy too when
+        e = 1). A grabbed (frozen) body acts as an immovable wall (infinite
+        mass). Overlap is then split apart by inverse mass, leaving a small
+        ``ORB_COLLISION_SLOP`` so resting contacts don't jitter.
+        """
         bodies = self.bodies
-        i = 0
-        while i < len(bodies):
+        n = len(bodies)
+        e = ORB_RESTITUTION
+        for i in range(n):
             a = bodies[i]
-            j = i + 1
-            while j < len(bodies):
-                b = bodies[j]
-                if math.hypot(a.x - b.x, a.y - b.y) < a.radius + b.radius:
-                    keep, drop = (a, b) if a.mass >= b.mass else (b, a)
-                    M = a.mass + b.mass
-                    keep.x = (a.mass * a.x + b.mass * b.x) / M
-                    keep.y = (a.mass * a.y + b.mass * b.y) / M
-                    keep.vx = (a.mass * a.vx + b.mass * b.vx) / M
-                    keep.vy = (a.mass * a.vy + b.mass * b.vy) / M
-                    # Mass-weighted colour blend, volume-combined radius.
-                    keep.rgb = [int((a.mass * a.rgb[k] + b.mass * b.rgb[k]) / M)
-                                for k in range(3)]
-                    keep.radius = _radius_for_mass(M)
-                    keep.mass = M
-                    keep.collapsed = keep.collapsed or M >= ORB_COLLAPSE_MASS
-                    keep.frozen = a.frozen or b.frozen
-                    bodies[i] = keep
-                    a = keep
-                    if drop is self.grab_body:
-                        # The grabbed body was absorbed — hand now owns the
-                        # survivor so the drag continues seamlessly.
-                        self.grab_body = keep
-                        keep.frozen = True
-                    bodies.pop(j)
+            inv_a = 0.0 if a.frozen else 1.0 / a.mass
+            for k in range(i + 1, n):
+                b = bodies[k]
+                dx = b.x - a.x
+                dy = b.y - a.y
+                dist = math.hypot(dx, dy)
+                min_dist = a.radius + b.radius
+                if dist >= min_dist:
+                    continue
+                inv_b = 0.0 if b.frozen else 1.0 / b.mass
+                inv_sum = inv_a + inv_b
+                if inv_sum == 0.0:
+                    continue                      # two walls: nothing to do
+                if dist > 1e-9:
+                    nx, ny = dx / dist, dy / dist
                 else:
-                    j += 1
-            i += 1
+                    nx, ny, dist = 1.0, 0.0, 0.0  # coincident: pick an axis
+                # Normal relative velocity (a relative to b); >0 = approaching.
+                vrel = (a.vx - b.vx) * nx + (a.vy - b.vy) * ny
+                if vrel > 0.0:
+                    j = (1.0 + e) * vrel / inv_sum
+                    a.vx -= j * inv_a * nx
+                    a.vy -= j * inv_a * ny
+                    b.vx += j * inv_b * nx
+                    b.vy += j * inv_b * ny
+                # Positional correction: push out of overlap (beyond the slop)
+                # split by inverse mass, so the heavier body moves less.
+                corr = max(min_dist - dist - ORB_COLLISION_SLOP, 0.0) / inv_sum
+                a.x -= corr * inv_a * nx
+                a.y -= corr * inv_a * ny
+                b.x += corr * inv_b * nx
+                b.y += corr * inv_b * ny
 
     def _prune(self):
         """Drop bodies that have flung far off-screen so the body count and
@@ -1547,12 +1556,13 @@ class Orbitals:
                 "id": b.id,
                 "x": round(b.x, 1), "y": round(b.y, 1),
                 "r": b.radius, "rgb": b.rgb, "kind": b.kind,
-                "collapsed": b.collapsed,
+                "m": round(b.mass, 1),
             } for b in self.bodies],
             "count": len(self.bodies),
             "kind": self._kind,
             "kind_r": spec["radius"],
             "kind_rgb": list(spec["rgb"]),
+            "kind_m": spec["mass"],
             "time_scale": self.time_scale,
             "aiming": self.aiming,
             "spawn": None,
@@ -1570,6 +1580,7 @@ class Orbitals:
                 "v0": round(speed, 1),
                 "angle": round(math.degrees(math.atan2(-vy, vx)), 1),
                 "kind": self._kind,
+                "mass": spec["mass"],
             }
         return state
 
@@ -1578,11 +1589,6 @@ class Orbitals:
     def _draw_body(self, frame, b):
         cx, cy = int(b.x), int(b.y)
         r, g, bl = b.rgb
-        if b.collapsed:
-            cv2.circle(frame, (cx, cy), b.radius + 8, (60, 40, 90), 2, cv2.LINE_AA)
-            cv2.circle(frame, (cx, cy), b.radius, (12, 10, 16), -1, cv2.LINE_AA)
-            cv2.circle(frame, (cx, cy), b.radius, (180, 150, 220), 2, cv2.LINE_AA)
-            return
         # A cheap glow: a dim outer halo, the body, and a bright core.
         cv2.circle(frame, (cx, cy), b.radius + 6,
                    (int(bl * 0.35), int(g * 0.35), int(r * 0.35)), -1, cv2.LINE_AA)

@@ -182,6 +182,15 @@ class UIManager:
         self._puppet = None
         self.state = "menu"
 
+    def wants_pose(self):
+        """True when an active feature needs body-pose inference right now —
+        the Vtuber puppet (its arms follow shoulder→elbow→wrist) or the
+        pose-driven 6-7 counter. `main.py` runs the pose detector only when
+        this (or the HALL_POSE=1 override) is set, so the default hand-only
+        UI keeps pose OFF — the big CPU win — while selecting Vtuber lights
+        the skeleton up on demand and puts it away again on Reset."""
+        return self._puppet is not None or self._sixseven is not None
+
     def _experiment_palette(self):
         """(id, Button) list the active experiment exposes for its own
         controls (e.g. the Orbitals body-type + preset palette), or empty.
