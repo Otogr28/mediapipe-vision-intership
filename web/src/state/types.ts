@@ -190,6 +190,8 @@ export interface AppState {
     state: "menu" | "interactables" | "experiments";
     experiment: "black_hole" | "slingshot" | "orbitals" | null;
     hint: { visible: boolean };
+    /** vtuber "Points" toggle — hide the avatar + draw the raw skeleton */
+    show_points?: boolean;
   };
   buttons: ButtonState[];
   speed: SpeedPill | null;

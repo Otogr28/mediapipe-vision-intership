@@ -401,6 +401,13 @@ def scene_state(t):
             "type": "vtuber", "t": round(t % 1000.0, 3),
             "mouth": round(0.5 * (1 - math.cos(t * 1.8)), 3),
         }]
+        # "Points" pinch toggle (alternates every 4 s so a screenshot catches
+        # both the avatar and the skeleton view driven by the backend flag).
+        show_points = int(t / 4) % 2 == 1
+        base["session"]["show_points"] = show_points
+        pbtn = btn("points", "Points", margin, H - 50 - margin, 150, 50)
+        pbtn["selected"] = show_points
+        base["buttons"].append(pbtn)
 
     return base
 
