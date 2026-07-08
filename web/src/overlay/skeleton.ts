@@ -1,4 +1,5 @@
 import type { AppState } from "../state/types";
+import { isSkeletonView } from "./debugView";
 
 /**
  * Pose + hand skeleton, drawn in frame pixels.
@@ -44,8 +45,10 @@ export function drawSkeleton(
   h: number,
 ) {
   // In vtuber mode the puppet replaces the raw skeleton — drawing both would
-  // clutter the character with its own tracking lines.
-  if (state.objects.some((o) => o.type === "vtuber")) return;
+  // clutter the character with its own tracking lines. EXCEPT in skeleton view
+  // (hotkey `k` / `?skeleton=1`), where the avatar is hidden and we draw the
+  // full raw inference on the body instead.
+  if (state.objects.some((o) => o.type === "vtuber") && !isSkeletonView()) return;
 
   ctx.lineCap = "round";
   ctx.lineJoin = "round";
@@ -87,10 +90,14 @@ export function drawSkeleton(
       ctx.lineTo(pts[b][0], pts[b][1]);
     }
     ctx.stroke();
+    // Nodes: all 21 joints (skeleton view shows the full point cloud), else
+    // just the fingertips for the lighter default overlay.
     ctx.fillStyle = handStroke(warm, 0.95);
-    for (const tip of FINGERTIPS) {
+    for (let i = 0; i < pts.length; i++) {
+      const tip = FINGERTIPS.includes(i);
+      if (!tip && !isSkeletonView()) continue;
       ctx.beginPath();
-      ctx.arc(pts[tip][0], pts[tip][1], 3.5, 0, Math.PI * 2);
+      ctx.arc(pts[i][0], pts[i][1], tip ? 3.5 : 2.2, 0, Math.PI * 2);
       ctx.fill();
     }
   }

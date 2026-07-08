@@ -1,4 +1,5 @@
 import { isVrmReady } from "../gl/vrmState";
+import { isSkeletonView } from "./debugView";
 import type {
   AppState,
   OrbitalsObject,
@@ -453,6 +454,9 @@ function drawPuppet(
   state: AppState,
   now: number,
 ) {
+  // Skeleton view hides the avatar and draws the raw inference on the body —
+  // so skip the dimming + spinner entirely and let the clear video show.
+  if (isSkeletonView()) return;
   const w = state.frame.w;
   const h = state.frame.h;
   const bg = ctx.createRadialGradient(
