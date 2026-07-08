@@ -23,14 +23,35 @@ START_VTUBER = os.environ.get("HALL_START_VTUBER", "0") == "1"
 #   "mediapipe" — default; MediaPipe HandLandmarker (.task), CPU on the Jetson.
 #   "gpu"       — onnxruntime palm-detection + handpose, able to use the CUDA
 #                 execution provider on the Jetson (CPU fallback elsewhere).
-# POSE always stays on MediaPipe (hybrid) for now — only HANDS switch backends.
 HALL_INFERENCE = os.environ.get("HALL_INFERENCE", "mediapipe")
+
+# Inference backend for the BODY-POSE pipeline (HALL_POSE_INFERENCE), analogous
+# to HALL_INFERENCE for hands:
+#   "mediapipe" — default; MediaPipe PoseLandmarker (.task), CPU (~13 fps on the
+#                 Jetson, one inference behind — the body's stutter/lag source).
+#   "gpu"       — onnxruntime BlazePose person-detection + pose-landmark, able to
+#                 use CUDA/TensorRT on the Jetson (CPU fallback elsewhere). Both
+#                 emit the same PoseLandmarkerResult surface, so the rest of the
+#                 pipeline (smoother, rig, state) is identical for both. `hallrun`
+#                 defaults this to "gpu" so the deployed body also runs on the GPU
+#                 (frees the ~1.5 CPU cores CPU-pose ate and lifts the frame rate).
+POSE_INFERENCE = os.environ.get("HALL_POSE_INFERENCE", "mediapipe")
 
 # ONNX models for the "gpu" hand backend. Paths are relative to the repo root
 # (the app runs from there, matching the .task paths above). Sourced from the
 # OpenCV Model Zoo (opencv/opencv_zoo, Apache-2.0).
 PALM_ONNX = os.environ.get("HALL_PALM_ONNX", "models/gpu/palm_detection_mediapipe_2023feb.onnx")
 HAND_ONNX = os.environ.get("HALL_HAND_ONNX", "models/gpu/handpose_estimation_mediapipe_2023feb.onnx")
+
+# ONNX models for the "gpu" pose backend (HALL_POSE_INFERENCE=gpu). The person
+# detector is the OpenCV Model Zoo BlazePose detector (opencv/opencv_zoo,
+# Apache-2.0, 224x224). The landmark model is tf2onnx-converted from the same
+# pose_landmarks_detector that ships in models/pose_landmarker_lite.task, so its
+# output matches what the MediaPipe path produced. Both gitignored (see models/).
+POSE_DET_ONNX = os.environ.get(
+    "HALL_POSE_DET_ONNX", "models/gpu/person_detection_mediapipe_2023mar.onnx")
+POSE_LM_ONNX = os.environ.get(
+    "HALL_POSE_LM_ONNX", "models/gpu/pose_landmark_lite.onnx")
 
 # onnxruntime execution providers, in priority order: CUDA first so the Jetson
 # uses the GPU, CPU fallback so the same code runs on a laptop without CUDA.
@@ -52,17 +73,31 @@ TRT_ENGINE_CACHE = os.environ.get(
     os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), ".trt_cache"),
 )
 
+# Optional cap on the TensorRT build workspace, in MiB (HALL_TRT_MAX_WORKSPACE).
+# The Orin Nano has 8 GB of memory SHARED between CPU and GPU, and now runs four
+# TRT engines when the Vtuber is active (palm + handpose + pose-detector +
+# pose-landmark) alongside the browser kiosk and the black-hole shader. If that
+# runs the board out of memory, cap each engine's build workspace here (e.g. 512
+# or 1024) to bound peak GPU memory — the trade is a possibly slower engine.
+# Unset (default) leaves TensorRT's own default workspace so the proven hand-only
+# setup is unchanged; only set it if memory gets tight.
+_TRT_MAX_WORKSPACE_MB = os.environ.get("HALL_TRT_MAX_WORKSPACE", "").strip()
+
 
 def _provider_with_options(name):
     """Attach provider options to TensorRT (engine cache + FP16); pass any other
     provider through as a bare name. onnxruntime accepts a providers list that
     mixes plain names and ``(name, options_dict)`` tuples."""
     if name == "TensorrtExecutionProvider":
-        return (name, {
+        opts = {
             "trt_engine_cache_enable": True,
             "trt_engine_cache_path": TRT_ENGINE_CACHE,
             "trt_fp16_enable": True,
-        })
+        }
+        if _TRT_MAX_WORKSPACE_MB:
+            # onnxruntime expects the workspace size in BYTES.
+            opts["trt_max_workspace_size"] = int(_TRT_MAX_WORKSPACE_MB) * 1024 * 1024
+        return (name, opts)
     return name
 
 

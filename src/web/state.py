@@ -117,6 +117,7 @@ def _debug_state(render_fps):
     return {
         "render_fps": round(render_fps, 1),
         "hand_fps": round(detectors.hand_fps(), 1),
+        "pose_fps": round(detectors.pose_fps(), 1),
         "age_ms": round(gestures.result_age_s() * 1000.0, 1),
         "backend": HALL_INFERENCE,
         "close_ratio": PINCH_CLOSE_RATIO,

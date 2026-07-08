@@ -1,7 +1,19 @@
 # CONTINUE — Vtuber rig work (handoff)
 
-Pick-up notes for the VTuber avatar work. Read this + `SHARED.md` (rounds 5–9)
+Pick-up notes for the VTuber avatar work. Read this + `SHARED.md` (rounds 5–10)
 to continue. Last deployed commit at handoff: **3f24f99** (+ docs `4bb380b`).
+
+> **UPDATE (round 10):** the GPU body-pose backend (lever #3 below, "the real
+> fix") is **BUILT + validated locally** but **NOT deployed** — see SHARED.md
+> round 10. `HALL_POSE_INFERENCE=gpu` runs BlazePose person-det + pose-landmark
+> on onnxruntime/TensorRT (`detection/gpu_pose.py`); validated to mean 0.027
+> landmark error vs MediaPipe on a clip. To finish: **(1)** approve the Tailscale
+> SSH browser prompt, **(2)** push to main (auto-deploys, restarts kiosk, first
+> launch builds 2 TRT engines), **(2b) ALSO rsync `models/gpu/` — the `.onnx`
+> are gitignored so the git auto-update does NOT carry them; without them the app
+> degrades safely to hand-only**, **(3)** on-device confirm `pose_fps` rose from
+> ~13 and watch memory (`HALL_TRT_MAX_WORKSPACE` MiB caps TRT workspace if the 8
+> GB fills). Levers #2/#4/#5 remain if pose still trails after GPU.
 
 ## THE OPEN PROBLEM (what to fix next)
 

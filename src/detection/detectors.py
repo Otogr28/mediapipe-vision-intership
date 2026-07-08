@@ -8,7 +8,7 @@ from config import (HALL_INFERENCE, HAND_MODEL_PATH,
                     MIN_HAND_PRESENCE_CONFIDENCE, MIN_HAND_TRACKING_CONFIDENCE,
                     MIN_POSE_DETECTION_CONFIDENCE,
                     MIN_POSE_PRESENCE_CONFIDENCE, MIN_POSE_TRACKING_CONFIDENCE,
-                    NUM_HANDS, NUM_POSES, POSE_MODEL_PATH)
+                    NUM_HANDS, NUM_POSES, POSE_INFERENCE, POSE_MODEL_PATH)
 
 latest_pose_result = None
 # (result, receive time.monotonic()) — like the hand packet, so the pose
@@ -24,12 +24,23 @@ latest_hand_packet = (None, None)
 _HAND_DT_EMA_ALPHA = 0.1
 _hand_dt_ema = 0.0
 _hand_last_t = None
+# Same, for pose — so the debug HUD can show the real body-pose rate (CPU
+# MediaPipe ~13 fps vs the GPU backend) instead of us guessing it.
+_pose_dt_ema = 0.0
+_pose_last_t = None
 
 
 def on_pose_result(result, output_image, timestamp_ms):
-    global latest_pose_result, latest_pose_packet
+    global latest_pose_result, latest_pose_packet, _pose_dt_ema, _pose_last_t
+    now = time.monotonic()
     latest_pose_result = result
-    latest_pose_packet = (result, time.monotonic())
+    latest_pose_packet = (result, now)
+    if _pose_last_t is not None:
+        dt = now - _pose_last_t
+        _pose_dt_ema = (dt if _pose_dt_ema == 0.0 else
+                        (1.0 - _HAND_DT_EMA_ALPHA) * _pose_dt_ema
+                        + _HAND_DT_EMA_ALPHA * dt)
+    _pose_last_t = now
 
 
 def on_hand_result(result, output_image, timestamp_ms):
@@ -50,7 +61,26 @@ def hand_fps():
     return 1.0 / _hand_dt_ema if _hand_dt_ema > 0.0 else 0.0
 
 
+def pose_fps():
+    """Smoothed pose-detector callback rate (Hz); 0.0 until two results."""
+    return 1.0 / _pose_dt_ema if _pose_dt_ema > 0.0 else 0.0
+
+
 def build_pose_detector():
+    """Build the pose detector for the configured backend.
+
+    HALL_POSE_INFERENCE == "gpu" returns the onnxruntime two-stage BlazePose
+    detector (GpuPoseDetector, CUDA/TensorRT-capable); anything else (default
+    "mediapipe") returns MediaPipe's PoseLandmarker. Both expose
+    ``detect_async(image, timestamp_ms)`` and ``close()`` and publish results
+    via ``on_pose_result`` into ``latest_pose_packet``, so ``main.py`` is
+    identical for both.
+    """
+    if POSE_INFERENCE == "gpu":
+        # Lazy import: keeps the onnxruntime dependency off the default path.
+        from detection.gpu_pose import GpuPoseDetector
+        return GpuPoseDetector(result_callback=on_pose_result)
+
     base_options = python.BaseOptions(model_asset_path=POSE_MODEL_PATH)
     options = vision.PoseLandmarkerOptions(
         base_options=base_options,

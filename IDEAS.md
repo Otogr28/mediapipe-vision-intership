@@ -96,11 +96,13 @@
   MediaPipe FaceLandmarker (a third detector, CPU cost on the Jetson TBD)
   is still the open stretch.
 
-- [ ] **GPU pose backend** *(perf, unblocks smoother skeleton — the one
-  optimization NOT delivered on 2026-07-07: blocked on a model)*: pose still
-  runs MediaPipe CPU at ~13 fps and is the choppiest thing on screen. Hands
-  already run TensorRT FP16 at ~28 fps. Needs a BlazePose-landmark ONNX
-  sourced/converted (the OpenCV zoo only ships the person detector; only
-  palm + handpose ONNX are vendored) — the runtime path (onnxruntime + TRT
-  cache) is already proven on the board, so this is purely a model-sourcing
-  task, not a code task.
+- [~] **GPU pose backend** — BUILT + validated local 2026-07-08 (round 10),
+  **deploy pending**. `HALL_POSE_INFERENCE=gpu` runs BlazePose person-det
+  (OpenCV zoo onnx) + pose-landmark (tf2onnx-converted from the .task's own
+  tflite) on onnxruntime/TensorRT — `detection/gpu_pose.py` +
+  `_zoo/mp_persondet.py` + `_zoo/mp_poselandmark.py`, models in `models/gpu/`.
+  The model-sourcing blocker is solved: the landmark tflite converts cleanly to
+  ONNX, and the detector (which tf2onnx CAN'T convert) comes pre-converted from
+  the OpenCV zoo. Validated to mean 0.027 landmark error vs MediaPipe on a clip
+  (no camera needed). Remaining: deploy to the Jetson + confirm the fps win and
+  memory fit on-device (see CONTINUE.md / SHARED.md round 10).

@@ -1301,3 +1301,67 @@ times fast, expect brief kiosk blinks.
 ### Still open / next levers if body still lags
 Hands' world landmarks (fingers/palm) are still RAW — same smoother could apply
 (needs per-hand filter identity). And the real pose-fps fix remains GPU pose.
+
+## Update - 2026-07-08 - [Claude (Opus 4.8)]
+
+### Round 10 — GPU BODY POSE backend (the real body-lag fix; built + validated local, NOT yet deployed)
+User: "mira si podes correr el body en el gpu también, capaz ajusta la vram."
+Delivered lever #3 from CONTINUE.md — pose no longer has to run MediaPipe CPU.
+
+- **New `detection/gpu_pose.py` (`GpuPoseDetector`):** two-stage ONNX BlazePose
+  (person-det -> pose-landmark) through onnxruntime, drop-in for MediaPipe's
+  PoseLandmarker (same `detect_async`/`close`, same async worker-thread design as
+  `gpu_hands.py`, emits a `pose_landmarks`/`pose_world_landmarks`-compatible
+  result). Selected by **`HALL_POSE_INFERENCE=gpu`** (config `POSE_INFERENCE`);
+  MediaPipe stays the default. `hallrun` now defaults it to `gpu` (like hands).
+- **Vendored `_zoo/mp_persondet.py`:** OpenCV Model Zoo BlazePose person detector
+  (Apache-2.0, 224x224 NCHW, 2254 anchors), cv.dnn swapped for onnxruntime like
+  `mp_palmdet.py`. Returns `[box(4), 4 keypoints(8), score]`; kp0=hip-center,
+  kp1=full-body point.
+- **New `_zoo/mp_poselandmark.py`:** landmark stage — ROI geometry
+  (`detections_to_rect`/`rect_transformation`, ported from geaxgx/depthai_blazepose,
+  MIT) + the 195/117 tensor decode (39x[x,y,z,vis,pres] image + 39x[x,y,z] world,
+  take 33). **GOTCHA that cost a debug cycle:** geaxgx does the ROI math in
+  square-NORMALIZED coords; our frame is 16:9 and the detector returns keypoints in
+  PIXELS — normalizing x/w, y/h stretched the ROI ~3.5x (mean err 0.22). Fixed by
+  doing all ROI math in **pixels (isotropic)** -> mean err 0.027. Also: the
+  pose-flag score is already a probability (person 1.0 / blank 0.0), so NO sigmoid
+  on it (matches geaxgx); visibility IS a logit -> sigmoid (kept).
+- **Models (gitignored, in `models/gpu/`):** `person_detection_mediapipe_2023mar.onnx`
+  (OpenCV zoo, git-lfs via media.githubusercontent.com) + `pose_landmark_lite.onnx`
+  (tf2onnx-converted from the `pose_landmarks_detector.tflite` INSIDE
+  `models/pose_landmarker_lite.task` — so it's the SAME landmark model the MediaPipe
+  path used). NB: the DETECTOR tflite would not convert via tf2onnx
+  (`cannot reshape 96 into (16,1,1,24)`) — that's why the detector comes from the
+  zoo's pre-converted onnx instead.
+- **Added `detectors.pose_fps()`** (mirrors `hand_fps()`) + `pose_fps` in the web
+  debug state — CONTINUE.md lever #1 (measure the real pose rate) is now free.
+- **VRAM lever (user's ask):** `HALL_TRT_MAX_WORKSPACE` (MiB) caps each TRT engine's
+  build workspace. Opt-in (unset = TensorRT default, hand setup unchanged). The Orin
+  now runs 4 TRT engines when Vtuber is active (palm+handpose+pose-det+pose-lm) on 8
+  GB shared memory — set this if it OOMs.
+
+### VALIDATED (local, no camera, no Jetson) — the video harness + a local NVIDIA GPU
+Ran the whole GPU pipeline (onnxruntime CPU) on a real clip and compared every
+frame's 33 landmarks to MediaPipe ground truth: **mean 2D error 0.027 (~17px @
+640w), world err ~0.08 m** — skeletons overlap tightly, no flips (saved an overlay
+PNG). Full async `GpuPoseDetector` smoke-tested: 33 lms + 33 world, drop-in result.
+
+### STILL TO DO — deploy to the Jetson (blocked on the user)
+NOT deployed. Two things needed from the user: (1) **Tailscale SSH browser auth** —
+`ssh jetson@100.91.206.114` currently returns a `login.tailscale.com/a/...`
+check-mode URL to approve; (2) go-ahead to push (restarts the live kiosk).
+
+**DEPLOY GOTCHA — the models don't ride the git auto-update.** `hall-update.sh`
+does `git reset --hard origin/main` (tracked content only) and the `.onnx` under
+`models/gpu/` are **gitignored**, so pushing the code is NOT enough — the two new
+pose ONNX files must be rsync'd separately (they reach the Jetson only via
+`deploy.sh`, which rsyncs `models/`, or a targeted
+`rsync -az models/gpu/ jetson@…:~/HalLMediaPipe/models/gpu/`). If they're missing
+the app degrades SAFELY to hand-only (`pose detector build failed; staying
+hand-only`) — no crash, but GPU pose won't actually run. So: **push code + rsync
+`models/gpu/` + let first launch build 2 FP16 TRT engines (~1-2 min each, cached).**
+ON DEVICE, then: confirm `pose_fps` jumped from ~13, watch `tegrastats`/`free -h`
+for the 8 GB ceiling (`HALL_TRT_MAX_WORKSPACE` caps it), and A/B the body-vs-hand
+feel the user complained about. Laptop pose is too fast to feel the win — the Jetson
+is the real test.
