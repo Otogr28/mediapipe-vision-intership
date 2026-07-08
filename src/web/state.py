@@ -45,12 +45,26 @@ def _hands_state(hand_result, now):
     apply the same staleness rule as the cv2 cursor (hide past ``seen_ms``).
     """
     landmarks_by_id = {}
+    world_by_id = {}
+    handed_by_id = {}
     if hand_result is not None:
+        # Metric 3D hand skeleton + handedness — present on BOTH backends
+        # (MediaPipe HandLandmarker and the GPU shim in gpu_hands.py), but both
+        # can emit shorter/empty lists, so index defensively.
+        world = getattr(hand_result, "hand_world_landmarks", None) or []
+        handed = getattr(hand_result, "handedness", None) or []
         for i, lms in enumerate(hand_result.hand_landmarks):
             hid = gestures.hand_id(hand_result, i)
             landmarks_by_id[hid] = [
                 [round(lm.x, 4), round(lm.y, 4)] for lm in lms
             ]
+            if i < len(world) and world[i]:
+                world_by_id[hid] = [
+                    [round(w.x, 4), round(w.y, 4), round(w.z, 4)]
+                    for w in world[i]
+                ]
+            if i < len(handed) and handed[i]:
+                handed_by_id[hid] = handed[i][0].category_name
 
     hands = []
     for hid, m in gestures.pinch_infos():
@@ -65,6 +79,10 @@ def _hands_state(hand_result, now):
             "held": m.closed,
             "seen_ms": round((now - m.last_seen) * 1000.0, 1),
             "landmarks": landmarks_by_id.get(hid),
+            # 3D hand skeleton (meters, wrist origin) + raw handedness — drive
+            # the vtuber's hand orientation + fingers. None during grace window.
+            "world": world_by_id.get(hid),
+            "handedness": handed_by_id.get(hid),
         })
     return hands
 

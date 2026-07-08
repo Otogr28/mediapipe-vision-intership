@@ -78,23 +78,37 @@ def fake_hand(t):
     }
 
 
+def vtuber_center(t):
+    """Moving body centre (norm image) + half shoulder-width, so the avatar's
+    root-follow (translation) and distance-scale can be verified headless."""
+    cx = 0.5 + 0.22 * math.sin(t * 0.5)     # slide left/right across the frame
+    cy = 0.42 + 0.05 * math.sin(t * 0.37)   # drift up/down
+    hw = 0.10 + 0.03 * math.sin(t * 0.6)    # shoulder half-width -> avatar scale
+    return cx, cy, hw
+
+
 def vtuber_pose(t):
-    """Synthetic 33-landmark pose (mirrored-feed labelling, like the real
-    backend): the person's RIGHT arm (idx 12/14/16, on the image RIGHT) is
-    raised UP, their LEFT arm (11/13/15, image LEFT) is held out HORIZONTAL.
-    Asymmetric on purpose so the mirror mapping is obvious — the avatar's
-    image-right arm should go up, its image-left arm should point left."""
+    """Synthetic 33-landmark 2D pose (mirrored-feed labelling). The image-RIGHT
+    arm (12/14/16) is raised, the image-LEFT arm (11/13/15) is horizontal —
+    asymmetric so the mirror is obvious. The whole body slides + breathes
+    (vtuber_center) to exercise the avatar's screen-position follow + scale."""
     wob = 0.03 * math.sin(t * 1.5)
-    lm = [[0.5, 0.5, 0.4] for _ in range(33)]
-    lm[0] = [0.5, 0.30, 0.99]                       # nose
-    # image-LEFT side (person's left arm) — held out horizontally left
-    lm[11] = [0.40, 0.42, 0.99]                     # L shoulder
-    lm[13] = [0.29, 0.44, 0.99]                     # L elbow
-    lm[15] = [0.18, 0.46 + wob, 0.99]               # L wrist
-    # image-RIGHT side (person's right arm) — raised straight up
-    lm[12] = [0.60, 0.42, 0.99]                     # R shoulder
-    lm[14] = [0.64, 0.30, 0.99]                     # R elbow
-    lm[16] = [0.68, 0.16 + wob, 0.99]               # R wrist
+    cx, cy, hw = vtuber_center(t)
+    lm = [[cx, cy + 0.10, 0.5] for _ in range(33)]
+    lm[0] = [cx, cy - 0.12, 0.99]                      # nose
+    # image-LEFT arm — held out horizontally to the left
+    lm[11] = [cx - hw, cy, 0.99]                        # L shoulder
+    lm[13] = [cx - hw - 0.11, cy + 0.02, 0.99]         # L elbow
+    lm[15] = [cx - hw - 0.22, cy + 0.04 + wob, 0.99]   # L wrist
+    lm[19] = [cx - hw - 0.25, cy + 0.04 + wob, 0.99]   # L index
+    # image-RIGHT arm — raised straight up
+    lm[12] = [cx + hw, cy, 0.99]                        # R shoulder
+    lm[14] = [cx + hw + 0.04, cy - 0.12, 0.99]         # R elbow
+    lm[16] = [cx + hw + 0.08, cy - 0.26 + wob, 0.99]   # R wrist
+    lm[20] = [cx + hw + 0.10, cy - 0.30 + wob, 0.99]   # R index
+    # hips (spine gating)
+    lm[23] = [cx - 0.06, cy + 0.34, 0.9]               # L hip
+    lm[24] = [cx + 0.06, cy + 0.34, 0.9]               # R hip
     return [[round(a, 4), round(b, 4), round(c, 2)] for a, b, c in lm]
 
 
@@ -129,6 +143,54 @@ def vtuber_world(t):
     lm[27] = [-0.13, 0.90, 0.0]                       # L ankle
     lm[28] = [0.13, 0.90, 0.0]                        # R ankle
     return [[round(a, 3), round(b, 3), round(c, 3)] for a, b, c in lm]
+
+
+def _finger_points(mcp, segs, curl):
+    """MCP + 3 joint points for one finger, bending toward the palm (-z) as
+    `curl` (0..1) rises; more bend at the distal joints."""
+    pts = [list(mcp)]
+    pos = list(mcp)
+    ang = 0.0
+    for i, seg_len in enumerate(segs):
+        ang += curl * (0.5 if i == 0 else 1.0)
+        pos = [pos[0], pos[1] + seg_len * math.cos(ang),
+               pos[2] - seg_len * math.sin(ang)]
+        pts.append(list(pos))
+    return pts
+
+
+def fake_hand_world(t, side):
+    """Synthetic 21-pt metric hand skeleton (wrist origin). Fingers curl on a
+    slow cycle and the whole palm ROLLS about the finger axis so palm-facing is
+    visible. The absolute orientation is rough (exact convention is confirmed on
+    the real camera) — the point is that the palm turns and the fingers bend."""
+    curl = 0.5 * (1.0 - math.cos(t * 0.9))     # 0..1 open -> fist
+    roll = 0.9 * math.sin(t * 0.6)             # palm swivels toward/away
+    sx = 1.0 if side == "Right" else -1.0      # mirror the thumb for the left hand
+    w3 = [[0.0, 0.0, 0.0] for _ in range(21)]
+    bases = {
+        "thumb":  ([0.035 * sx, 0.015, 0.010], [0.035, 0.030, 0.025]),
+        "index":  ([0.022 * sx, 0.060, 0.0], [0.040, 0.025, 0.020]),
+        "middle": ([0.005 * sx, 0.065, 0.0], [0.045, 0.030, 0.022]),
+        "ring":   ([-0.015 * sx, 0.060, 0.0], [0.040, 0.028, 0.020]),
+        "little": ([-0.033 * sx, 0.052, 0.0], [0.030, 0.022, 0.016]),
+    }
+    slots = {"thumb": (1, 2, 3, 4), "index": (5, 6, 7, 8),
+             "middle": (9, 10, 11, 12), "ring": (13, 14, 15, 16),
+             "little": (17, 18, 19, 20)}
+    for name, (mcp, segs) in bases.items():
+        pts = _finger_points(mcp, segs, curl * (0.6 if name == "thumb" else 1.0))
+        for slot, p in zip(slots[name], pts):
+            w3[slot] = p
+    c, s = math.cos(roll), math.sin(roll)      # roll about the finger (y) axis
+    return [[round(x * c + z * s, 4), round(y, 4), round(-x * s + z * c, 4)]
+            for x, y, z in w3]
+
+
+def fake_hand_2d(wx, wy):
+    """21 norm-image [x,y] points at the wrist screen pos. Only [0] (wrist) is
+    read (hand->avatar side matching); not drawn over the avatar in vtuber."""
+    return [[round(wx, 4), round(wy, 4)] for _ in range(21)]
 
 
 def scene_state(t):
@@ -308,21 +370,25 @@ def scene_state(t):
             btn("spawn.vtuber", "Vtuber", margin + 130, margin, 150, 50, pressed=True),
             btn("reset", "Reset", W - 130 - margin, H - 50 - margin, 130, 50),
         ]
-        # Two hands so both paws + arms render; landmarks null -> the puppet
-        # anchors to the pinch cursor.
+        # Two hands placed at each arm's WRIST so the avatar's image-x hand
+        # matcher pairs hand<->arm on the same screen side; each carries a full
+        # 21-pt 3D `world` skeleton (palm roll + finger curl) + handedness.
+        cx, cy, hw = vtuber_center(t)
+        wl_x, wl_y = cx - hw - 0.22, cy + 0.04      # image-LEFT wrist (horizontal arm)
+        wr_x, wr_y = cx + hw + 0.08, cy - 0.26      # image-RIGHT wrist (raised arm)
         base["hands"] = [
-            {"id": "Left", "cursor": [round(W * 0.36 + 60 * math.cos(t), 1),
-                                      round(H * 0.62 + 50 * math.sin(t * 1.3), 1)],
-             "press_cursor": [W * 0.36, H * 0.62], "state": "open",
-             "progress": round(0.5 * (1 - math.cos(t * 1.7)), 3),
-             "ratio": 0.7, "pinching": False, "held": False,
-             "seen_ms": 0.0, "landmarks": None},
-            {"id": "Right", "cursor": [round(W * 0.64 + 60 * math.cos(t + 1), 1),
-                                       round(H * 0.6 + 50 * math.sin(t * 1.1), 1)],
-             "press_cursor": [W * 0.64, H * 0.6], "state": "open",
+            {"id": "handR", "cursor": [round(wr_x * W, 1), round(wr_y * H, 1)],
+             "press_cursor": [round(wr_x * W, 1), round(wr_y * H, 1)], "state": "open",
              "progress": round(0.5 * (1 - math.cos(t * 2.1)), 3),
-             "ratio": 0.7, "pinching": False, "held": False,
-             "seen_ms": 0.0, "landmarks": None},
+             "ratio": 0.7, "pinching": False, "held": False, "seen_ms": 0.0,
+             "landmarks": fake_hand_2d(wr_x, wr_y),
+             "world": fake_hand_world(t, "Right"), "handedness": "Right"},
+            {"id": "handL", "cursor": [round(wl_x * W, 1), round(wl_y * H, 1)],
+             "press_cursor": [round(wl_x * W, 1), round(wl_y * H, 1)], "state": "open",
+             "progress": round(0.5 * (1 - math.cos(t * 1.7)), 3),
+             "ratio": 0.7, "pinching": False, "held": False, "seen_ms": 0.0,
+             "landmarks": fake_hand_2d(wl_x, wl_y),
+             "world": fake_hand_world(t, "Left"), "handedness": "Left"},
         ]
         base["pose"] = vtuber_pose(t)
         base["pose_world"] = vtuber_world(t)

@@ -9,6 +9,7 @@
  */
 
 export type Vec2 = [number, number];
+export type Vec3 = [number, number, number];
 
 export type PinchPhase = "open" | "closing" | "closed" | "releasing";
 
@@ -25,6 +26,13 @@ export interface HandState {
   seen_ms: number;
   /** 21 normalized [x, y] landmarks, or null while in the grace window */
   landmarks: Vec2[] | null;
+  /** 21 metric [x, y, z] hand-world landmarks (wrist origin, meters) — drives
+   *  the vtuber's hand orientation + finger curl. null while in the grace
+   *  window (or if a backend omits them). */
+  world?: Vec3[] | null;
+  /** raw MediaPipe handedness label; the avatar matches hands by image-x, so
+   *  this is a fallback only (unreliable on the mirrored feed). */
+  handedness?: "Left" | "Right" | null;
 }
 
 /** 33 pose landmarks as [x, y, visibility], normalized (image space). */
