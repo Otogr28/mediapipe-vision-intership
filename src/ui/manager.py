@@ -1,6 +1,6 @@
 import cv2
 
-from config import DEBUG_HUD, POSE_ENABLED
+from config import DEBUG_HUD, POSE_ENABLED, START_VTUBER
 from detection.gestures import update_pinches
 from rendering.gl_lensing import LensingRenderer
 from ui.button import Button
@@ -63,6 +63,12 @@ class UIManager:
         self._debug_hud = DebugHUD(frame_w, frame_h) if DEBUG_HUD else None
 
         self._build_buttons()
+
+        # Dev: jump straight into the Vtuber scene (drive the avatar from a
+        # recorded video instead of live pinches). See config.START_VTUBER.
+        if START_VTUBER:
+            self.state = "interactables"
+            self._spawn_puppet()
 
     def _build_buttons(self):
         fw, fh = self.frame_w, self.frame_h
@@ -243,6 +249,13 @@ class UIManager:
         # the result's age by velocity extrapolation.
         update_pinches(hand_result, self.frame_w, self.frame_h,
                        received_t=hand_received_t)
+
+        # Dev lock: keep the puppet alive so a video-driven session can't
+        # accidentally Reset itself back to the menu.
+        if START_VTUBER and (self._puppet is None or self.state != "interactables"):
+            self.state = "interactables"
+            if self._puppet is None:
+                self._spawn_puppet()
 
         if self.state == "menu":
             self._menu_interactables_btn.update(hand_result, pose_landmarks, self.frame_w, self.frame_h)
