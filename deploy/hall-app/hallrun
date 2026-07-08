@@ -45,6 +45,16 @@ export HALL_POSE_INFERENCE="${HALL_POSE_INFERENCE:-gpu}"
 # fallbacks. Override the whole chain with HALL_ONNX_PROVIDERS.
 export HALL_ONNX_PROVIDERS="${HALL_ONNX_PROVIDERS:-TensorrtExecutionProvider,CUDAExecutionProvider,CPUExecutionProvider}"
 
+# Cap each TRT engine's build workspace to 512 MiB. The Orin Nano's 8 GB is
+# SHARED CPU+GPU and with the Vtuber active four engines build/run (palm +
+# handpose + pose-detector + pose-landmark) beside the kiosk browser + the
+# black-hole shader — a default (unbounded) workspace can OOM the board during a
+# rebuild. 512 MiB was measured sufficient to build all four (pose engines ~2 min
+# each). Only affects BUILDS; cached engines are reused regardless, so this is a
+# no-op once .trt_cache is warm — it just makes a cold rebuild safe. Override/lift
+# with HALL_TRT_MAX_WORKSPACE (blank = TensorRT's own default).
+export HALL_TRT_MAX_WORKSPACE="${HALL_TRT_MAX_WORKSPACE:-512}"
+
 # When started over SSH there is no X cookie in the environment; reuse the
 # local graphical session's so the window lands on the attached monitor.
 if [ -z "${XAUTHORITY:-}" ]; then
