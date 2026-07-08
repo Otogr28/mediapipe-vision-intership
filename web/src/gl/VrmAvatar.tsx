@@ -71,6 +71,16 @@ const BODY_SCALE_TAU = 0.12;
 // Max wrist deviation from rest (relative to the forearm) — caps the twist that
 // otherwise collapses the mesh at the wrist.
 const WRIST_MAX_RAD = (72 * Math.PI) / 180;
+// Forearm-twist distribution. The forearm has no dedicated twist bone, so when
+// the palm rolls (pronation/supination) the whole rotation piles onto the wrist
+// joint — which is clamped (WRIST_MAX_RAD above), so the hand turns but the arm
+// does not and the wrist reads as "broken". Fold this fraction of the wrist's
+// roll ABOUT THE FOREARM AXIS into the forearm bone itself, so the forearm rolls
+// WITH the hand and the wrist clamp barely engages. 0 = off (old behavior), 1 =
+// forearm absorbs all the roll. Capped so a noisy palm estimate can't over-spin
+// the forearm.
+const FOREARM_TWIST_GAIN = 0.65;
+const FOREARM_TWIST_MAX_RAD = (110 * Math.PI) / 180;
 
 // --- gates / follow tuning ------------------------------------------------
 const POSE_MIN_VIS = 0.25; // ignore pose landmarks below this visibility
@@ -163,6 +173,12 @@ const _delta = new THREE.Quaternion();
 const _world = new THREE.Quaternion();
 const _local = new THREE.Quaternion();
 const _qBasis = new THREE.Quaternion();
+// forearm-twist scratch (swing-twist decomposition of the hand vs the forearm)
+const _qHandWorld = new THREE.Quaternion();
+const _qRel = new THREE.Quaternion();
+const _twist = new THREE.Quaternion();
+const _partial = new THREE.Quaternion();
+const _axis = new THREE.Vector3();
 const _restDir = new THREE.Vector3();
 const _target = new THREE.Vector3();
 const _pos = new THREE.Vector3();
@@ -256,7 +272,10 @@ function palmBasisFromWorld(W: Vec3[], nSign: number, out: THREE.Quaternion): bo
  * in world space then converts to local, so children follow already-rotated
  * parents. Minimal rotation from rest → preserves rest roll, no 180° flip.
  */
-function aimBone(rig: Rig, name: string, dirWorld: THREE.Vector3, alpha: number) {
+function aimBone(
+  rig: Rig, name: string, dirWorld: THREE.Vector3, alpha: number,
+  childWorld?: THREE.Quaternion,
+) {
   const bone = rig.bones[name];
   const r = rig.rest[name];
   if (!bone || !bone.parent || !r || dirWorld.lengthSq() < 1e-9) return;
@@ -267,6 +286,25 @@ function aimBone(rig: Rig, name: string, dirWorld: THREE.Vector3, alpha: number)
   _delta.setFromUnitVectors(_restDir, _target); // world rotation rest→target
   _world.copy(_delta).multiply(_rw); // desired world quat
   _local.copy(_pq).invert().multiply(_world); // back into local space
+  // Forearm twist: if the child's (hand's) desired world orientation is given,
+  // fold a fraction of its ROLL about this bone's axis into this bone, so the
+  // forearm rolls with the wrist (see FOREARM_TWIST_GAIN). Computed off the aim
+  // target (not the live bone quat) so it eases in one slerp with no feedback.
+  if (childWorld && FOREARM_TWIST_GAIN > 0) {
+    _qRel.copy(_world).invert().multiply(childWorld); // hand relative to this bone
+    _axis.copy(r.childLocalPos).normalize(); // bone axis in its own local frame
+    const d = _qRel.x * _axis.x + _qRel.y * _axis.y + _qRel.z * _axis.z;
+    _twist.set(_axis.x * d, _axis.y * d, _axis.z * d, _qRel.w); // swing-twist: twist part
+    if (_twist.lengthSq() > 1e-8) {
+      _twist.normalize();
+      const ang = 2 * Math.acos(THREE.MathUtils.clamp(Math.abs(_twist.w), 0, 1));
+      const want = Math.min(FOREARM_TWIST_GAIN * ang, FOREARM_TWIST_MAX_RAD);
+      if (ang > 1e-4) {
+        _partial.identity().slerp(_twist, want / ang); // partial twist (shortest)
+        _local.multiply(_partial); // roll about the bone's own axis (local frame)
+      }
+    }
+  }
   bone.quaternion.slerp(_local, alpha);
 }
 
@@ -332,6 +370,18 @@ function rigArm(
     restBone(rig, upper, damp(RELAX_TAU));
   }
 
+  // Desired hand WORLD orientation (palm basis × captured offset) — the SAME
+  // target rigHandOrientation will drive the hand toward. Passed to the forearm
+  // aim so the forearm rolls a fraction of the wrist's twist (FOREARM_TWIST_GAIN)
+  // and the wrist clamp barely engages — the arm now rotates WITH the hand.
+  const side: "left" | "right" = hand.startsWith("left") ? "left" : "right";
+  const hr = rig.handRest[side];
+  let handWorldQ: THREE.Quaternion | undefined;
+  if (sideHand?.world && DRIVE_HAND_ORIENT && hr &&
+      palmBasisFromWorld(sideHand.world, HAND_N_SIGN[side], _qBasis)) {
+    handWorldQ = _qHandWorld.copy(_qBasis).multiply(hr);
+  }
+
   // Lower arm — fast (hand-rate screen plane + slow pose depth) when a hand is
   // matched, else the slow pose elbow→wrist.
   const fastWrist =
@@ -347,12 +397,12 @@ function rigArm(
     if (m2 > 1e-4) {
       const k = screenLen / m2; // scale the norm-image delta to the pose metric
       _dir.set(k * d2x, -k * d2y, _p.z); // image y down → three up; depth from pose
-      aimBone(rig, lower, _dir, damp(LOWER_ARM_TAU));
+      aimBone(rig, lower, _dir, damp(LOWER_ARM_TAU), handWorldQ);
     } else {
-      aimBone(rig, lower, _p, damp(LOWER_ARM_TAU));
+      aimBone(rig, lower, _p, damp(LOWER_ARM_TAU), handWorldQ);
     }
   } else if (vis(pose, ch.b) >= POSE_MIN_VIS && vis(pose, ch.c) >= POSE_MIN_VIS) {
-    aimBone(rig, lower, segDir(W, ch.b, ch.c, _dir), damp(UPPER_ARM_TAU));
+    aimBone(rig, lower, segDir(W, ch.b, ch.c, _dir), damp(UPPER_ARM_TAU), handWorldQ);
   } else {
     restBone(rig, lower, damp(RELAX_TAU));
   }

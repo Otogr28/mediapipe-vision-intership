@@ -1368,6 +1368,35 @@ a fallback. So deploys no longer need the `login.tailscale.com/a/...` browser st
 Was blocked on: (1) a one-time Tailscale SSH browser auth (now bypassed by the 2222
 key path above); (2) go-ahead to push (done).
 
+## Update - 2026-07-09 - [Claude (Opus 4.8)]
+
+### Round 11 — forearm-twist distribution (fix the "wrist looks broken" on roll)
+User (GPU pose feels great now): "sigue el problemita con la muñeca — el brazo no
+rota con la mano, se ve roto en esa parte." ROOT CAUSE: the forearm (`lowerArm`) was
+oriented by DIRECTION only (`setFromUnitVectors`, elbow→wrist) with no roll, so any
+palm roll (pronation/supination) piled entirely onto the wrist joint — which is
+clamped to `WRIST_MAX_RAD≈72°` (round 8's candy-wrapper fix). Past the clamp the hand
+turned but the forearm didn't → visible break.
+
+- **`VrmAvatar.tsx` `aimBone` now takes an optional `childWorld`** (the hand's desired
+  world orientation). When present it swing-twist-decomposes the hand-relative-to-
+  forearm rotation about the forearm's own axis (`rest.childLocalPos`) and folds a
+  fraction (`FOREARM_TWIST_GAIN=0.65`, capped `FOREARM_TWIST_MAX_RAD=110°`) of that
+  TWIST into the forearm's local target — so the forearm rolls WITH the wrist and the
+  hand-joint clamp barely engages. Computed off the aim TARGET (not the live bone
+  quat) and applied in a single slerp → no inter-frame feedback/wobble.
+- **`rigArm` computes the hand's world orientation once** (`palmBasis × handRest`, the
+  same target `rigHandOrientation` uses) and passes it to the forearm aim. `side`
+  derived from the bone name.
+
+### Verified (local video harness + headless WebGL render)
+Drove the avatar from the shrugging clip (real hands w/ palm roll), `npm run build`
+clean, captured 3 frames (palms up / palms forward / fingers spread): the forearm
+now rotates with the palm, the wrist-forearm junction is continuous — no break, no
+candy-wrapper, no console errors. web/dist rebuilt + committed (rides the git
+auto-update; no model change so no rsync). Tune `FOREARM_TWIST_GAIN` (0=old behavior,
+1=forearm takes all the roll) if the user wants more/less forearm follow.
+
 **DEPLOY GOTCHA — the models don't ride the git auto-update.** `hall-update.sh`
 does `git reset --hard origin/main` (tracked content only) and the `.onnx` under
 `models/gpu/` are **gitignored**, so pushing the code is NOT enough — the two new
