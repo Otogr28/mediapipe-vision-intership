@@ -13,10 +13,11 @@ import type { SnapshotPair } from "../state/useAppState";
 import { setVrmReady } from "./vrmState";
 
 /**
- * Open-source VRM vtuber avatar (CC0 VRoid model in /avatar.vrm), rendered
- * with three.js + @pixiv/three-vrm as a WebGL layer — the "real" puppet that
- * replaces the Canvas2D mascot whenever the model loads. Mounted only while a
- * vtuber object is present (see App.tsx), so three.js never runs otherwise.
+ * Open-source VRM vtuber avatar (CC0 model "Sendagaya Shino" from
+ * madjin/vrm-samples, at /avatar.vrm), rendered with three.js +
+ * @pixiv/three-vrm as a WebGL layer. Mounted only while a vtuber object is
+ * present (see App.tsx), so three.js never runs otherwise. Until the model is
+ * live, overlay/scene.ts shows a loading spinner (no placeholder puppet).
  *
  * Rigging is a small, hand-written IMAGE-PLANE mapping from the app's own
  * landmarks (no Kalidokit, no z needed): each arm bone is aimed from its joint
