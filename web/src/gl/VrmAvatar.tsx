@@ -38,15 +38,27 @@ import { setVrmReady } from "./vrmState";
  */
 
 // --- rig tuning knobs ----------------------------------------------------
-const ARM_DAMP = 0.45; // slerp toward the target each frame (higher = snappier)
-const HAND_DAMP = 0.35;
-const SPINE_DAMP = 0.18;
-const LEG_DAMP = 0.3;
-const HEAD_DAMP = 0.3;
-const RELAX_DAMP = 0.1; // ease a bone back to rest when its landmarks vanish
+// Smoothing is a TIME CONSTANT (seconds), not a fixed per-frame slerp — so the
+// tracking lag is the same whether the browser renders at 60 fps (laptop) or
+// ~30 fps (Jetson kiosk). A fixed per-frame factor lags MUCH more at low fps,
+// which is what made the avatar feel delayed on-device. Smaller tau = snappier
+// = less delay following the user, at the cost of a little more jitter.
+const ARM_TAU = 0.045; // ~45 ms tracking lag
+const HAND_TAU = 0.05;
+const SPINE_TAU = 0.06;
+const LEG_TAU = 0.06;
+const HEAD_TAU = 0.05;
+const RELAX_TAU = 0.18; // ease a bone back to rest a bit more gently
 const POSE_MIN_VIS = 0.25; // ignore landmarks below this visibility
-const LEG_MIN_VIS = 0.55; // legs are usually out of frame — demand more before moving
+const LEG_MIN_VIS = 0.4; // legs move only when actually seen (lower = more eager)
 const BLINK_PERIOD = 4.2; // s between blinks
+
+// Current render-frame delta (s), refreshed at the top of each animate().
+let _frameDt = 1 / 60;
+/** First-order smoothing factor for this frame given a time constant `tau`. */
+function damp(tau: number) {
+  return 1 - Math.exp(-_frameDt / Math.max(tau, 1e-4));
+}
 const BLINK_LEN = 0.14; // s each blink lasts
 
 // MediaPipe world axes (x image-right, y down, z away from camera) → three.js
@@ -126,7 +138,7 @@ const vis = (pose: PoseState, i: number) => (pose[i] ? pose[i][2] : 0);
  * arbitrary twist), and it's the minimal rotation (`setFromUnitVectors`), so
  * there's no 180° flip.
  */
-function aimBone(rig: Rig, name: string, dirWorld: THREE.Vector3, damp: number) {
+function aimBone(rig: Rig, name: string, dirWorld: THREE.Vector3, alpha: number) {
   const bone = rig.bones[name];
   const r = rig.rest[name];
   if (!bone || !bone.parent || !r || dirWorld.lengthSq() < 1e-9) return;
@@ -137,14 +149,14 @@ function aimBone(rig: Rig, name: string, dirWorld: THREE.Vector3, damp: number) 
   _delta.setFromUnitVectors(_restDir, _target); // world rotation rest→target
   _world.copy(_delta).multiply(_rw); // desired world quat
   _local.copy(_pq).invert().multiply(_world); // back into local space
-  bone.quaternion.slerp(_local, damp);
+  bone.quaternion.slerp(_local, alpha);
 }
 
 /** Ease a bone back toward its captured rest rotation. */
-function restBone(rig: Rig, name: string, damp: number) {
+function restBone(rig: Rig, name: string, alpha: number) {
   const b = rig.bones[name];
   const r = rig.rest[name];
-  if (b && r) b.quaternion.slerp(r.restQuat, damp);
+  if (b && r) b.quaternion.slerp(r.restQuat, alpha);
 }
 
 /** Torso: aim the spine from the hips-midpoint toward the shoulders-midpoint
@@ -154,13 +166,13 @@ function rigSpine(rig: Rig, pose: PoseState, W: PoseWorld) {
   const okSh = vis(pose, L_SH) >= POSE_MIN_VIS && vis(pose, R_SH) >= POSE_MIN_VIS;
   const okHip = vis(pose, L_HIP) >= POSE_MIN_VIS && vis(pose, R_HIP) >= POSE_MIN_VIS;
   if (!okSh || !okHip) {
-    restBone(rig, "spine", RELAX_DAMP);
+    restBone(rig, "spine", damp(RELAX_TAU));
     return;
   }
   midPoint(W, L_SH, R_SH, _p);
   midPoint(W, L_HIP, R_HIP, _q);
   _dir.subVectors(_p, _q);
-  aimBone(rig, "spine", _dir, SPINE_DAMP);
+  aimBone(rig, "spine", _dir, damp(SPINE_TAU));
 }
 
 /** One arm: upper (shoulder→elbow), lower (elbow→wrist), hand (wrist→index).
@@ -175,21 +187,21 @@ function rigArm(
   W: PoseWorld,
 ) {
   if (vis(pose, ch.a) >= POSE_MIN_VIS && vis(pose, ch.b) >= POSE_MIN_VIS) {
-    aimBone(rig, upper, segDir(W, ch.a, ch.b, _dir), ARM_DAMP);
+    aimBone(rig, upper, segDir(W, ch.a, ch.b, _dir), damp(ARM_TAU));
   } else {
-    restBone(rig, upper, RELAX_DAMP);
+    restBone(rig, upper, damp(RELAX_TAU));
   }
   if (vis(pose, ch.b) >= POSE_MIN_VIS && vis(pose, ch.c) >= POSE_MIN_VIS) {
-    aimBone(rig, lower, segDir(W, ch.b, ch.c, _dir), ARM_DAMP);
+    aimBone(rig, lower, segDir(W, ch.b, ch.c, _dir), damp(ARM_TAU));
   } else {
-    restBone(rig, lower, RELAX_DAMP);
+    restBone(rig, lower, damp(RELAX_TAU));
   }
   // Wrist bend follows the pose's index knuckle — coarse (fingers come from the
   // hand detector, not pose), but enough to stop a stiff, frozen hand.
   if (vis(pose, ch.c) >= POSE_MIN_VIS && vis(pose, ch.tip) >= POSE_MIN_VIS) {
-    aimBone(rig, hand, segDir(W, ch.c, ch.tip, _dir), HAND_DAMP);
+    aimBone(rig, hand, segDir(W, ch.c, ch.tip, _dir), damp(HAND_TAU));
   } else {
-    restBone(rig, hand, RELAX_DAMP);
+    restBone(rig, hand, damp(RELAX_TAU));
   }
 }
 
@@ -204,14 +216,14 @@ function rigLeg(
   W: PoseWorld,
 ) {
   if (vis(pose, leg.a) >= LEG_MIN_VIS && vis(pose, leg.b) >= LEG_MIN_VIS) {
-    aimBone(rig, upper, segDir(W, leg.a, leg.b, _dir), LEG_DAMP);
+    aimBone(rig, upper, segDir(W, leg.a, leg.b, _dir), damp(LEG_TAU));
   } else {
-    restBone(rig, upper, RELAX_DAMP);
+    restBone(rig, upper, damp(RELAX_TAU));
   }
   if (vis(pose, leg.b) >= LEG_MIN_VIS && vis(pose, leg.c) >= LEG_MIN_VIS) {
-    aimBone(rig, lower, segDir(W, leg.b, leg.c, _dir), LEG_DAMP);
+    aimBone(rig, lower, segDir(W, leg.b, leg.c, _dir), damp(LEG_TAU));
   } else {
-    restBone(rig, lower, RELAX_DAMP);
+    restBone(rig, lower, damp(RELAX_TAU));
   }
 }
 
@@ -237,7 +249,7 @@ function rigBody(rig: Rig, pose: PoseState, W: PoseWorld) {
 }
 
 function relaxBody(rig: Rig) {
-  for (const name of Object.keys(rig.rest)) restBone(rig, name, 0.08);
+  for (const name of Object.keys(rig.rest)) restBone(rig, name, damp(RELAX_TAU));
 }
 
 function rigHead(rig: Rig, pose: PoseState) {
@@ -254,7 +266,7 @@ function rigHead(rig: Rig, pose: PoseState) {
   const target = rig.restHead
     .clone()
     .multiply(new THREE.Quaternion().setFromEuler(new THREE.Euler(pitch, yaw, 0, "YXZ")));
-  head.quaternion.slerp(target, HEAD_DAMP);
+  head.quaternion.slerp(target, damp(HEAD_TAU));
 }
 
 function rigFace(rig: Rig, mouth: number, tSec: number) {
@@ -393,6 +405,7 @@ export function VrmAvatar({ pairRef, frameW, frameH }: Props) {
       const now = performance.now();
       const dt = Math.min((now - lastT) / 1000, 0.05);
       lastT = now;
+      _frameDt = dt; // feed the frame-rate-independent smoothing (damp())
       const tSec = now / 1000;
 
       if (rig) {
