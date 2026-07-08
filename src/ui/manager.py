@@ -42,6 +42,10 @@ class UIManager:
         # The vtuber puppet, live only while the user spawns it in the
         # "interactables" state (None otherwise).
         self._puppet = None
+        # Vtuber "skeleton view" toggle (web frontend hides the avatar and
+        # draws the raw pose+hand inference on the body). Kiosk-accessible via
+        # the pinch button below; mirrored to the frontend in to_state().
+        self._show_points = False
         # Lazy-initialised the first time the user spawns the black hole —
         # postpones GL context creation until something actually needs it, and
         # keeps startup cost out of the camera-only path.
@@ -149,6 +153,17 @@ class UIManager:
             on_click=self._reset,
         )
 
+        # "Points" toggle (bottom-left, only while the vtuber puppet is live):
+        # flips the web skeleton view so the raw inference is visible on the
+        # touchless kiosk without a keyboard.
+        self._points_btn = Button(
+            x=margin, y=fh - RESET_H - margin,
+            width=150, height=RESET_H,
+            label="Points",
+            on_click=self._toggle_points,
+            font_scale=0.6,
+        )
+
     def _set_state(self, new_state):
         self.state = new_state
 
@@ -169,6 +184,10 @@ class UIManager:
     def _spawn_puppet(self):
         self._puppet = Puppet(self.frame_w, self.frame_h)
 
+    def _toggle_points(self):
+        self._show_points = not self._show_points
+        self._points_btn.selected = self._show_points
+
     def _spawn_sixseven(self):
         # Re-pressing the button while a counter is active resets the
         # tally — gives users a way to zero the count without leaving the
@@ -180,6 +199,8 @@ class UIManager:
         self._active_experiment = None
         self._sixseven = None
         self._puppet = None
+        self._show_points = False
+        self._points_btn.selected = False
         self.state = "menu"
 
     def wants_pose(self):
@@ -240,6 +261,7 @@ class UIManager:
                 self._sixseven.update(hand_result, pose_landmarks)
             if self._puppet is not None:
                 self._puppet.update(hand_result, pose_landmarks)
+                self._points_btn.update(hand_result, pose_landmarks, self.frame_w, self.frame_h)
             self._reset_btn.update(hand_result, pose_landmarks, self.frame_w, self.frame_h)
 
         elif self.state == "experiments":
@@ -273,7 +295,8 @@ class UIManager:
                     or self._sixseven_btn.pressed
                     or self._reset_btn.pressed
                     or any(s.grabbed for s in self.spheres)
-                    or (self._puppet is not None and self._puppet.grabbed))
+                    or (self._puppet is not None and (self._puppet.grabbed
+                        or self._points_btn.pressed)))
         if self.state == "experiments":
             if self._active_experiment is None:
                 return self._reset_btn.pressed or any(b.pressed for b in self._experiment_btns)
@@ -314,6 +337,7 @@ class UIManager:
             # The puppet renders last so its dim backdrop sits over the scene.
             if self._puppet is not None:
                 objects.append(self._puppet.to_state())
+                buttons.append(self._points_btn.to_state("points"))
 
         elif self.state == "experiments":
             if self._active_experiment is None:
@@ -344,6 +368,8 @@ class UIManager:
                 "state": self.state,
                 "experiment": experiment,
                 "hint": {"visible": self._pinch_hint.visible},
+                # Web-only: hide the avatar + draw the raw pose/hand skeleton.
+                "show_points": self._show_points,
             },
             "buttons": buttons,
             "speed": speed,
@@ -379,6 +405,7 @@ class UIManager:
             # The puppet dims the scene, so it draws over the spheres.
             if self._puppet is not None:
                 self._puppet.draw(frame)
+                self._points_btn.draw(frame)
             self._reset_btn.draw(frame)
 
         elif self.state == "experiments":

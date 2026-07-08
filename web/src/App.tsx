@@ -51,10 +51,15 @@ export function App() {
     return () => window.removeEventListener("keydown", onKey);
   }, []);
 
-  // Mirror the toggle into the module flag the Canvas2D loops read.
+  // Skeleton view is active from either the frontend toggle (`k` / `?skeleton=1`)
+  // OR the backend "Points" pinch button (`session.show_points`) — the latter
+  // makes it reachable on the touchless kiosk with no keyboard.
+  const skeletonView = showSkeleton || !!state?.session.show_points;
+
+  // Mirror it into the module flag the Canvas2D loops read.
   useEffect(() => {
-    setSkeletonView(showSkeleton);
-  }, [showSkeleton]);
+    setSkeletonView(skeletonView);
+  }, [skeletonView]);
 
   const frameW = state?.frame.w ?? 1920;
   const frameH = state?.frame.h ?? 1080;
@@ -83,7 +88,7 @@ export function App() {
           />
         )}
         <OverlayCanvas pairRef={pairRef} frameW={frameW} frameH={frameH} />
-        {hasVtuber && !showSkeleton && (
+        {hasVtuber && !skeletonView && (
           <Suspense fallback={null}>
             <VrmAvatar pairRef={pairRef} frameW={frameW} frameH={frameH} />
           </Suspense>
