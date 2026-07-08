@@ -5,10 +5,11 @@ import cv2
 from mediapipe.tasks.python import vision
 
 from capture import FreshestFrame
-from config import (CAMERA_STALL_S, POSE_ENABLED, SELECTED_CAMERA, STATE_FPS,
-                    WINDOW_HEIGHT, WINDOW_WIDTH)
+from config import (CAMERA_STALL_S, POSE_ENABLED, POSE_SMOOTHING,
+                    SELECTED_CAMERA, STATE_FPS, WINDOW_HEIGHT, WINDOW_WIDTH)
 from detection import detectors
 from detection.detectors import build_hand_detector, build_pose_detector
+from detection.pose_smoother import PoseSmoother
 from output import make_sink
 from rendering.drawing import draw_connections, draw_landmarks, toMpImage
 from ui.manager import UIManager
@@ -110,6 +111,10 @@ def main():
     # Set once if the lazy pose-detector build fails, so we don't retry (and
     # skip frames) every tick — the app just stays hand-only in that case.
     pose_build_failed = False
+    # One-Euro smoothing + velocity extrapolation for the body pose (see
+    # PoseSmoother) — fed on each new pose result, sampled every frame.
+    pose_smoother = PoseSmoother()
+    last_pose_obj = None
     # Web mode paces the loop to STATE_FPS: without cv2 drawing the loop
     # would spin far faster than the camera delivers frames, re-encoding
     # the same JPEG and re-running inference on duplicate frames for
@@ -165,23 +170,38 @@ def main():
                               flush=True)
                 if need_pose and pose_detector is not None:
                     pose_detector.detect_async(image=mp_image, timestamp_ms=timestamps_ms)
-                    pose_result = detectors.latest_pose_result
+                    pose_result, pose_received_t = detectors.latest_pose_packet
                 else:
-                    pose_result = None
+                    pose_result, pose_received_t = None, None
                 hand_detector.detect_async(image=mp_image, timestamp_ms=timestamps_ms)
 
                 hand_result, hand_received_t = detectors.latest_hand_packet
 
+                # Smooth the body: feed the One-Euro smoother on each NEW pose
+                # result, then sample its filtered + velocity-extrapolated output
+                # for THIS frame so the body glides between the ~13 fps results
+                # instead of stuttering/lagging (PoseSmoother). No person or pose
+                # off -> reset so it eases back in rather than snapping. The 3D
+                # world skeleton (meters, hips origin) drives the vtuber rig.
                 pose_landmarks = None
                 pose_world_landmarks = None
-                if pose_result is not None and pose_result.pose_landmarks:
-                    pose_landmarks = pose_result.pose_landmarks[0]
-                    # Metric 3D skeleton (meters, origin at hips) — drives the
-                    # vtuber rig in full 3D. Present alongside the image
-                    # landmarks; guard in case a build omits it.
-                    world = getattr(pose_result, "pose_world_landmarks", None)
-                    if world:
-                        pose_world_landmarks = world[0]
+                if need_pose and pose_result is not None and pose_result.pose_landmarks:
+                    if pose_result is not last_pose_obj:
+                        last_pose_obj = pose_result
+                        _w = getattr(pose_result, "pose_world_landmarks", None)
+                        pose_smoother.update(pose_result.pose_landmarks[0],
+                                             _w[0] if _w else None,
+                                             pose_received_t or time.monotonic())
+                    if POSE_SMOOTHING:
+                        pose_landmarks, pose_world_landmarks = \
+                            pose_smoother.sample(time.monotonic())
+                    else:
+                        pose_landmarks = pose_result.pose_landmarks[0]
+                        _w = getattr(pose_result, "pose_world_landmarks", None)
+                        pose_world_landmarks = _w[0] if _w else None
+                else:
+                    pose_smoother.reset()
+                    last_pose_obj = None
 
                 # Web mode streams the RAW frame — the browser draws the
                 # skeleton and all UI from the published state instead.
