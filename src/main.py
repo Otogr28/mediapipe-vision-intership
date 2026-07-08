@@ -166,8 +166,15 @@ def main():
                 hand_result, hand_received_t = detectors.latest_hand_packet
 
                 pose_landmarks = None
+                pose_world_landmarks = None
                 if pose_result is not None and pose_result.pose_landmarks:
                     pose_landmarks = pose_result.pose_landmarks[0]
+                    # Metric 3D skeleton (meters, origin at hips) — drives the
+                    # vtuber rig in full 3D. Present alongside the image
+                    # landmarks; guard in case a build omits it.
+                    world = getattr(pose_result, "pose_world_landmarks", None)
+                    if world:
+                        pose_world_landmarks = world[0]
 
                 # Web mode streams the RAW frame — the browser draws the
                 # skeleton and all UI from the published state instead.
@@ -184,7 +191,8 @@ def main():
                 if publish_state is None:
                     ui.draw(flip_frame)
                 else:
-                    publish_state(build_state(ui, hand_result, pose_landmarks))
+                    publish_state(build_state(ui, hand_result, pose_landmarks,
+                                              pose_world_landmarks))
 
                 sink.present(flip_frame)
                 if sink.should_quit():

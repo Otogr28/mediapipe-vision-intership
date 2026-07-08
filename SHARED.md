@@ -1152,3 +1152,42 @@ horizontal): the avatar mirrors it exactly, arms don't cross.
 - If on real hardware the arms still mirror the wrong way, the position-based
   assignment should prevent it — but the head-yaw sign is unverified (centred
   nose in the mock), so tune HEAD in VrmAvatar.tsx if the head turns wrong.
+
+## Update - 2026-07-08 - [Claude (Opus 4.8)]
+
+### What I did (round 6 — vtuber rig is now FULL 3D, not a flat swing)
+User: the avatar "only leans and only moves hands, without moving any joint —
+each landmark is 3D, why not drive every joint from a point?" Correct diagnosis.
+The old rig swung arms about a single screen-plane axis and threw away depth —
+`src/web/state.py` only serialized `[x, y, vis]`, never the metric z.
+
+Root fix — use MediaPipe's real 3D skeleton:
+- Backend now also emits `pose_world_landmarks` as **`state.pose_world`** (33
+  `[x,y,z]` meters, hips origin). Plumbed: `src/main.py` → `src/web/state.py`
+  (`_pose_world_state`) → `web/src/state/types.ts` (`PoseWorld`). 2D `pose`
+  still drives the skeleton overlay + head; visibility gate reuses `pose[i][2]`.
+- `web/src/gl/VrmAvatar.tsx` fully rewritten: `aimBone()` orients EACH bone
+  (spine, both upper/lower arms, wrists, both legs) along its body-segment
+  direction with `setFromUnitVectors` (minimal-rotation, full 3D → reaches
+  toward camera, twists, bends), solved parent-first so children follow. Delta
+  measured from the bone's REST world direction (keeps rest roll, no 180° flip).
+  Per-segment relax when a joint's visibility drops; legs gated at 0.55 (they're
+  usually off the head-to-hips framing). Head (nose yaw/pitch) + mouth unchanged.
+- Kept the round-5 mirror-by-image-x arm assignment (anti-crossing) verbatim.
+- MediaPipe→three axis map `(x, -y, -z)` = const `AXIS` in the file.
+
+### GOTCHA that cost a debug cycle
+The vector helpers (`segDir`/`midPoint`) use module-level scratch. First version
+reused `_p`/`_q` as BOTH internal scratch AND caller output → the two spine
+midpoints aliased and the torso bent ~90°. Fixed with private `_s0`/`_s1` that
+are never passed as `out`. If you add more helpers, keep that separation.
+
+### Verified
+Mock `vtuber` scene extended with `vtuber_world(t)` (3D, raised arm reaches
+toward camera on a cycle). `uv run python web/scripts/mock_backend.py vtuber`
++ vite dev + `shot.mjs` → avatar stands upright, right arm up-diagonal, left arm
+horizontal, all joints articulating, no console errors. `npm run build` clean;
+**web/dist rebuilt + committed-ready**. NOTE: only X/Y confirmed from the front
+view + mock; the z-depth sign (`AXIS.z`) and leg behavior should get a final
+eyeball on the real Jetson camera feed — flip one const if depth looks inverted.
+Tip: `?nointro=1` skips the splash (it covers the avatar for the first ~4 s).
