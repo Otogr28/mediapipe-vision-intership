@@ -344,6 +344,15 @@ function drawOrbitals(ctx: CanvasRenderingContext2D, o: OrbitalsObject) {
   }
   for (const b of o.bodies) {
     drawOrbBody(ctx, b.x, b.y, b.r, b.rgb);
+    // Impact / merge flash: a bright ring that expands and fades out.
+    if (b.flash > 0.001) {
+      const fr = b.r + (1 - b.flash) * b.r * 3.2;
+      ctx.strokeStyle = `rgba(255,255,255,${b.flash})`;
+      ctx.lineWidth = 1 + b.flash * 2.5;
+      ctx.beginPath();
+      ctx.arc(b.x, b.y, fr, 0, Math.PI * 2);
+      ctx.stroke();
+    }
   }
 
   if (o.aiming && o.spawn) {

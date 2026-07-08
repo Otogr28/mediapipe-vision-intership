@@ -5,17 +5,20 @@
 
 - [x] **Orbitals — astro simulator** — SHIPPED 2026-07-07. Experiments →
   "Orbitals". Symplectic velocity-Verlet (leapfrog, 1 force-eval/step),
-  small Plummer softening, and **realistic hard-sphere collisions** (updated
-  2026-07-07 per request): bodies do NOT merge — they exchange a momentum
-  impulse `j = -(1+e)·v_rel_n / (1/m₁+1/m₂)` (restitution `ORB_RESTITUTION`)
-  so a light asteroid deflects a heavy planet by the mass ratio and is flung
-  itself; momentum is conserved exactly (verified). Pinch-drag-release launch
-  (pull-opposite, arc previewed through the LIVE gravity field), grab-to-
-  fling, body-type palette (star/planet/moon/comet, masses shown) + presets
-  (Solar / Binary / Figure-8, all verified bound 60 s) + Clear, shared
-  sim-speed stepper (adds 8×). Canvas2D render (glow bodies, client trails).
-  Code: `Orbitals` in `ui/interactables.py`, `drawOrbitals` in
-  `web/src/overlay/scene.ts`, `ORB_*` in `config.py`.
+  small Plummer softening, and a **physically-accurate collision-OUTCOME
+  model** (Leinhardt & Stewart 2012, per request): the impact speed vs the
+  mutual escape velocity `v_esc = √(2 G M_tot / R_tot)` decides — **merge**
+  (perfect accretion, fuse into one, flash) below `v_esc`, **bounce**
+  (hit-and-run momentum impulse, deflect by mass ratio) up to
+  `ORB_FRAG_VESC_FACTOR·v_esc`, and **fragment** (catastrophic disruption:
+  shatter into a largest remnant + debris that fly out and re-accumulate)
+  above it. Mass + momentum conserved EXACTLY in every regime (verified).
+  Pinch-drag-release launch (arc previewed through the LIVE gravity field),
+  grab-to-fling, body-type palette (masses shown) + presets (Solar / Binary /
+  Figure-8, bound 60 s) + Clear, shared sim-speed stepper (adds 8×). Canvas2D
+  render (glow bodies, client trails, impact-flash rings). Code: `Orbitals`
+  in `ui/interactables.py`, `drawOrbitals` in `web/src/overlay/scene.ts`,
+  `ORB_*` in `config.py`.
 - [x] **Vtuber mode — real VRM avatar** — SHIPPED 2026-07-07. Interactable
   Figures → "Vtuber". A CC0 VRoid **VRM** model (`web/public/avatar.vrm`,
   from madjin/vrm-samples) rendered with **three.js + @pixiv/three-vrm**

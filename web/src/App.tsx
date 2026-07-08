@@ -7,6 +7,7 @@ import { HudLayer } from "./hud/HudLayer";
 import { Intro } from "./hud/Intro";
 import { SixSeven } from "./hud/SixSeven";
 import { AimReadout, SlingshotLegend } from "./hud/Slingshot";
+import { isVrmReady } from "./gl/vrmState";
 import { OverlayCanvas } from "./overlay/OverlayCanvas";
 import type { SixSevenObject, SlingshotObject } from "./state/types";
 import { useAppState } from "./state/useAppState";
@@ -85,6 +86,16 @@ export function App() {
                   <SlingshotLegend />
                   <AimReadout obj={slingshot} />
                 </>
+              )}
+              {hasVtuber && (
+                <div
+                  className="vtuber-status data"
+                  style={{ left: 24, top: frameH - 44 }}
+                >
+                  <span className={isVrmReady() ? "on" : "off"}>●</span> avatar
+                  {"   "}
+                  <span className={state.pose ? "on" : "off"}>●</span> body
+                </div>
               )}
               {introDone && state.session.hint.visible && (
                 <HintPanel frameW={frameW} frameH={frameH} />

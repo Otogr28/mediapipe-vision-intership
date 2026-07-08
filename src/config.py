@@ -310,17 +310,27 @@ ORB_GRAB_PAD_PX = 26         # grab a body when the pinch lands within r + pad
 ORB_PREDICT_TIME_S = 2.2     # how far ahead the dotted aim preview simulates
 ORB_PREDICT_SAMPLE = 5       # one preview dot every N physics steps
 
-# Collisions are hard-sphere impulses (NOT merges): when two bodies touch they
-# exchange momentum along the contact normal, deflecting each other by their
-# MASS RATIO — a light asteroid barely nudges a star but is flung itself,
-# exactly like a real elastic-ish impact. `ORB_RESTITUTION` is the coefficient
-# of restitution (1 = perfectly elastic / energy-conserving, 0 = perfectly
-# inelastic / bodies stick); 0.6 reads as a firm bounce that still bleeds a
-# little energy so captured pairs settle instead of ringing forever.
-# `ORB_COLLISION_SLOP` is a small overlap tolerance (px) left uncorrected to
-# stop resting stacks from jittering (standard positional-correction slop).
-ORB_RESTITUTION = 0.6
-ORB_COLLISION_SLOP = 0.5
+# Collision OUTCOME model (Leinhardt & Stewart 2012 / standard N-body practice):
+# what happens when two bodies touch is decided by the impact speed relative to
+# their MUTUAL ESCAPE VELOCITY  v_esc = sqrt(2 G M_tot / R_tot):
+#   * v_impact <= v_esc                      -> MERGE (perfect accretion): they
+#       are too slow to escape each other's gravity, so they fuse into one body
+#       conserving mass + momentum (radius recombined by volume). Flash on fuse.
+#   * v_esc < v_impact <= FRAG*v_esc         -> BOUNCE (hit-and-run): a
+#       hard-sphere impulse with restitution deflects both by their mass ratio
+#       (a light asteroid is flung, a star barely shifts).
+#   * v_impact > FRAG*v_esc                   -> FRAGMENT (catastrophic
+#       disruption): the impact energy shatters both into a largest remnant +
+#       debris particles that fly out conserving total mass + momentum (and then
+#       gravitate again — reaccumulation). This is the "breaks into particles".
+ORB_RESTITUTION = 0.5            # bounce coefficient of restitution (hit-and-run)
+ORB_COLLISION_SLOP = 0.5        # px overlap left uncorrected (anti-jitter)
+ORB_FRAG_VESC_FACTOR = 2.4      # v_impact / v_esc above which bodies shatter
+ORB_FRAG_COUNT = 7              # debris fragments a catastrophic impact makes
+ORB_FRAG_LR_FRACTION = 0.45     # mass fraction kept in the largest remnant
+ORB_FRAG_SPEED = 0.45           # debris scatter speed as a fraction of v_impact
+ORB_FRAG_MIN_MASS = 0.5         # bodies lighter than this don't fragment further
+ORB_FLASH_DECAY = 0.045         # per-frame decay of the impact/merge flash (0..1)
 
 # Body-type presets the palette spawns: (mass, radius px, [r, g, b] 0-255).
 # Masses/radii are chosen so a Star holds Planets/Moons in visible orbits
