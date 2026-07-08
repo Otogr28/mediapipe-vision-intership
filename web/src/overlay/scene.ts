@@ -5,7 +5,6 @@ import type {
   SlingshotObject,
   SphereObject,
   Vec2,
-  VtuberObject,
 } from "../state/types";
 
 /**
@@ -444,49 +443,18 @@ function drawArrow(
   ctx.fill();
 }
 
-// ---- vtuber puppet ------------------------------------------------------
-
-const POSE_LSHOULDER = 11;
-const POSE_RSHOULDER = 12;
-const POSE_LELBOW = 13;
-const POSE_RELBOW = 14;
-const POSE_LWRIST = 15;
-const POSE_RWRIST = 16;
-
-const PUP_BODY: RGB = [244, 233, 208];
-const PUP_OUTLINE = "#3a2a5e";
-const PUP_ACCENT = "#8b6cff";
-const PUP_STAR = "#ffd76a";
-const PUP_EYE = "#241a33";
-
-/** A hand's on-screen anchor (wrist if landmarks are live, else the pinch
- *  cursor) plus its pinch progress — enough to puppet a paw. */
-function handAnchors(state: AppState, w: number, h: number) {
-  const out: { x: number; y: number; progress: number }[] = [];
-  for (const hand of state.hands) {
-    if (hand.seen_ms > 250) continue;
-    if (hand.landmarks && hand.landmarks[0]) {
-      out.push({
-        x: hand.landmarks[0][0] * w,
-        y: hand.landmarks[0][1] * h,
-        progress: hand.progress,
-      });
-    } else {
-      out.push({ x: hand.cursor[0], y: hand.cursor[1], progress: hand.progress });
-    }
-  }
-  return out;
-}
+// ---- vtuber avatar (loading state) ------------------------------------
+// The real avatar is the WebGL VRM (gl/VrmAvatar). Here we only dim the
+// camera and, until the model is live, show a clean loading spinner — NO
+// placeholder puppet (that stand-in was the "beta model" people saw first).
 
 function drawPuppet(
   ctx: CanvasRenderingContext2D,
-  v: VtuberObject,
   state: AppState,
+  now: number,
 ) {
   const w = state.frame.w;
   const h = state.frame.h;
-
-  // Dim the camera so the character reads as the subject, not an overlay.
   const bg = ctx.createRadialGradient(
     w / 2, h * 0.42, h * 0.2, w / 2, h / 2, Math.max(w, h) * 0.75,
   );
@@ -495,214 +463,23 @@ function drawPuppet(
   ctx.fillStyle = bg;
   ctx.fillRect(0, 0, w, h);
 
-  // Once the real VRM avatar is live it draws the character on the WebGL
-  // layer above; the Canvas mascot is only the fallback (loading / failure).
-  if (isVrmReady()) return;
+  if (isVrmReady()) return; // the VRM layer draws the character on top
 
-  const hands = handAnchors(state, w, h);
-  const bob = Math.sin((v.t * 2 * Math.PI) / 3.2) * 12;
-
-  // Head anchored above the hands' midpoint (or centre when no hand yet).
-  let hx = w / 2;
-  let hy = h * 0.5;
-  if (hands.length) {
-    hx = hands.reduce((s, p) => s + p.x, 0) / hands.length;
-    hy = hands.reduce((s, p) => s + p.y, 0) / hands.length;
-  }
-  const R = Math.min(w, h) * 0.11; // head radius, frame-scaled
-  const headX = Math.max(R + 20, Math.min(w - R - 20, hx));
-  const headY = Math.max(R + 60, hy - R * 2.4) + bob;
-  const bodyX = headX;
-  const bodyY = headY + R * 1.7;
-
-  const pose = state.pose;
-  const poseGood = (i: number) => pose && pose[i] && pose[i][2] > 0.35;
-
-  // ---- arms: shoulder->elbow->wrist when pose is on, else a soft curve ---
+  const cx = w / 2;
+  const cy = h / 2;
+  const r = Math.min(w, h) * 0.05;
+  const a = (now / 1000) * 2.2;
+  ctx.strokeStyle = "rgba(127,180,255,0.85)";
+  ctx.lineWidth = 4;
   ctx.lineCap = "round";
-  ctx.lineJoin = "round";
-  const armSides: [number, number, number][] = [
-    [POSE_LSHOULDER, POSE_LELBOW, POSE_LWRIST],
-    [POSE_RSHOULDER, POSE_RELBOW, POSE_RWRIST],
-  ];
-  const drawnPaws: { x: number; y: number; progress: number }[] = [];
-  if (pose && armSides.every(([s]) => poseGood(s))) {
-    for (const [s, e, wr] of armSides) {
-      const sp: Vec2 = [pose![s][0] * w, pose![s][1] * h];
-      const ep: Vec2 = poseGood(e) ? [pose![e][0] * w, pose![e][1] * h] : sp;
-      const wp: Vec2 = poseGood(wr) ? [pose![wr][0] * w, pose![wr][1] * h] : ep;
-      ctx.strokeStyle = PUP_OUTLINE;
-      ctx.lineWidth = R * 0.5;
-      ctx.beginPath();
-      ctx.moveTo(bodyX, bodyY);
-      ctx.lineTo(sp[0], sp[1]);
-      ctx.quadraticCurveTo(ep[0], ep[1], wp[0], wp[1]);
-      ctx.stroke();
-      ctx.strokeStyle = rgbStr(PUP_BODY);
-      ctx.lineWidth = R * 0.34;
-      ctx.beginPath();
-      ctx.moveTo(bodyX, bodyY);
-      ctx.lineTo(sp[0], sp[1]);
-      ctx.quadraticCurveTo(ep[0], ep[1], wp[0], wp[1]);
-      ctx.stroke();
-      const near = hands.reduce<{ d: number; p: (typeof hands)[number] } | null>(
-        (best, p) => {
-          const d = Math.hypot(p.x - wp[0], p.y - wp[1]);
-          return !best || d < best.d ? { d, p } : best;
-        },
-        null,
-      );
-      drawnPaws.push({ x: wp[0], y: wp[1], progress: near?.p.progress ?? 0 });
-    }
-  } else {
-    for (const p of hands) {
-      const midx = (bodyX + p.x) / 2 + (p.x < bodyX ? -R * 0.4 : R * 0.4);
-      const midy = Math.max(bodyY, p.y) + R * 0.5;
-      ctx.strokeStyle = PUP_OUTLINE;
-      ctx.lineWidth = R * 0.5;
-      ctx.beginPath();
-      ctx.moveTo(bodyX, bodyY);
-      ctx.quadraticCurveTo(midx, midy, p.x, p.y);
-      ctx.stroke();
-      ctx.strokeStyle = rgbStr(PUP_BODY);
-      ctx.lineWidth = R * 0.34;
-      ctx.beginPath();
-      ctx.moveTo(bodyX, bodyY);
-      ctx.quadraticCurveTo(midx, midy, p.x, p.y);
-      ctx.stroke();
-      drawnPaws.push(p);
-    }
-  }
-
-  // ---- torso ----
-  ctx.fillStyle = PUP_OUTLINE;
   ctx.beginPath();
-  ctx.ellipse(bodyX, bodyY + R * 0.2, R * 0.82, R * 1.0, 0, 0, Math.PI * 2);
-  ctx.fill();
-  ctx.fillStyle = rgbStr(PUP_BODY);
-  ctx.beginPath();
-  ctx.ellipse(bodyX, bodyY + R * 0.2, R * 0.7, R * 0.86, 0, 0, Math.PI * 2);
-  ctx.fill();
-  // Little chest star.
-  drawStar(ctx, bodyX, bodyY + R * 0.15, R * 0.24, PUP_ACCENT);
-
-  // ---- antenna + star ----
-  ctx.strokeStyle = PUP_OUTLINE;
-  ctx.lineWidth = R * 0.09;
-  ctx.beginPath();
-  ctx.moveTo(headX, headY - R * 0.9);
-  ctx.quadraticCurveTo(headX + R * 0.2, headY - R * 1.35, headX, headY - R * 1.6);
+  ctx.arc(cx, cy, r, a, a + Math.PI * 1.4);
   ctx.stroke();
-  drawStar(ctx, headX, headY - R * 1.7, R * 0.3, PUP_STAR, true);
-
-  // ---- head ----
-  const hg = ctx.createRadialGradient(
-    headX - R * 0.3, headY - R * 0.3, R * 0.1, headX, headY, R,
-  );
-  hg.addColorStop(0, "#fff6e4");
-  hg.addColorStop(1, rgbStr(PUP_BODY));
-  ctx.fillStyle = PUP_OUTLINE;
-  ctx.beginPath();
-  ctx.arc(headX, headY, R + R * 0.06, 0, Math.PI * 2);
-  ctx.fill();
-  ctx.fillStyle = hg;
-  ctx.beginPath();
-  ctx.arc(headX, headY, R, 0, Math.PI * 2);
-  ctx.fill();
-
-  // ---- eyes (track the hands) + blink ----
-  const gazeTarget = hands.length
-    ? {
-        x: hands.reduce((s, p) => s + p.x, 0) / hands.length,
-        y: hands.reduce((s, p) => s + p.y, 0) / hands.length,
-      }
-    : { x: headX, y: headY + R };
-  let gx = gazeTarget.x - headX;
-  let gy = gazeTarget.y - headY;
-  const gmag = Math.hypot(gx, gy) || 1;
-  gx = (gx / gmag) * R * 0.16;
-  gy = (gy / gmag) * R * 0.16;
-  const blink = v.t % 4 > 3.82 ? 0.12 : 1; // quick blink every ~4 s
-  const eyeR = R * 0.2;
-  for (const ex of [-R * 0.4, R * 0.4]) {
-    const cxx = headX + ex;
-    const cyy = headY - R * 0.08;
-    ctx.fillStyle = "#fff";
-    ctx.beginPath();
-    ctx.ellipse(cxx, cyy, eyeR, eyeR * blink, 0, 0, Math.PI * 2);
-    ctx.fill();
-    if (blink > 0.5) {
-      ctx.fillStyle = PUP_EYE;
-      ctx.beginPath();
-      ctx.arc(cxx + gx, cyy + gy, eyeR * 0.62, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.fillStyle = "rgba(255,255,255,0.9)";
-      ctx.beginPath();
-      ctx.arc(cxx + gx - eyeR * 0.2, cyy + gy - eyeR * 0.2, eyeR * 0.2, 0, Math.PI * 2);
-      ctx.fill();
-    }
-  }
-  // Cheeks.
-  ctx.fillStyle = "rgba(255,140,150,0.4)";
-  for (const ex of [-R * 0.55, R * 0.55]) {
-    ctx.beginPath();
-    ctx.ellipse(headX + ex, headY + R * 0.34, R * 0.16, R * 0.1, 0, 0, Math.PI * 2);
-    ctx.fill();
-  }
-  // Mouth — opens with the pinch (mouth ∈ [0,1]).
-  const mo = R * (0.05 + 0.34 * v.mouth);
-  ctx.fillStyle = "#7a3550";
-  ctx.beginPath();
-  ctx.ellipse(headX, headY + R * 0.44, R * 0.24, mo, 0, 0, Math.PI * 2);
-  ctx.fill();
-
-  // ---- paws at the hands (curl inward as the pinch closes) ----
-  for (const p of drawnPaws) {
-    const pr = R * (0.42 - 0.08 * p.progress);
-    ctx.fillStyle = PUP_OUTLINE;
-    ctx.beginPath();
-    ctx.arc(p.x, p.y, pr + R * 0.05, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.fillStyle = rgbStr(PUP_BODY);
-    ctx.beginPath();
-    ctx.arc(p.x, p.y, pr, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.fillStyle = "rgba(255,140,150,0.35)";
-    ctx.beginPath();
-    ctx.arc(p.x, p.y, pr * 0.5, 0, Math.PI * 2);
-    ctx.fill();
-  }
-}
-
-function drawStar(
-  ctx: CanvasRenderingContext2D,
-  cx: number,
-  cy: number,
-  r: number,
-  color: string,
-  glow = false,
-) {
-  if (glow) {
-    const g = ctx.createRadialGradient(cx, cy, 0, cx, cy, r * 2.6);
-    g.addColorStop(0, "rgba(255,215,106,0.6)");
-    g.addColorStop(1, "rgba(255,215,106,0)");
-    ctx.fillStyle = g;
-    ctx.beginPath();
-    ctx.arc(cx, cy, r * 2.6, 0, Math.PI * 2);
-    ctx.fill();
-  }
-  ctx.fillStyle = color;
-  ctx.beginPath();
-  for (let i = 0; i < 10; i++) {
-    const ang = (Math.PI / 5) * i - Math.PI / 2;
-    const rad = i % 2 === 0 ? r : r * 0.45;
-    const x = cx + Math.cos(ang) * rad;
-    const y = cy + Math.sin(ang) * rad;
-    if (i === 0) ctx.moveTo(x, y);
-    else ctx.lineTo(x, y);
-  }
-  ctx.closePath();
-  ctx.fill();
+  ctx.fillStyle = "rgba(237,241,247,0.7)";
+  ctx.font = "500 22px 'IBM Plex Sans', system-ui, sans-serif";
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.fillText("summoning avatar\u2026", cx, cy + r + 34);
 }
 
 // ---- dispatch -----------------------------------------------------------
@@ -724,7 +501,7 @@ export function drawScene(
         drawOrbitals(ctx, obj);
         break;
       case "vtuber":
-        drawPuppet(ctx, obj, state);
+        drawPuppet(ctx, state, _now);
         break;
       default:
         break; // sixseven + black_hole render in other layers

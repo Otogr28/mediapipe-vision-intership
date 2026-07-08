@@ -1098,3 +1098,31 @@ latent deploy bug so it actually reaches the Jetson via git.
 - Collision cascade: a catastrophic hit can chain (debris re-shatter) but it
   terminates (fragments stop below ORB_FRAG_MIN_MASS) and is capped at
   ORB_MAX_BODIES; verified it settles (2->16), doesn't run away.
+
+## Update - 2026-07-07 23:55 - [Claude (Opus 4.8)]
+
+### What I did (round 4, per user follow-up)
+- **Proved the VRM works in FIREFOX** (the kiosk engine): drove it with
+  puppeteer BiDi + Firefox 152 (same major as the Jetson) — the avatar loads,
+  both arms track the pose, mouth lip-syncs, status dots green. So the code +
+  body inference are correct; the earlier "only hands" was the tight framing
+  (fixed round 3) and/or the fallback mascot showing during model load.
+  New tool: `web/scripts/ff_shot.mjs` (Firefox screenshot harness).
+- **New avatar model:** swapped to **Sendagaya Shino** (school uniform,
+  clean/clothed) — embedded VRM license is **CC0** (verified in the file's
+  meta; commercial allowed). Replaces the underwear-ish `female vroid`.
+  `web/public/avatar.vrm` + `web/dist/avatar.vrm` (~15 MB).
+- **Removed the "beta model" (Canvas mascot) at startup.** `drawPuppet` in
+  `overlay/scene.ts` no longer draws a placeholder puppet — just the dim
+  backdrop + a loading spinner ("summoning avatar…") until the VRM is live.
+  Deleted the mascot helpers (handAnchors/drawStar/PUP_* ~230 lines); main
+  bundle shrank. The cv2 window-mode `Puppet.draw` is untouched.
+
+### Important context for the other agent
+- Body inference DOES run on the device (log "pose inference enabled on
+  demand" + pose model loads). If a user still sees no body movement, it's a
+  tracking-quality issue (stand back so shoulders/elbows are in frame), not a
+  code bug — the status readout ("body ●" green) confirms pose is arriving.
+- Model swap left the old `female vroid` blob in git history (unavoidable);
+  repo is heavier. To change avatars: drop a CC0 .vrm at web/public/avatar.vrm,
+  `npm run build`, commit web/public + web/dist, push.
