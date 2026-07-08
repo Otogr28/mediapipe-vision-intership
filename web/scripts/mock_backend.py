@@ -79,19 +79,22 @@ def fake_hand(t):
 
 
 def vtuber_pose(t):
-    """Synthetic 33-landmark pose for the vtuber scene: a person facing the
-    camera waving both arms, so the VRM rig visibly follows shoulder→elbow→
-    wrist without needing a real camera."""
+    """Synthetic 33-landmark pose (mirrored-feed labelling, like the real
+    backend): the person's RIGHT arm (idx 12/14/16, on the image RIGHT) is
+    raised UP, their LEFT arm (11/13/15, image LEFT) is held out HORIZONTAL.
+    Asymmetric on purpose so the mirror mapping is obvious — the avatar's
+    image-right arm should go up, its image-left arm should point left."""
+    wob = 0.03 * math.sin(t * 1.5)
     lm = [[0.5, 0.5, 0.4] for _ in range(33)]
-    lm[0] = [0.5, 0.28, 0.99]                      # nose
-    lm[11] = [0.40, 0.42, 0.99]                    # L shoulder
-    lm[12] = [0.60, 0.42, 0.99]                    # R shoulder
-    wl = 0.5 * (1 + math.sin(t))
-    wr = 0.5 * (1 + math.sin(t + 1.6))
-    lm[13] = [0.34, 0.55, 0.99]                    # L elbow
-    lm[15] = [0.30, 0.68 - 0.34 * wl, 0.99]        # L wrist (raises)
-    lm[14] = [0.66, 0.55, 0.99]                    # R elbow
-    lm[16] = [0.70, 0.68 - 0.34 * wr, 0.99]        # R wrist (raises)
+    lm[0] = [0.5, 0.30, 0.99]                       # nose
+    # image-LEFT side (person's left arm) — held out horizontally left
+    lm[11] = [0.40, 0.42, 0.99]                     # L shoulder
+    lm[13] = [0.29, 0.44, 0.99]                     # L elbow
+    lm[15] = [0.18, 0.46 + wob, 0.99]               # L wrist
+    # image-RIGHT side (person's right arm) — raised straight up
+    lm[12] = [0.60, 0.42, 0.99]                     # R shoulder
+    lm[14] = [0.64, 0.30, 0.99]                     # R elbow
+    lm[16] = [0.68, 0.16 + wob, 0.99]               # R wrist
     return [[round(a, 4), round(b, 4), round(c, 2)] for a, b, c in lm]
 
 
