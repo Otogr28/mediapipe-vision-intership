@@ -1,6 +1,8 @@
 import threading
 import time
 
+import cv2
+
 
 class FreshestFrame:
     """Threaded camera reader that always hands back the *most recent* frame.
@@ -22,8 +24,14 @@ class FreshestFrame:
     already-configured capture.
     """
 
-    def __init__(self, capture):
+    def __init__(self, capture, loop=False, fps=0.0):
         self._cap = capture
+        # loop + fps are for VIDEO-FILE sources (testing: drive the app from a
+        # recorded clip). loop rewinds at EOF; fps paces the reader to the
+        # clip's native rate so motion plays back at real speed. A live webcam
+        # or network stream leaves both off (read as fast as frames arrive).
+        self._loop = loop
+        self._interval = 1.0 / fps if fps and fps > 0 else 0.0
         self._lock = threading.Lock()
         self._frame = None
         self._ok = False
@@ -38,8 +46,12 @@ class FreshestFrame:
 
     def _reader(self):
         while self._running:
+            t0 = time.monotonic()
             ok, frame = self._cap.read()
             if not ok or frame is None:
+                # End of a video file: rewind and keep playing (test loop).
+                if self._loop:
+                    self._cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
                 # A network source (or a momentarily starved webcam) can return
                 # nothing transiently; keep polling rather than giving up.
                 continue
@@ -51,6 +63,12 @@ class FreshestFrame:
                 self._frame = frame
                 self._ok = True
                 self._last_frame_t = time.monotonic()
+            # Pace a file source to its native fps so it plays at real speed
+            # (a webcam/stream leaves _interval at 0 → read flat out).
+            if self._interval:
+                dt = self._interval - (time.monotonic() - t0)
+                if dt > 0:
+                    time.sleep(dt)
 
     def frame_age(self):
         """Seconds since the last NEW frame arrived from the camera."""

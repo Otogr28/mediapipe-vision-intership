@@ -86,7 +86,14 @@ def main():
     # continuously and keeps only the latest frame, so when the render loop is
     # slower than the camera the stale frames are dropped instead of piling up
     # in the driver queue. Latency stays ~1 frame regardless of loop speed.
-    camera = FreshestFrame(camera)
+    # A local video FILE (not a device index, not a network stream URL) is a
+    # testing source: loop it and pace it to its native fps so the app can be
+    # driven from a recorded clip. Webcam/stream sources read flat out as before.
+    _is_file = isinstance(source, str) and not source.startswith(
+        ("http://", "https://", "rtsp://", "udp://", "tcp://"))
+    _file_fps = camera.get(cv2.CAP_PROP_FPS) if _is_file else 0.0
+    camera = FreshestFrame(camera, loop=_is_file,
+                           fps=_file_fps if _file_fps and _file_fps > 1 else 0.0)
 
     sink = make_sink(frame_w, frame_h)
     # Web mode is detected by capability, not config: the WebSink takes the

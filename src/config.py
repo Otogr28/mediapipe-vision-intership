@@ -13,6 +13,12 @@ IMAGE_FORMAT = mp.ImageFormat.SRGB
 # the pose-driven "6 7 Counter" (its button hides when pose is off).
 POSE_ENABLED = os.environ.get("HALL_POSE", "0") == "1"
 
+# Dev/testing: start straight in the Vtuber scene with the puppet spawned and
+# kept alive (so the avatar can be driven from a recorded VIDEO FILE via
+# HALL_CAMERA=<file> without needing live pinch gestures to navigate). Off in
+# production. Implies the puppet's pose need, so pose runs.
+START_VTUBER = os.environ.get("HALL_START_VTUBER", "0") == "1"
+
 # Inference backend for the HAND pipeline (HALL_INFERENCE):
 #   "mediapipe" — default; MediaPipe HandLandmarker (.task), CPU on the Jetson.
 #   "gpu"       — onnxruntime palm-detection + handpose, able to use the CUDA

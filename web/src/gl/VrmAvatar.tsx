@@ -51,17 +51,23 @@ const DRIVE_FINGERS = true; // 30 finger bones curl from the hand skeleton
 const FAST_FOREARM = true; // forearm tracks the fast hand stream, not slow pose
 
 // --- smoothing time constants (s) — frame-rate-independent via damp() -----
-const UPPER_ARM_TAU = 0.06; // pose-bound (~13 fps) → a bit more smoothing hides stepping
-const LOWER_ARM_TAU = 0.04; // rides the fast hand stream when FAST_FOREARM
-const HAND_TAU = 0.05; // coarse wrist aim (pose fallback, no matched hand)
+// The body rides the ~13 fps CPU pose, so it can never beat that; but the
+// client smoothing was adding a lot of the felt lag on top. These are cut low
+// (snappier, a touch more stepping) since the user prioritised low delay.
+const UPPER_ARM_TAU = 0.035; // was 0.06
+const LOWER_ARM_TAU = 0.03; // rides the fast hand stream when FAST_FOREARM
+const HAND_TAU = 0.04; // coarse wrist aim (pose fallback, no matched hand)
 const HAND_ORIENT_TAU = 0.045; // palm orientation (fast hand stream)
 const FINGER_TAU = 0.04; // finger curl (fast hand stream)
-const SPINE_TAU = 0.06;
-const LEG_TAU = 0.06;
-const HEAD_TAU = 0.05;
-const RELAX_TAU = 0.18; // ease a bone back to rest when its landmarks vanish
-const BODY_MOVE_TAU = 0.12; // root translation — smoother than limbs (gross-jitter is ugly)
-const BODY_SCALE_TAU = 0.25; // root scale — smoothest of all (avoid depth pumping)
+const SPINE_TAU = 0.04; // was 0.06
+const LEG_TAU = 0.045;
+const HEAD_TAU = 0.035; // was 0.05
+const RELAX_TAU = 0.16; // ease a bone back to rest when its landmarks vanish
+const BODY_MOVE_TAU = 0.055; // was 0.12 — root-follow was a big chunk of the "body delay"
+const BODY_SCALE_TAU = 0.12; // was 0.25
+// Max wrist deviation from rest (relative to the forearm) — caps the twist that
+// otherwise collapses the mesh at the wrist.
+const WRIST_MAX_RAD = (72 * Math.PI) / 180;
 
 // --- gates / follow tuning ------------------------------------------------
 const POSE_MIN_VIS = 0.25; // ignore pose landmarks below this visibility
@@ -268,10 +274,22 @@ function orientBone(
   palmToBone: THREE.Quaternion | undefined, alpha: number,
 ) {
   const bone = rig.bones[name];
+  const r = rig.rest[name];
   if (!bone || !bone.parent || !palmToBone) return;
   bone.parent.getWorldQuaternion(_pq);
   _world.copy(qBasisWorld).multiply(palmToBone); // desired bone world quat
-  _local.copy(_pq).invert().multiply(_world);
+  _local.copy(_pq).invert().multiply(_world); // hand rotation relative to forearm
+  // Clamp how far the wrist may deviate from its rest pose. An unbounded wrist
+  // twist (no forearm-twist bone to absorb it) collapses the skin to a point —
+  // the "candy-wrapper" that splits the wrist into two lobes with a node.
+  if (r) {
+    const dot = THREE.MathUtils.clamp(Math.abs(r.restQuat.dot(_local)), 0, 1);
+    const ang = 2 * Math.acos(dot);
+    if (ang > WRIST_MAX_RAD) {
+      _qBasis.copy(_local); // target
+      _local.copy(r.restQuat).slerp(_qBasis, WRIST_MAX_RAD / ang);
+    }
+  }
   bone.quaternion.slerp(_local, alpha);
 }
 
