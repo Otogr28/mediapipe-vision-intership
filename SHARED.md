@@ -1347,10 +1347,26 @@ frame's 33 landmarks to MediaPipe ground truth: **mean 2D error 0.027 (~17px @
 640w), world err ~0.08 m** — skeletons overlap tightly, no flips (saved an overlay
 PNG). Full async `GpuPoseDetector` smoke-tested: 33 lms + 33 world, drop-in result.
 
-### STILL TO DO — deploy to the Jetson (blocked on the user)
-NOT deployed. Two things needed from the user: (1) **Tailscale SSH browser auth** —
-`ssh jetson@100.91.206.114` currently returns a `login.tailscale.com/a/...`
-check-mode URL to approve; (2) go-ahead to push (restarts the live kiosk).
+### DEPLOYED 2026-07-09 — and it works: pose_fps 13 -> 30 on the Jetson GPU
+Shipped (commit 38eb955 + the hallrun workspace-cap follow-up). Measured on-device
+with the video-file harness (Vtuber + gpu pose + gpu hands): **pose_fps ~30.2**
+(was ~13 on CPU) at render 30 / hand_fps ~26-29 — **the body now matches the hands'
+rate, so the speed mismatch the user complained about is gone.** Memory held ~2.6 GB
+free with everything running; the two pose TRT engines built in ~2 min each under a
+512 MiB `HALL_TRT_MAX_WORKSPACE` cap (no OOM), then load from `.trt_cache` in ~12 s.
+The live kiosk is healthy (healthz 200) in the default hand-UI scene; GPU pose
+engages at 30 fps with no build delay the moment Vtuber is selected (engines cached).
+
+### Permanent Jetson SSH — no more Tailscale browser check (set up this session)
+`ssh yahboom` (in `~/.ssh/config`) now key-auths over **Tailscale port 2222** — the
+Jetson's real sshd listens on 22 + 2222 (drop-in `/etc/ssh/sshd_config.d/
+tailscale-altport.conf`), and Tailscale forwards non-22 ports transparently instead
+of intercepting them with Tailscale SSH check-mode. Port 22 (Tailscale SSH) stays as
+a fallback. So deploys no longer need the `login.tailscale.com/a/...` browser step.
+
+### (historical) what the deploy needed
+Was blocked on: (1) a one-time Tailscale SSH browser auth (now bypassed by the 2222
+key path above); (2) go-ahead to push (done).
 
 **DEPLOY GOTCHA — the models don't ride the git auto-update.** `hall-update.sh`
 does `git reset --hard origin/main` (tracked content only) and the `.onnx` under
