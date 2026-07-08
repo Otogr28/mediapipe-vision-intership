@@ -1265,3 +1265,39 @@ or a person at the Jetson:
   hands, fingers all track; the ~90° wrist supination renders clean (candy-
   wrapper gone). NOTE: the laptop pose is fast, so this harness does NOT
   reproduce the Jetson's pose-fps delay — only the client-smoothing part.
+
+## Update - 2026-07-08 - [Claude (Opus 4.8)]
+
+### Round 9 — body pose smoothing: One-Euro + extrapolation (3f24f99)
+User: body inference still "too slow"/jumpy while hands feel responsive; wants
+teleport-jumps eased into realistic glides. ROOT CAUSE: the hand CURSOR is
+One-Euro filtered + velocity-extrapolated (that's why it feels good); the body
+pose went RAW to the rig. At the Jetson's ~13 fps CPU pose that's a stuttering
+"staircase" with zero latency compensation.
+
+- **`detection/pose_smoother.py` (PoseSmoother):** One-Euro filter on every pose
+  landmark (2D image + 3D world) + output extrapolated by filtered velocity ×
+  result age (capped POSE_EXTRAP_MAX_S). Fed on each NEW pose result
+  (`detectors.latest_pose_packet` = result+receive-time), sampled every frame in
+  main.py. Reset on a >0.4s gap so pose on/off doesn't snap. `HALL_POSE_SMOOTH=0`
+  bypasses. Config: POSE_MIN_CUTOFF=0.8, POSE_BETA=0.4, POSE_EXTRAP_MAX_S=0.12.
+- **VrmAvatar.tsx:** lighter body taus (UPPER_ARM 0.035→0.025, SPINE→0.03, root
+  BODY_MOVE 0.055→0.04) now that upstream smooths — avoids double-lag.
+
+### How I tuned it (rigorous, offline — the video harness paid off)
+Drove the app from a real clip (mixkit man shrugging), captured the pose_world
+trajectory, then REPLAYED it offline through the real _OneEuroFilter at the
+Jetson's 13 fps rate and swept (min_cutoff, beta, extrap) vs the 30 fps ground
+truth. Metric = max per-frame jump (stutter) + lag + range. Chosen params cut
+the worst jump ~2.9x (0.169→0.059) for ~5% more lag (extrapolation offsets it).
+Laptop pose is too fast to feel the win live — the offline 13fps replay is how
+to validate/tune this without the Jetson.
+
+### Note on the "crash"
+Not a real crash — each `git push` restarts the kiosk (~10s white screen); the
+user caught one. Backend verified stable (healthz 200). If you deploy several
+times fast, expect brief kiosk blinks.
+
+### Still open / next levers if body still lags
+Hands' world landmarks (fingers/palm) are still RAW — same smoother could apply
+(needs per-hand filter identity). And the real pose-fps fix remains GPU pose.
