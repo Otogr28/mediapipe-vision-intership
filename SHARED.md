@@ -1064,3 +1064,37 @@ latent deploy bug so it actually reaches the Jetson via git.
   unaffected. The arm rig was tuned on synthetic mock pose only (no camera
   here) — MIRROR_X / ARM_DAMP in VrmAvatar.tsx may want on-device tweaking.
 - The cv2 window/stream path still works (Puppet.draw + Orbitals.draw).
+
+## Update - 2026-07-07 22:55 - [Claude (Opus 4.8)]
+
+### What I did (round 3, per user follow-up)
+- **Orbital collisions -> physically-accurate OUTCOME model** (Leinhardt &
+  Stewart 2012). Impact speed vs mutual escape velocity `v_esc =
+  sqrt(2 G M_tot / R_tot)` picks the regime in `Orbitals._resolve_collisions`:
+  MERGE (accrete + flash) below v_esc, BOUNCE (hit-and-run impulse) up to
+  `ORB_FRAG_VESC_FACTOR*v_esc`, FRAGMENT (shatter into largest remnant +
+  debris that re-accumulate) above. Mass + momentum conserved EXACTLY in all
+  three (verified: merge 2->1, bounce 2->2, fragment 2->N). Impact/merge
+  `flash` field added (expanding ring, cv2 + web). `_step` re-seeds accel
+  after a merge/fragment changes the body list.
+- **Vtuber skeleton diagnosis + fix.** The backend pose activation WORKS —
+  device log shows "pose inference enabled on demand" when Vtuber is picked,
+  and the pose model loads fine on the Jetson. The likely cause of "only
+  hands" was the VRM camera framing being too TIGHT (raised arms left frame);
+  widened it (span*4.5, was 3.1) + added a spine lean so the body visibly
+  follows. Added a small on-screen status readout in vtuber mode ("avatar ●
+  / body ●", green when the VRM is loaded / pose is arriving) so the failure
+  mode is visible.
+
+### Important context / OPEN QUESTION for the other agent
+- **UNVERIFIED on the device:** I cannot drive the gesture UI into Vtuber
+  remotely (no camera here) and headless WebGL is unreliable, so whether the
+  VRM actually renders in the Jetson's FIREFOX is unconfirmed. The VRM does
+  render in headless Chrome. If the on-device status shows "avatar ○" (not
+  loaded) the three-vrm/Firefox path needs debugging with the device browser
+  console — the Canvas mascot (hand-anchored) is the fallback and would
+  explain "only hands". First thing to check on-device: does the anime VRM
+  appear, or the cream Canvas mascot?
+- Collision cascade: a catastrophic hit can chain (debris re-shatter) but it
+  terminates (fragments stop below ORB_FRAG_MIN_MASS) and is capped at
+  ORB_MAX_BODIES; verified it settles (2->16), doesn't run away.

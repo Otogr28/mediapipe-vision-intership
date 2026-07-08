@@ -94,6 +94,19 @@ function rigArms(rig: Rig, pose: PoseState) {
   }
 }
 
+function rigSpine(rig: Rig, pose: PoseState) {
+  // Lean the torso toward where the shoulders sit — extra whole-body response
+  // so the avatar visibly follows the person, not just the arms.
+  const ls = pose[L_SH];
+  const rs = pose[R_SH];
+  const spine = rig.bones.spine;
+  if (!spine || !ls || !rs || ls[2] < POSE_MIN_VIS || rs[2] < POSE_MIN_VIS)
+    return;
+  const midx = (ls[0] + rs[0]) / 2 - 0.5; // shoulder centre vs frame centre
+  const target = Math.max(-0.32, Math.min(0.32, MIRROR_X * midx * 1.6));
+  spine.rotation.z += (target - spine.rotation.z) * 0.15;
+}
+
 function relaxArms(rig: Rig) {
   // Ease arms back toward the model's rest pose when pose is unavailable.
   for (const name of ["leftUpperArm", "leftLowerArm", "rightUpperArm", "rightLowerArm"]) {
@@ -179,6 +192,7 @@ export function VrmAvatar({ pairRef, frameW, frameH }: Props) {
         const bones: Bones = {
           head: get("head"),
           neck: get("neck"),
+          spine: get("spine"),
           chest: get("chest"),
           upperChest: get("upperChest"),
           leftUpperArm: get("leftUpperArm"),
@@ -209,9 +223,11 @@ export function VrmAvatar({ pairRef, frameW, frameH }: Props) {
         const hipsPos = new THREE.Vector3();
         hips?.getWorldPosition(hipsPos);
         if (headPos.y > 0) {
-          const chestY = (headPos.y + hipsPos.y) / 2 + 0.1;
+          // Frame wide enough that RAISED arms stay on-screen (a tight
+          // head-to-navel crop made arm motion invisible — it left frame).
           const span = Math.max(headPos.y - hipsPos.y, 0.4);
-          camera.position.set(0, headPos.y - 0.05, span * 3.1);
+          const chestY = (headPos.y + hipsPos.y) / 2;
+          camera.position.set(0, headPos.y - 0.12, span * 4.5);
           camera.lookAt(0, chestY, 0);
         }
 
@@ -241,8 +257,12 @@ export function VrmAvatar({ pairRef, frameW, frameH }: Props) {
         const mouth = vt?.mouth ?? 0;
         rigFace(rig, mouth, tSec);
         rigIdle(rig, tSec);
-        if (state?.pose) rigArms(rig, state.pose);
-        else relaxArms(rig);
+        if (state?.pose) {
+          rigArms(rig, state.pose);
+          rigSpine(rig, state.pose);
+        } else {
+          relaxArms(rig);
+        }
         rig.vrm.update(dt);
       }
       renderer.render(scene, camera);

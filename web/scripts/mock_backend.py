@@ -225,7 +225,8 @@ def scene_state(t):
         base["speed"] = {"rect": [plus_x - lw, margin, lw, sb], "text": "1x"}
         cx, cy = W / 2, H / 2
         bodies = [{"id": 0, "x": round(cx, 1), "y": round(cy, 1), "r": 26,
-                   "rgb": [255, 226, 158], "kind": "star", "m": 1200.0}]
+                   "rgb": [255, 226, 158], "kind": "star", "m": 1200.0,
+                   "flash": 0.0}]
         for i in range(3):
             ang = t * 0.6 + i * 2.1
             r = 120 + i * 72
@@ -234,6 +235,18 @@ def scene_state(t):
                 "x": round(cx + r * math.cos(ang), 1),
                 "y": round(cy + r * math.sin(ang), 1),
                 "r": 13, "rgb": [110, 170, 255], "kind": "planet", "m": 42.0,
+                "flash": 0.0,
+            })
+        # A debris burst (recent fragmentation) with fading impact flashes.
+        burst = 0.5 * (1 + math.sin(t * 0.8))
+        for j in range(7):
+            a = j / 7 * 2 * math.pi
+            bodies.append({
+                "id": 100 + j,
+                "x": round(cx - 300 + math.cos(a) * (30 + burst * 90), 1),
+                "y": round(cy + 150 + math.sin(a) * (30 + burst * 90), 1),
+                "r": 5, "rgb": [200, 160, 120], "kind": "comet", "m": 4.0,
+                "flash": round(max(0.0, 1 - burst * 1.4), 3),
             })
         aiming = SCENE == "orbaim"
         orb = {

@@ -10,7 +10,9 @@ from config import (BH_DEFAULT_POS_FACTOR, BH_DISK_BRIGHTNESS,
                     BH_DISK_INNER_FACTOR, BH_DISK_OUTER_FACTOR,
                     BH_DISK_ROTATION_SPEED, BH_DISK_TILT_RAD,
                     BH_EINSTEIN_RADIUS_PX, BH_GRAB_RADIUS, ORB_BODY_TYPES,
-                    ORB_COLLISION_SLOP, ORB_DEFAULT_KIND, ORB_FRAME_DT, ORB_G,
+                    ORB_COLLISION_SLOP, ORB_DEFAULT_KIND, ORB_FLASH_DECAY,
+                    ORB_FRAG_COUNT, ORB_FRAG_LR_FRACTION, ORB_FRAG_MIN_MASS,
+                    ORB_FRAG_SPEED, ORB_FRAG_VESC_FACTOR, ORB_FRAME_DT, ORB_G,
                     ORB_GRAB_PAD_PX, ORB_LAUNCH_GAIN, ORB_MAX_BODIES,
                     ORB_MAX_PULL_PX, ORB_MAX_SUBSTEPS, ORB_PHYS_DT,
                     ORB_PREDICT_SAMPLE, ORB_PREDICT_TIME_S, ORB_PRUNE_MARGIN,
@@ -1070,9 +1072,16 @@ class Slingshot:
 # units). Everything below runs in pixels / seconds.
 
 
+def _radius_for_mass(mass):
+    """Screen radius (px) for a body of the given mass — a cube-root (constant
+    density) law clamped to a sane band, so a fused giant stays on-screen and a
+    debris speck stays visible."""
+    return int(max(3, min(46, 4.4 * (abs(mass) ** (1.0 / 3.0)))))
+
+
 class _Body:
     __slots__ = ("id", "x", "y", "vx", "vy", "mass", "radius", "kind", "rgb",
-                 "frozen", "ax", "ay", "trail")
+                 "frozen", "ax", "ay", "trail", "flash")
 
     def __init__(self, bid, x, y, vx, vy, mass, radius, kind, rgb):
         self.id = bid
@@ -1092,6 +1101,8 @@ class _Body:
         # Server-side trail for the cv2 path; the web path re-accumulates it
         # client-side from the streamed positions (one point per frame).
         self.trail = deque(maxlen=ORB_TRAIL_LEN)
+        # Transient impact/merge glow (1 -> 0), rendered as an expanding ring.
+        self.flash = 0.0
 
 
 class Orbitals:
@@ -1394,6 +1405,8 @@ class Orbitals:
 
         self._prune()
         for b in self.bodies:
+            if b.flash > 0.0:
+                b.flash = max(0.0, b.flash - ORB_FLASH_DECAY)
             b.trail.append((int(b.x), int(b.y)))
 
     def _accelerate(self):
@@ -1444,61 +1457,160 @@ class Orbitals:
                 continue
             b.vx += b.ax * half                   # half-kick with a(t+dt)
             b.vy += b.ay * half
-        self._resolve_collisions()
+        # Collisions may merge/fragment (change the body list) — refresh the
+        # cached accelerations so the next sub-step's drift is valid.
+        if self._resolve_collisions():
+            self._accelerate()
 
     def _resolve_collisions(self):
-        """Hard-sphere collision response between every overlapping pair.
+        """Decide each overlapping pair's OUTCOME by the impact speed vs the
+        mutual escape velocity ``v_esc = sqrt(2 G M_tot / R_tot)`` — the
+        Leinhardt & Stewart (2012) criterion used in real N-body codes:
 
-        Bodies do NOT merge — they bounce. Along the contact normal they
-        exchange a momentum impulse
+            v_impact <= v_esc            -> MERGE (perfect accretion): fuse
+                into one body, mass + momentum conserved, radius by volume.
+            v_esc < v_impact <= FRAG*v_esc -> BOUNCE (hit-and-run): a
+                hard-sphere restitution impulse deflects both by mass ratio.
+            v_impact > FRAG*v_esc        -> FRAGMENT (catastrophic
+                disruption): shatter into a largest remnant + debris that fly
+                out conserving total mass + momentum (and gravitate again).
 
-            j = -(1 + e) * v_rel_n / (1/m_a + 1/m_b)
-
-        (Newton's restitution law; ``e`` = ``ORB_RESTITUTION``), so the
-        velocity change each body takes is inversely proportional to its
-        mass: a light asteroid is flung hard while a heavy star barely
-        shifts — momentum is conserved exactly (and kinetic energy too when
-        e = 1). A grabbed (frozen) body acts as an immovable wall (infinite
-        mass). Overlap is then split apart by inverse mass, leaving a small
-        ``ORB_COLLISION_SLOP`` so resting contacts don't jitter.
+        Returns True if the body LIST changed (merge/fragment) so the caller
+        can refresh cached accelerations. A grabbed (frozen) body only ever
+        bounces — it must not fuse or shatter out of the user's hand.
         """
         bodies = self.bodies
+        dead = set()
+        born = []
         n = len(bodies)
-        e = ORB_RESTITUTION
         for i in range(n):
             a = bodies[i]
-            inv_a = 0.0 if a.frozen else 1.0 / a.mass
+            if id(a) in dead:
+                continue
             for k in range(i + 1, n):
                 b = bodies[k]
+                if id(b) in dead:
+                    continue
                 dx = b.x - a.x
                 dy = b.y - a.y
                 dist = math.hypot(dx, dy)
                 min_dist = a.radius + b.radius
                 if dist >= min_dist:
                     continue
-                inv_b = 0.0 if b.frozen else 1.0 / b.mass
-                inv_sum = inv_a + inv_b
-                if inv_sum == 0.0:
-                    continue                      # two walls: nothing to do
                 if dist > 1e-9:
                     nx, ny = dx / dist, dy / dist
                 else:
-                    nx, ny, dist = 1.0, 0.0, 0.0  # coincident: pick an axis
-                # Normal relative velocity (a relative to b); >0 = approaching.
-                vrel = (a.vx - b.vx) * nx + (a.vy - b.vy) * ny
-                if vrel > 0.0:
-                    j = (1.0 + e) * vrel / inv_sum
-                    a.vx -= j * inv_a * nx
-                    a.vy -= j * inv_a * ny
-                    b.vx += j * inv_b * nx
-                    b.vy += j * inv_b * ny
-                # Positional correction: push out of overlap (beyond the slop)
-                # split by inverse mass, so the heavier body moves less.
-                corr = max(min_dist - dist - ORB_COLLISION_SLOP, 0.0) / inv_sum
-                a.x -= corr * inv_a * nx
-                a.y -= corr * inv_a * ny
-                b.x += corr * inv_b * nx
-                b.y += corr * inv_b * ny
+                    nx, ny, dist = 1.0, 0.0, 0.0
+                M = a.mass + b.mass
+                v_esc = math.sqrt(2.0 * ORB_G * M / max(min_dist, 1e-6))
+                v_imp = math.hypot(a.vx - b.vx, a.vy - b.vy)
+
+                if a.frozen or b.frozen:
+                    self._bounce(a, b, nx, ny, dist, min_dist)
+                elif v_imp <= v_esc:
+                    self._merge_pair(a, b)          # a becomes the fused body
+                    dead.add(id(b))
+                    break                            # a changed; next i
+                elif (v_imp > ORB_FRAG_VESC_FACTOR * v_esc
+                      and M > 2 * ORB_FRAG_MIN_MASS):
+                    born.extend(self._fragment(a, b))
+                    dead.add(id(a))
+                    dead.add(id(b))
+                    break
+                else:
+                    self._bounce(a, b, nx, ny, dist, min_dist)
+
+        if dead or born:
+            kept = [x for x in bodies if id(x) not in dead]
+            self.bodies = (kept + born)[-ORB_MAX_BODIES:]
+            return True
+        return False
+
+    def _bounce(self, a, b, nx, ny, dist, min_dist):
+        """Hard-sphere restitution impulse + inverse-mass positional
+        correction (the hit-and-run regime). Momentum conserved exactly."""
+        inv_a = 0.0 if a.frozen else 1.0 / a.mass
+        inv_b = 0.0 if b.frozen else 1.0 / b.mass
+        inv_sum = inv_a + inv_b
+        if inv_sum == 0.0:
+            return
+        vrel = (a.vx - b.vx) * nx + (a.vy - b.vy) * ny
+        if vrel > 0.0:
+            j = (1.0 + ORB_RESTITUTION) * vrel / inv_sum
+            a.vx -= j * inv_a * nx
+            a.vy -= j * inv_a * ny
+            b.vx += j * inv_b * nx
+            b.vy += j * inv_b * ny
+            a.flash = max(a.flash, 0.5)
+            b.flash = max(b.flash, 0.5)
+        corr = max(min_dist - dist - ORB_COLLISION_SLOP, 0.0) / inv_sum
+        a.x -= corr * inv_a * nx
+        a.y -= corr * inv_a * ny
+        b.x += corr * inv_b * nx
+        b.y += corr * inv_b * ny
+
+    def _merge_pair(self, a, b):
+        """Fuse b into a (perfect accretion): a becomes the combined body,
+        conserving mass + momentum, radius recombined by volume, colour blended
+        by mass. b is dropped by the caller."""
+        M = a.mass + b.mass
+        a.x = (a.mass * a.x + b.mass * b.x) / M
+        a.y = (a.mass * a.y + b.mass * b.y) / M
+        a.vx = (a.mass * a.vx + b.mass * b.vx) / M
+        a.vy = (a.mass * a.vy + b.mass * b.vy) / M
+        a.rgb = [int((a.mass * a.rgb[c] + b.mass * b.rgb[c]) / M)
+                 for c in range(3)]
+        if b.mass > a.mass:
+            a.kind = b.kind
+        a.radius = _radius_for_mass(M)
+        a.mass = M
+        a.flash = 1.0
+
+    def _fragment(self, a, b):
+        """Catastrophic disruption: replace a + b with a largest remnant plus
+        ``ORB_FRAG_COUNT`` debris. Total mass and momentum are conserved — the
+        fragments' velocities are the centre-of-mass velocity plus an isotropic
+        scatter whose mass-weighted mean is removed, so sum(m_i v_i) = the
+        original momentum exactly. Fragments gravitate afterwards, so debris
+        can re-accumulate."""
+        M = a.mass + b.mass
+        cx = (a.mass * a.x + b.mass * b.x) / M
+        cy = (a.mass * a.y + b.mass * b.y) / M
+        vcx = (a.mass * a.vx + b.mass * b.vx) / M
+        vcy = (a.mass * a.vy + b.mass * b.vy) / M
+        v_imp = math.hypot(a.vx - b.vx, a.vy - b.vy)
+        scatter = ORB_FRAG_SPEED * v_imp
+        rgb = [int((a.mass * a.rgb[c] + b.mass * b.rgb[c]) / M)
+               for c in range(3)]
+        kind_lr = a.kind if a.mass >= b.mass else b.kind
+
+        lr_mass = M * ORB_FRAG_LR_FRACTION
+        deb_mass = (M - lr_mass) / ORB_FRAG_COUNT
+        masses = [lr_mass] + [deb_mass] * ORB_FRAG_COUNT
+        # Isotropic scatter velocities (COM frame); the remnant barely moves.
+        us = []
+        for idx in range(len(masses)):
+            ang = random.uniform(0.0, 2.0 * math.pi)
+            sp = scatter * 0.12 if idx == 0 else scatter * (0.5 + random.random())
+            us.append((math.cos(ang) * sp, math.sin(ang) * sp))
+        mux = sum(masses[i] * us[i][0] for i in range(len(masses))) / M
+        muy = sum(masses[i] * us[i][1] for i in range(len(masses))) / M
+
+        r_sep = (a.radius + b.radius) * 0.6
+        frags = []
+        for i, m in enumerate(masses):
+            ux = us[i][0] - mux            # momentum-conserving COM velocity
+            uy = us[i][1] - muy
+            sp = math.hypot(ux, uy) or 1.0
+            r = _radius_for_mass(m)
+            body = _Body(self._next_id,
+                         cx + ux / sp * r_sep, cy + uy / sp * r_sep,
+                         vcx + ux, vcy + uy, m, r,
+                         kind_lr if i == 0 else "comet", list(rgb))
+            body.flash = 1.0
+            self._next_id += 1
+            frags.append(body)
+        return frags
 
     def _prune(self):
         """Drop bodies that have flung far off-screen so the body count and
@@ -1557,6 +1669,7 @@ class Orbitals:
                 "x": round(b.x, 1), "y": round(b.y, 1),
                 "r": b.radius, "rgb": b.rgb, "kind": b.kind,
                 "m": round(b.mass, 1),
+                "flash": round(b.flash, 3),
             } for b in self.bodies],
             "count": len(self.bodies),
             "kind": self._kind,
@@ -1597,6 +1710,11 @@ class Orbitals:
                    max(2, b.radius // 3),
                    (min(255, bl + 60), min(255, g + 60), min(255, r + 60)),
                    -1, cv2.LINE_AA)
+        # Impact / merge flash: an expanding white ring that fades out.
+        if b.flash > 0.0:
+            fr = int(b.radius + (1.0 - b.flash) * b.radius * 3.0)
+            cv2.circle(frame, (cx, cy), fr, (255, 255, 255),
+                       max(1, int(b.flash * 3)), cv2.LINE_AA)
 
     def draw(self, frame):
         # Trails (fading toward the body's colour).

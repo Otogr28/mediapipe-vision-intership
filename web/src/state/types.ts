@@ -115,6 +115,8 @@ export interface OrbitalsBody {
   kind: OrbitalKind;
   /** mass (sim units) — bodies collide by momentum, so mass is meaningful */
   m: number;
+  /** transient impact/merge glow (1→0), drawn as an expanding ring */
+  flash: number;
 }
 
 export interface OrbitalsObject {

@@ -534,6 +534,26 @@ body {
   background: var(--ink);
 }
 
+/* ---- vtuber status readout (avatar loaded? body tracked?) ----------- */
+
+.vtuber-status {
+  padding: 8px 14px;
+  background: var(--glass);
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius);
+  font-size: 15px;
+  letter-spacing: 0.04em;
+  color: var(--ink-dim);
+}
+
+.vtuber-status .on {
+  color: var(--go);
+}
+
+.vtuber-status .off {
+  color: var(--danger);
+}
+
 /* ---- connection banner ---------------------------------------------- */
 
 .conn-banner {
