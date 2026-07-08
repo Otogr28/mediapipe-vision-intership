@@ -8,6 +8,7 @@ import { Intro } from "./hud/Intro";
 import { SixSeven } from "./hud/SixSeven";
 import { AimReadout, SlingshotLegend } from "./hud/Slingshot";
 import { isVrmReady } from "./gl/vrmState";
+import { setSkeletonView } from "./overlay/debugView";
 import { OverlayCanvas } from "./overlay/OverlayCanvas";
 import type { SixSevenObject, SlingshotObject } from "./state/types";
 import { useAppState } from "./state/useAppState";
@@ -35,14 +36,25 @@ export function App() {
     new URLSearchParams(location.search).has("nointro"),
   );
   const [showDebug, setShowDebug] = useState(false);
+  // Raw-inference view: draw every tracked point on the body, hide the avatar.
+  // `k` toggles it; `?skeleton=1` opens straight into it (handy from the laptop).
+  const [showSkeleton, setShowSkeleton] = useState(() =>
+    new URLSearchParams(location.search).has("skeleton"),
+  );
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "d") setShowDebug((v) => !v);
+      if (e.key === "k") setShowSkeleton((v) => !v);
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, []);
+
+  // Mirror the toggle into the module flag the Canvas2D loops read.
+  useEffect(() => {
+    setSkeletonView(showSkeleton);
+  }, [showSkeleton]);
 
   const frameW = state?.frame.w ?? 1920;
   const frameH = state?.frame.h ?? 1080;
@@ -71,7 +83,7 @@ export function App() {
           />
         )}
         <OverlayCanvas pairRef={pairRef} frameW={frameW} frameH={frameH} />
-        {hasVtuber && (
+        {hasVtuber && !showSkeleton && (
           <Suspense fallback={null}>
             <VrmAvatar pairRef={pairRef} frameW={frameW} frameH={frameH} />
           </Suspense>

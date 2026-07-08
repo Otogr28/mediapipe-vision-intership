@@ -187,10 +187,13 @@ def fake_hand_world(t, side):
             for x, y, z in w3]
 
 
-def fake_hand_2d(wx, wy):
-    """21 norm-image [x,y] points at the wrist screen pos. Only [0] (wrist) is
-    read (hand->avatar side matching); not drawn over the avatar in vtuber."""
-    return [[round(wx, 4), round(wy, 4)] for _ in range(21)]
+def fake_hand_2d(world, wx, wy, scale=0.7):
+    """21 norm-image [x,y] points: the 3D hand's (x,y) projected around the wrist
+    screen pos, so the skeleton view shows a real hand shape. Only [0] (wrist) is
+    read for hand->avatar side matching; the rest feed the debug overlay."""
+    w0 = world[0]
+    return [[round(wx + (p[0] - w0[0]) * scale, 4),
+             round(wy + (p[1] - w0[1]) * scale, 4)] for p in world]
 
 
 def scene_state(t):
@@ -376,19 +379,21 @@ def scene_state(t):
         cx, cy, hw = vtuber_center(t)
         wl_x, wl_y = cx - hw - 0.22, cy + 0.04      # image-LEFT wrist (horizontal arm)
         wr_x, wr_y = cx + hw + 0.08, cy - 0.26      # image-RIGHT wrist (raised arm)
+        world_r = fake_hand_world(t, "Right")
+        world_l = fake_hand_world(t, "Left")
         base["hands"] = [
             {"id": "handR", "cursor": [round(wr_x * W, 1), round(wr_y * H, 1)],
              "press_cursor": [round(wr_x * W, 1), round(wr_y * H, 1)], "state": "open",
              "progress": round(0.5 * (1 - math.cos(t * 2.1)), 3),
              "ratio": 0.7, "pinching": False, "held": False, "seen_ms": 0.0,
-             "landmarks": fake_hand_2d(wr_x, wr_y),
-             "world": fake_hand_world(t, "Right"), "handedness": "Right"},
+             "landmarks": fake_hand_2d(world_r, wr_x, wr_y),
+             "world": world_r, "handedness": "Right"},
             {"id": "handL", "cursor": [round(wl_x * W, 1), round(wl_y * H, 1)],
              "press_cursor": [round(wl_x * W, 1), round(wl_y * H, 1)], "state": "open",
              "progress": round(0.5 * (1 - math.cos(t * 1.7)), 3),
              "ratio": 0.7, "pinching": False, "held": False, "seen_ms": 0.0,
-             "landmarks": fake_hand_2d(wl_x, wl_y),
-             "world": fake_hand_world(t, "Left"), "handedness": "Left"},
+             "landmarks": fake_hand_2d(world_l, wl_x, wl_y),
+             "world": world_l, "handedness": "Left"},
         ]
         base["pose"] = vtuber_pose(t)
         base["pose_world"] = vtuber_world(t)
