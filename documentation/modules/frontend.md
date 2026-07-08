@@ -50,7 +50,7 @@ node web/scripts/shot.mjs http://localhost:5173/ shot.png 3000
 | --- | --- | --- |
 | `<img src=/stream.mjpg>` | MJPEG | raw mirrored camera frames |
 | `gl/LensedVideo` | WebGL2 | black-hole shader over the video — **mounted only while a BH exists** (zero GPU cost otherwise) |
-| `gl/VrmAvatar` | three.js/WebGL | VRM vtuber avatar — **mounted only while a vtuber object exists** (lazy-loads three-vrm). Rigged in full 3D from `state.pose_world`: each bone aims along its body segment (`setFromUnitVectors`), solved parent-first, mirrored by shoulder image-x |
+| `gl/VrmAvatar` | three.js/WebGL | VRM vtuber avatar — **mounted only while a vtuber object exists** (lazy-loads three-vrm). Rigged in full 3D: body bones aim along their `state.pose_world` segments (`setFromUnitVectors`, parent-first, mirrored by image-x); the whole avatar **translates + scales** to the person's screen position (`state.pose`); hands follow the **full palm orientation** + **30 finger bones** curl from `state.hands[].world` (the GPU-fast hand stream → snappier than the pose-bound arms). Behaviours are flag-gated (FOLLOW_POSITION / DRIVE_HAND_ORIENT / DRIVE_FINGERS / FAST_FOREARM); mirror/depth signs in AXIS / HAND_AXIS / HAND_N_SIGN |
 | `overlay/OverlayCanvas` | Canvas2D | skeleton, sphere, slingshot, pinch cursors |
 | `hud/HudLayer` | DOM | buttons, counter, readouts, hint, debug HUD |
 | `hud/Intro` | DOM | page-load splash (frontend-local clock) |

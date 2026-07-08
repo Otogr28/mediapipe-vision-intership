@@ -44,8 +44,13 @@ Compact separators; worst case (slingshot + 8 projectiles + 2 hands + debug)
 - **hands** — from `gestures.pinch_infos()`: `cursor`, `press_cursor` (px),
   `state` (`open|closing|closed|releasing`), `progress`, `ratio`,
   `pinching` (one-frame edge), `held`, `seen_ms` (staleness — the client
-  hides ghosts past ~200 ms like `cursor.py` does), and the raw normalized
-  `landmarks` (null for grace-window survivors).
+  hides ghosts past ~200 ms like `cursor.py` does), the raw normalized 2D
+  `landmarks` (null for grace-window survivors), and — for the vtuber rig —
+  `world` (21 metric `[x,y,z]` from `hand_world_landmarks`, wrist origin) +
+  `handedness` (`"Left"|"Right"`). `world`/`handedness` are present on both
+  hand backends (mediapipe + the gpu shim); the avatar drives hand orientation
+  + finger curl from `world` and matches hands to sides by image-x (not the
+  `handedness` label, which is unreliable on the mirrored feed).
 - **pose** — 33 image-space landmarks `[nx, ny, vis]` (normalized), drives the
   2D skeleton overlay and the vtuber head. `null` unless pose is running.
 - **pose_world** — the same 33 joints as MediaPipe's metric `pose_world_landmarks`
