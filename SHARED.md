@@ -1234,3 +1234,34 @@ Mock extended with a moving/scaling body + synthetic 3D hands (palm roll + finge
 curl). Avatar translates across the frame with position, stays well-framed, arms
 mirror correctly, hands show articulated fingers, no console errors. `npm run
 build` clean; web/dist committed; Jetson updated to 38cbdc3, backend healthy.
+
+## Update - 2026-07-08 - [Claude (Opus 4.8)]
+
+### Round 8 — wrist candy-wrapper + body delay + a real-inference test harness (ca2da7d)
+User (testing live on the Jetson): body inference had a "HORRIBLE" delay, and
+rotating the wrist collapsed the mesh ("splits into two lobes with a node").
+
+- **Wrist candy-wrapper:** unbounded wrist twist with no forearm-twist bone.
+  `orientBone` now clamps the hand's deviation from rest (relative to the
+  forearm) to `WRIST_MAX_RAD ≈ 72°`, capping the twist below the collapse.
+- **Body delay:** most of it was client smoothing, not just the ~13 fps CPU
+  pose. Cut body/root taus hard (UPPER_ARM 0.06→0.035, SPINE→0.04, HEAD→0.035,
+  root BODY_MOVE 0.12→0.055 / SCALE→0.12). Residual = pose fps (GPU-pose is the
+  real fix, still future work).
+
+### NEW reusable capability: drive the avatar from a VIDEO FILE (no camera)
+So the rig can be tested against REAL inference without the webcam (user rule)
+or a person at the Jetson:
+- `capture.py` `FreshestFrame(loop=, fps=)` loops + paces a video FILE to its
+  native fps (webcam/stream unaffected); `main.py` auto-enables it for non-URL
+  string sources.
+- `HALL_START_VTUBER=1` (config/manager) boots straight into the Vtuber scene
+  and keeps the puppet alive.
+- Get a clip: mixkit CDN is curl-able (Pexels is Cloudflare-blocked) —
+  `curl https://assets.mixkit.co/videos/<id>/<id>-360.mp4`. Run:
+  `HALL_OUTPUT=web HALL_POSE=1 HALL_START_VTUBER=1 HALL_INFERENCE=mediapipe
+   HALL_CAMERA=<clip> uv run python src/main.py`, then vite dev + shot.mjs.
+- VERIFIED the whole rig on a real "person shrugging, palms up" clip: arms,
+  hands, fingers all track; the ~90° wrist supination renders clean (candy-
+  wrapper gone). NOTE: the laptop pose is fast, so this harness does NOT
+  reproduce the Jetson's pose-fps delay — only the client-smoothing part.
