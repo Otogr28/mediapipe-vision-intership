@@ -1191,3 +1191,46 @@ horizontal, all joints articulating, no console errors. `npm run build` clean;
 view + mock; the z-depth sign (`AXIS.z`) and leg behavior should get a final
 eyeball on the real Jetson camera feed — flip one const if depth looks inverted.
 Tip: `?nointro=1` skips the splash (it covers the avatar for the first ~4 s).
+
+## Update - 2026-07-08 - [Claude (Opus 4.8)]
+
+### Round 7 — vtuber rig v2 (uses ALL the 3D inference; commit 38cbdc3)
+User: the avatar didn't follow their screen position, hands had no orientation
+(palm toward/away didn't show), and it still felt delayed — "you have MediaPipe's
+3D inference, you're wasting it." All three fixed by spending the rest of the 3D
+output. Chosen (via AskUserQuestion): full-mirror framing (translate + scale) and
+full 30-bone finger tracking.
+
+- **Backend hand 3D (`src/web/state.py`):** `_hands_state` now also emits per-hand
+  `world` (21 metric `[x,y,z]` from `hand_world_landmarks`) + `handedness`. Both
+  backends produce these (mediapipe + gpu_hands shim) — only state.py was dropping
+  them. Mirrored in `web/src/state/types.ts` (Vec3, HandState.world/handedness);
+  `interp.ts` needs no change (the `...h` spread passes them as newest).
+- **Body follows screen (`VrmAvatar.tsx` `rigBodyTransform`):** translate+scale
+  `vrm.scene` from the shoulder-midpoint of `state.pose` (2D). GOTCHA fixed during
+  bring-up: scaling `vrm.scene` grows from its origin (feet) → pushed the head out
+  of frame. Fix = pivot the scale at the CHEST via `position.y += pivotY*(1-s)`,
+  and pull the camera back (span*4.6 → *5.6) for follow/scale margin.
+- **Hands (`rigHandOrientation` + `rigFingers`):** hand bone gets the full palm
+  orientation via a palm basis (wrist/index-MCP/middle-MCP/pinky-MCP →
+  setFromRotationMatrix) + a captured `palmToBone` rest offset; 30 finger bones
+  aim along their segments (reuse `aimBone`). Hands matched to avatar sides by
+  image-x (NOT handedness). Rides the fast hand stream → snappier than arms.
+- **Responsiveness (`FAST_FOREARM`):** the forearm's screen plane tracks the fast
+  hand wrist (2D), depth stays from pose. Upper arm tau raised (pose-bound).
+- **Flags/knobs:** FOLLOW_POSITION / DRIVE_HAND_ORIENT / DRIVE_FINGERS /
+  FAST_FOREARM, and sign knobs AXIS / HAND_AXIS / HAND_N_SIGN{left,right}.
+
+### Still to confirm ON THE JETSON CAMERA (synthetic mock can't validate these)
+1. `HAND_AXIS.z` — palm-depth sign (palm toward camera should face camera).
+2. `HAND_N_SIGN.{left,right}` — palm-normal chirality per hand (wrong = back of
+   hand faces camera). The Jetson gpu-backend `hand_world_landmarks` were never
+   validated in-app before this — finger/palm quality is the main unknown.
+3. Thumb curl direction (most chirality-sensitive); body-follow X sign.
+If any looks wrong: flip the one knob, or set its flag false, rebuild+push.
+
+### Verified headless (mock `vtuber` + shot.mjs, `?nointro=1`)
+Mock extended with a moving/scaling body + synthetic 3D hands (palm roll + finger
+curl). Avatar translates across the frame with position, stays well-framed, arms
+mirror correctly, hands show articulated fingers, no console errors. `npm run
+build` clean; web/dist committed; Jetson updated to 38cbdc3, backend healthy.
