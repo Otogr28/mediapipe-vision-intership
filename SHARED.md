@@ -1126,3 +1126,29 @@ latent deploy bug so it actually reaches the Jetson via git.
 - Model swap left the old `female vroid` blob in git history (unavoidable);
   repo is heavier. To change avatars: drop a CC0 .vrm at web/public/avatar.vrm,
   `npm run build`, commit web/public + web/dist, push.
+
+## Update - 2026-07-08 01:10 - [Claude (Opus 4.8)]
+
+### What I did (round 5 — the vtuber rig was actually broken)
+User reported arms crossing / model not following. ROOT CAUSE found: the arm
+rig was inverted because `VRMUtils.rotateVRM0` rotates the model 180° about Y,
+so a bone's parent-local +Z points to world -Z — my "rotate about Z" swung the
+arms the WRONG way (and the old mirror sign compounded it). Rewrote the rig:
+- Arms are posed by rotating about the TRUE world-Z axis (world Z expressed in
+  the bone's parent frame via the parent's inverse world quaternion), with the
+  rest angle recomputed from the current parent each frame (so the forearm
+  follows the rotated upper arm). Single-axis -> no twist, no 180° flips.
+- MIRROR is now by IMAGE POSITION, not anatomical MediaPipe label: the
+  shoulder with the larger image-x drives the avatar's screen-right arm. Robust
+  to however MediaPipe labels L/R on the flipped feed; can't cross.
+- Added head-yaw/pitch (nose) + spine lean. Debugged via console angles piped
+  through the Firefox harness.
+VERIFIED in Firefox 152 with an ASYMMETRIC mock pose (right arm up, left arm
+horizontal): the avatar mirrors it exactly, arms don't cross.
+
+### Important context
+- `web/scripts/ff_shot.mjs` now also forwards any `VRMDBG`-tagged console line
+  (used it to read live rest/target angles). Handy for future rig tuning.
+- If on real hardware the arms still mirror the wrong way, the position-based
+  assignment should prevent it — but the head-yaw sign is unverified (centred
+  nose in the mock), so tune HEAD in VrmAvatar.tsx if the head turns wrong.

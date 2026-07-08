@@ -17,7 +17,9 @@ const page = await browser.newPage();
 await page.setViewport({ width: 1600, height: 900 });
 const msgs = [];
 page.on("console", (m) => {
-  if (m.type() === "error" || m.type() === "warning") msgs.push(`${m.type()}: ${m.text()}`);
+  const t = m.text();
+  if (t.includes("VRMDBG") || m.type() === "error" || m.type() === "warning")
+    msgs.push(`${m.type()}: ${t}`);
 });
 page.on("pageerror", (e) => msgs.push(`pageerror: ${e.message}`));
 
