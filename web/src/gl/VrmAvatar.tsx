@@ -8,7 +8,7 @@ import { useEffect, useRef } from "react";
 import * as THREE from "three";
 import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
 import { interpolate } from "../state/interp";
-import type { AppState, PoseState, VtuberObject } from "../state/types";
+import type { AppState, PoseState, PoseWorld, VtuberObject } from "../state/types";
 import type { SnapshotPair } from "../state/useAppState";
 import { setVrmReady } from "./vrmState";
 
@@ -19,115 +19,225 @@ import { setVrmReady } from "./vrmState";
  * present (see App.tsx). Until the model is live, overlay/scene.ts shows a
  * loading spinner (no placeholder puppet).
  *
- * Rigging is a SCREEN-PLANE mapping from the app's own pose landmarks (no
- * Kalidokit, no z, no state-contract change). Each arm bone is rotated about
- * the camera-forward (Z) axis to the image angle of its segment
- * (shoulder→elbow, elbow→wrist) — a single-axis rotation, so there is no
- * twisting or 180° flip. The left/right mapping MIRRORS the user (you raise a
- * hand, the avatar raises the hand on the same side of the screen), which is
- * why the person's right-side landmarks drive the avatar's *left* arm (the
- * avatar faces you). The mouth opens with the pinch; the head follows the
- * nose. Body pose only exists while HALL_POSE is on — the backend turns it on
- * automatically when Vtuber is selected (ui.wants_pose()).
+ * Rigging is a FULL-3D bone mapping driven by MediaPipe's metric world
+ * skeleton (`state.pose_world`, meters, origin at hips). For each humanoid
+ * bone we take the direction of its body segment (shoulder→elbow, elbow→wrist,
+ * hip→knee, …) in 3D and rotate the bone so its REST child-direction aligns
+ * with that target (`setFromUnitVectors`) — a minimal-rotation solve, not a
+ * single-axis swing, so the avatar reaches toward the camera, twists, and
+ * bends every joint instead of just leaning in the screen plane. Bones are
+ * solved parent-first (spine → upper arm → lower arm → hand) so each child
+ * follows its already-rotated parent.
+ *
+ * Left/right MIRRORS the user (raise a hand, the avatar raises the hand on the
+ * same side of the screen). We decide the mapping by the shoulders' IMAGE x
+ * (`state.pose`), not MediaPipe's anatomical L/R label, so the mirrored feed
+ * never crosses the arms. The 2D `pose` still drives the head; the mouth opens
+ * with the pinch. Body pose only exists while HALL_POSE is on — the backend
+ * turns it on automatically when Vtuber is selected (ui.wants_pose()).
  */
 
 // --- rig tuning knobs ----------------------------------------------------
-const ARM_DAMP = 0.4; // slerp toward the target arm pose each frame
+const ARM_DAMP = 0.45; // slerp toward the target each frame (higher = snappier)
+const HAND_DAMP = 0.35;
+const SPINE_DAMP = 0.18;
+const LEG_DAMP = 0.3;
 const HEAD_DAMP = 0.3;
+const RELAX_DAMP = 0.1; // ease a bone back to rest when its landmarks vanish
 const POSE_MIN_VIS = 0.25; // ignore landmarks below this visibility
+const LEG_MIN_VIS = 0.55; // legs are usually out of frame — demand more before moving
 const BLINK_PERIOD = 4.2; // s between blinks
 const BLINK_LEN = 0.14; // s each blink lasts
 
-const ZAXIS = new THREE.Vector3(0, 0, 1);
+// MediaPipe world axes (x image-right, y down, z away from camera) → three.js
+// (x right, y up, z toward viewer). Flip Y and Z. Sign knobs kept explicit so
+// a mirror/depth inversion is a one-character change.
+const AXIS = { x: 1, y: -1, z: -1 };
 
-// MediaPipe pose indices.
+// MediaPipe pose landmark indices.
 const NOSE = 0;
 const L_SH = 11, R_SH = 12;
+const L_HIP = 23, R_HIP = 24;
+
+// A limb chain: joint landmark indices from root to tip.
+interface Chain { a: number; b: number; c: number; tip: number }
+const CHAIN_1: Chain = { a: 11, b: 13, c: 15, tip: 19 }; // shoulder/elbow/wrist/index
+const CHAIN_2: Chain = { a: 12, b: 14, c: 16, tip: 20 };
+const LEG_1 = { a: 23, b: 25, c: 27 }; // hip/knee/ankle
+const LEG_2 = { a: 24, b: 26, c: 28 };
 
 type Bones = Record<string, THREE.Object3D | null>;
-interface ArmRest {
+interface Rest {
   restQuat: THREE.Quaternion; // bone's local rotation at rest
-  childLocalPos: THREE.Vector3; // direction toward the child, in bone-local space
+  childLocalPos: THREE.Vector3; // unit direction toward its child, bone-local
 }
-
 interface Rig {
   vrm: VRM;
   bones: Bones;
-  arm: Record<string, ArmRest>;
+  rest: Record<string, Rest>;
   restHead: THREE.Quaternion;
-  restSpine: THREE.Quaternion;
 }
 
-function wrap(a: number) {
-  while (a > Math.PI) a -= 2 * Math.PI;
-  while (a < -Math.PI) a += 2 * Math.PI;
-  return a;
+// Scratch objects reused every frame (rig runs at display rate — no per-frame
+// allocation).
+const _pq = new THREE.Quaternion();
+const _rw = new THREE.Quaternion();
+const _delta = new THREE.Quaternion();
+const _world = new THREE.Quaternion();
+const _local = new THREE.Quaternion();
+const _restDir = new THREE.Vector3();
+const _target = new THREE.Vector3();
+// Private scratch for the vector helpers below — never passed in as `out`, so
+// a caller can hold two helper results live at once without aliasing.
+const _s0 = new THREE.Vector3();
+const _s1 = new THREE.Vector3();
+// Caller-facing scratch.
+const _p = new THREE.Vector3();
+const _q = new THREE.Vector3();
+const _dir = new THREE.Vector3();
+
+/** Map a MediaPipe world landmark [x,y,z] into three.js world space. */
+function toThree(v: [number, number, number], out: THREE.Vector3) {
+  return out.set(v[0] * AXIS.x, v[1] * AXIS.y, v[2] * AXIS.z);
 }
 
-/** Point an arm bone so its segment sits at `targetWorldAngle` in the screen
- *  (world XY) plane. Rotates about the TRUE world-Z axis (expressed in the
- *  bone's parent frame) so the model's own orientation — including the 180°
- *  flip three-vrm applies to VRM0 models, and any torso lean — can't invert
- *  the direction. Recomputes the rest angle from the CURRENT parent each frame
- *  so the forearm follows the (already-rotated) upper arm correctly. */
-function aimArm(rig: Rig, name: string, targetWorldAngle: number, damp: number) {
+/** World-space direction from landmark i to landmark j (into `out`). */
+function segDir(W: PoseWorld, i: number, j: number, out: THREE.Vector3) {
+  toThree(W[j], _s0);
+  toThree(W[i], _s1);
+  return out.subVectors(_s0, _s1);
+}
+
+/** Midpoint of landmarks i and j in three.js world space (into `out`). */
+function midPoint(W: PoseWorld, i: number, j: number, out: THREE.Vector3) {
+  toThree(W[i], _s0);
+  toThree(W[j], _s1);
+  return out.addVectors(_s0, _s1).multiplyScalar(0.5);
+}
+
+const vis = (pose: PoseState, i: number) => (pose[i] ? pose[i][2] : 0);
+
+/**
+ * Orient bone `name` so its segment points along `dirWorld` (a direction in
+ * three.js world space). Works entirely in world space then converts back to
+ * the bone's local frame, so it's immune to the parent chain's current pose —
+ * as long as parents are solved first, children follow. The delta is measured
+ * from the bone's REST world direction, preserving the model's rest roll (no
+ * arbitrary twist), and it's the minimal rotation (`setFromUnitVectors`), so
+ * there's no 180° flip.
+ */
+function aimBone(rig: Rig, name: string, dirWorld: THREE.Vector3, damp: number) {
   const bone = rig.bones[name];
-  const r = rig.arm[name];
-  if (!bone || !bone.parent || !r) return;
-  const pq = new THREE.Quaternion();
-  bone.parent.getWorldQuaternion(pq);
-  const restWorldDir = r.childLocalPos
-    .clone()
-    .applyQuaternion(pq.clone().multiply(r.restQuat));
-  const restWorldAngle = Math.atan2(restWorldDir.y, restWorldDir.x);
-  const delta = wrap(targetWorldAngle - restWorldAngle);
-  const axis = ZAXIS.clone().applyQuaternion(pq.clone().invert()).normalize();
-  const q = new THREE.Quaternion().setFromAxisAngle(axis, delta).multiply(r.restQuat);
-  bone.quaternion.slerp(q, damp);
+  const r = rig.rest[name];
+  if (!bone || !bone.parent || !r || dirWorld.lengthSq() < 1e-9) return;
+  bone.parent.getWorldQuaternion(_pq);
+  _rw.copy(_pq).multiply(r.restQuat); // this bone's current rest world quat
+  _restDir.copy(r.childLocalPos).applyQuaternion(_rw).normalize();
+  _target.copy(dirWorld).normalize();
+  _delta.setFromUnitVectors(_restDir, _target); // world rotation rest→target
+  _world.copy(_delta).multiply(_rw); // desired world quat
+  _local.copy(_pq).invert().multiply(_world); // back into local space
+  bone.quaternion.slerp(_local, damp);
 }
 
-function rigOneArm(
+/** Ease a bone back toward its captured rest rotation. */
+function restBone(rig: Rig, name: string, damp: number) {
+  const b = rig.bones[name];
+  const r = rig.rest[name];
+  if (b && r) b.quaternion.slerp(r.restQuat, damp);
+}
+
+/** Torso: aim the spine from the hips-midpoint toward the shoulders-midpoint
+ *  — a full-3D lean (side, and toward/away from camera) rather than a flat
+ *  screen-plane tilt. Needs both shoulders and both hips in view. */
+function rigSpine(rig: Rig, pose: PoseState, W: PoseWorld) {
+  const okSh = vis(pose, L_SH) >= POSE_MIN_VIS && vis(pose, R_SH) >= POSE_MIN_VIS;
+  const okHip = vis(pose, L_HIP) >= POSE_MIN_VIS && vis(pose, R_HIP) >= POSE_MIN_VIS;
+  if (!okSh || !okHip) {
+    restBone(rig, "spine", RELAX_DAMP);
+    return;
+  }
+  midPoint(W, L_SH, R_SH, _p);
+  midPoint(W, L_HIP, R_HIP, _q);
+  _dir.subVectors(_p, _q);
+  aimBone(rig, "spine", _dir, SPINE_DAMP);
+}
+
+/** One arm: upper (shoulder→elbow), lower (elbow→wrist), hand (wrist→index).
+ *  Each segment relaxes individually when its landmarks drop below threshold. */
+function rigArm(
   rig: Rig,
   upper: string,
   lower: string,
-  idx: [number, number, number], // shoulder, elbow, wrist landmark indices
+  hand: string,
+  ch: Chain,
   pose: PoseState,
+  W: PoseWorld,
 ) {
-  const s = pose[idx[0]];
-  const e = pose[idx[1]];
-  const w = pose[idx[2]];
-  if (!s || !e || s[2] < POSE_MIN_VIS || e[2] < POSE_MIN_VIS) return;
-  // image y grows downward -> negate for world up.
-  aimArm(rig, upper, Math.atan2(-(e[1] - s[1]), e[0] - s[0]), ARM_DAMP);
-  if (w && w[2] >= POSE_MIN_VIS) {
-    aimArm(rig, lower, Math.atan2(-(w[1] - e[1]), w[0] - e[0]), ARM_DAMP);
+  if (vis(pose, ch.a) >= POSE_MIN_VIS && vis(pose, ch.b) >= POSE_MIN_VIS) {
+    aimBone(rig, upper, segDir(W, ch.a, ch.b, _dir), ARM_DAMP);
+  } else {
+    restBone(rig, upper, RELAX_DAMP);
+  }
+  if (vis(pose, ch.b) >= POSE_MIN_VIS && vis(pose, ch.c) >= POSE_MIN_VIS) {
+    aimBone(rig, lower, segDir(W, ch.b, ch.c, _dir), ARM_DAMP);
+  } else {
+    restBone(rig, lower, RELAX_DAMP);
+  }
+  // Wrist bend follows the pose's index knuckle — coarse (fingers come from the
+  // hand detector, not pose), but enough to stop a stiff, frozen hand.
+  if (vis(pose, ch.c) >= POSE_MIN_VIS && vis(pose, ch.tip) >= POSE_MIN_VIS) {
+    aimBone(rig, hand, segDir(W, ch.c, ch.tip, _dir), HAND_DAMP);
+  } else {
+    restBone(rig, hand, RELAX_DAMP);
   }
 }
 
-function rigArms(rig: Rig, pose: PoseState) {
-  const a = pose[11];
-  const b = pose[12];
-  if (!a || !b) return;
-  // MIRROR by IMAGE POSITION, not anatomical label: the shoulder landmark with
-  // the larger image-x is on the screen RIGHT and must drive the avatar's LEFT
-  // arm (which is on the screen right, since the avatar faces us). Using the
-  // actual x keeps the mirror correct no matter how MediaPipe labels L/R on
-  // the flipped feed — and stops the arms from crossing.
-  const set11: [number, number, number] = [11, 13, 15];
-  const set12: [number, number, number] = [12, 14, 16];
-  const rightSide = a[0] >= b[0] ? set11 : set12; // landmarks on the image right
-  const leftSide = a[0] >= b[0] ? set12 : set11; // landmarks on the image left
-  rigOneArm(rig, "leftUpperArm", "leftLowerArm", rightSide, pose);
-  rigOneArm(rig, "rightUpperArm", "rightLowerArm", leftSide, pose);
+/** One leg: hip→knee→ankle. Gated harder than arms since the avatar is framed
+ *  head-to-hips and the legs are usually off-screen / poorly seen. */
+function rigLeg(
+  rig: Rig,
+  upper: string,
+  lower: string,
+  leg: { a: number; b: number; c: number },
+  pose: PoseState,
+  W: PoseWorld,
+) {
+  if (vis(pose, leg.a) >= LEG_MIN_VIS && vis(pose, leg.b) >= LEG_MIN_VIS) {
+    aimBone(rig, upper, segDir(W, leg.a, leg.b, _dir), LEG_DAMP);
+  } else {
+    restBone(rig, upper, RELAX_DAMP);
+  }
+  if (vis(pose, leg.b) >= LEG_MIN_VIS && vis(pose, leg.c) >= LEG_MIN_VIS) {
+    aimBone(rig, lower, segDir(W, leg.b, leg.c, _dir), LEG_DAMP);
+  } else {
+    restBone(rig, lower, RELAX_DAMP);
+  }
 }
 
-function relaxArms(rig: Rig) {
-  // Ease arms back toward the model's REST pose (not identity) when pose is off.
-  for (const name of ["leftUpperArm", "leftLowerArm", "rightUpperArm", "rightLowerArm"]) {
-    const b = rig.bones[name];
-    const r = rig.arm[name];
-    if (b && r) b.quaternion.slerp(r.restQuat, 0.08);
+function rigBody(rig: Rig, pose: PoseState, W: PoseWorld) {
+  // Both feeds always carry 33 joints; bail defensively if a frame is short.
+  if (!pose[L_SH] || !pose[R_SH] || !pose[L_HIP] || !pose[R_HIP] || W.length < 33) {
+    relaxBody(rig);
+    return;
   }
+  rigSpine(rig, pose, W);
+  // Mirror by IMAGE x: the shoulder on the screen RIGHT (larger x) drives the
+  // avatar's LEFT arm (the avatar faces us, so its left is on our right). This
+  // is label-agnostic, so the mirrored feed can't cross the arms.
+  const rightChain = pose[L_SH][0] >= pose[R_SH][0] ? CHAIN_1 : CHAIN_2;
+  const leftChain = pose[L_SH][0] >= pose[R_SH][0] ? CHAIN_2 : CHAIN_1;
+  rigArm(rig, "leftUpperArm", "leftLowerArm", "leftHand", rightChain, pose, W);
+  rigArm(rig, "rightUpperArm", "rightLowerArm", "rightHand", leftChain, pose, W);
+  // Legs, same mirror-by-x rule.
+  const rightLeg = pose[L_HIP][0] >= pose[R_HIP][0] ? LEG_1 : LEG_2;
+  const leftLeg = pose[L_HIP][0] >= pose[R_HIP][0] ? LEG_2 : LEG_1;
+  rigLeg(rig, "leftUpperLeg", "leftLowerLeg", rightLeg, pose, W);
+  rigLeg(rig, "rightUpperLeg", "rightLowerLeg", leftLeg, pose, W);
+}
+
+function relaxBody(rig: Rig) {
+  for (const name of Object.keys(rig.rest)) restBone(rig, name, 0.08);
 }
 
 function rigHead(rig: Rig, pose: PoseState) {
@@ -147,19 +257,6 @@ function rigHead(rig: Rig, pose: PoseState) {
   head.quaternion.slerp(target, HEAD_DAMP);
 }
 
-function rigSpine(rig: Rig, pose: PoseState) {
-  const ls = pose[L_SH];
-  const rs = pose[R_SH];
-  const spine = rig.bones.spine;
-  if (!spine || !ls || !rs || ls[2] < POSE_MIN_VIS || rs[2] < POSE_MIN_VIS) return;
-  const midx = (ls[0] + rs[0]) / 2 - 0.5; // shoulder centre vs frame centre
-  const lean = Math.max(-0.22, Math.min(0.22, midx * 1.4));
-  const target = rig.restSpine
-    .clone()
-    .multiply(new THREE.Quaternion().setFromEuler(new THREE.Euler(0, 0, lean)));
-  spine.quaternion.slerp(target, 0.12);
-}
-
 function rigFace(rig: Rig, mouth: number, tSec: number) {
   const em = rig.vrm.expressionManager;
   if (!em) return;
@@ -169,6 +266,22 @@ function rigFace(rig: Rig, mouth: number, tSec: number) {
   const blink = phase < BLINK_LEN ? 1 - Math.abs(phase / BLINK_LEN - 0.5) * 2 : 0;
   em.setValue("blink", blink);
 }
+
+// Each driven bone and the candidate child bones whose rest position defines
+// its "point-at" axis (first present wins — finger/leg bones may be absent).
+const CHILD_CANDIDATES: Record<string, VRMHumanBoneName[]> = {
+  spine: ["chest", "upperChest", "neck"],
+  leftUpperArm: ["leftLowerArm"],
+  leftLowerArm: ["leftHand"],
+  rightUpperArm: ["rightLowerArm"],
+  rightLowerArm: ["rightHand"],
+  leftHand: ["leftMiddleProximal", "leftIndexProximal", "leftRingProximal"],
+  rightHand: ["rightMiddleProximal", "rightIndexProximal", "rightRingProximal"],
+  leftUpperLeg: ["leftLowerLeg"],
+  leftLowerLeg: ["leftFoot"],
+  rightUpperLeg: ["rightLowerLeg"],
+  rightLowerLeg: ["rightFoot"],
+};
 
 interface Props {
   pairRef: React.RefObject<SnapshotPair | null>;
@@ -227,31 +340,31 @@ export function VrmAvatar({ pairRef, frameW, frameH }: Props) {
           upperChest: get("upperChest"),
           leftUpperArm: get("leftUpperArm"),
           leftLowerArm: get("leftLowerArm"),
+          leftHand: get("leftHand"),
           rightUpperArm: get("rightUpperArm"),
           rightLowerArm: get("rightLowerArm"),
+          rightHand: get("rightHand"),
+          leftUpperLeg: get("leftUpperLeg"),
+          leftLowerLeg: get("leftLowerLeg"),
+          rightUpperLeg: get("rightUpperLeg"),
+          rightLowerLeg: get("rightLowerLeg"),
         };
 
-        // Capture each arm bone's REST rotation + its rest screen angle (the
-        // rig rotates relative to these, so it works for any rest pose).
-        const arm: Record<string, ArmRest> = {};
-        const childOf: Record<string, VRMHumanBoneName> = {
-          leftUpperArm: "leftLowerArm",
-          leftLowerArm: "leftHand",
-          rightUpperArm: "rightLowerArm",
-          rightLowerArm: "rightHand",
-        };
-        for (const [bone, child] of Object.entries(childOf)) {
+        // Capture each driven bone's REST rotation + the unit direction toward
+        // its child at rest. The rig rotates relative to these, so it works for
+        // any model's rest pose. A bone whose child is missing stays undriven.
+        const rest: Record<string, Rest> = {};
+        for (const [bone, children] of Object.entries(CHILD_CANDIDATES)) {
           const b = bones[bone];
-          const c = get(child);
-          if (b && c) {
-            arm[bone] = {
-              restQuat: b.quaternion.clone(),
-              childLocalPos: c.position.clone().normalize(),
-            };
-          }
+          if (!b) continue;
+          const child = children.map(get).find((c) => c && c.position.lengthSq() > 1e-8);
+          if (!child) continue;
+          rest[bone] = {
+            restQuat: b.quaternion.clone(),
+            childLocalPos: child.position.clone().normalize(),
+          };
         }
         const restHead = bones.head?.quaternion.clone() ?? new THREE.Quaternion();
-        const restSpine = bones.spine?.quaternion.clone() ?? new THREE.Quaternion();
 
         // Frame the upper body wide enough that raised arms stay on-screen.
         const headPos = new THREE.Vector3();
@@ -265,7 +378,7 @@ export function VrmAvatar({ pairRef, frameW, frameH }: Props) {
           camera.lookAt(0, chestY, 0);
         }
 
-        rig = { vrm, bones, arm, restHead, restSpine };
+        rig = { vrm, bones, rest, restHead };
         setVrmReady(true);
       },
       undefined,
@@ -287,12 +400,11 @@ export function VrmAvatar({ pairRef, frameW, frameH }: Props) {
         const state: AppState | null = pair ? interpolate(pair, now) : null;
         const vt = state?.objects.find((o): o is VtuberObject => o.type === "vtuber");
         rigFace(rig, vt?.mouth ?? 0, tSec);
-        if (state?.pose) {
-          rigArms(rig, state.pose);
-          rigSpine(rig, state.pose);
-          rigHead(rig, state.pose);
+        if (state?.pose) rigHead(rig, state.pose);
+        if (state?.pose && state.pose_world) {
+          rigBody(rig, state.pose, state.pose_world);
         } else {
-          relaxArms(rig);
+          relaxBody(rig);
         }
         rig.vrm.update(dt);
       }

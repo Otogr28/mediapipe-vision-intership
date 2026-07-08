@@ -79,6 +79,22 @@ def _pose_state(pose_landmarks):
     ]
 
 
+def _pose_world_state(pose_world_landmarks):
+    """Metric 3D skeleton (meters, origin at the hips midpoint) as 33 [x, y, z].
+
+    This is MediaPipe's ``pose_world_landmarks`` — a gravity-aligned, camera-
+    independent 3D pose, unlike the weak per-image ``z`` of ``_pose_state``.
+    Visibility is NOT repeated here; the rig reuses ``pose[i][2]`` (same
+    indices) to gate a joint. 3 dp is ~1 mm precision, plenty for rigging.
+    """
+    if pose_world_landmarks is None:
+        return None
+    return [
+        [round(lm.x, 3), round(lm.y, 3), round(lm.z, 3)]
+        for lm in pose_world_landmarks
+    ]
+
+
 def _debug_state(render_fps):
     return {
         "render_fps": round(render_fps, 1),
@@ -90,12 +106,14 @@ def _debug_state(render_fps):
     }
 
 
-def build_state(ui, hand_result, pose_landmarks):
+def build_state(ui, hand_result, pose_landmarks, pose_world_landmarks=None):
     """One frame's complete UI state as compact JSON bytes (UTF-8).
 
     Call once per rendered frame, after ``ui.update(...)`` (the pinch
     snapshot must be advanced) — ``main.py`` hands the result straight to
-    ``sink.publish_state``.
+    ``sink.publish_state``. ``pose_world_landmarks`` is optional: the 2D
+    ``pose`` still drives the skeleton overlay + head; the 3D ``pose_world``
+    (when present) drives the vtuber rig's per-bone orientation.
     """
     global _seq, _last_t, _dt_ema
     now = time.monotonic()
@@ -111,6 +129,7 @@ def build_state(ui, hand_result, pose_landmarks):
         "frame": {"w": ui.frame_w, "h": ui.frame_h},
         "hands": _hands_state(hand_result, now),
         "pose": _pose_state(pose_landmarks),
+        "pose_world": _pose_world_state(pose_world_landmarks),
         "debug": (_debug_state(1.0 / _dt_ema if _dt_ema > 0.0 else 0.0)
                   if DEBUG_HUD else None),
     }

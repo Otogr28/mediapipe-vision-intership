@@ -27,8 +27,17 @@ export interface HandState {
   landmarks: Vec2[] | null;
 }
 
-/** 33 pose landmarks as [x, y, visibility], normalized. */
+/** 33 pose landmarks as [x, y, visibility], normalized (image space). */
 export type PoseState = [number, number, number][];
+
+/**
+ * 33 metric 3D pose landmarks as [x, y, z] in meters, origin at the hips
+ * midpoint (MediaPipe `pose_world_landmarks`). Camera-independent and
+ * gravity-aligned — this is what drives the vtuber rig's per-bone 3D
+ * orientation. Visibility is not repeated; index into `pose[i][2]`.
+ * MediaPipe axes: +x image-right, +y down, +z away from camera.
+ */
+export type PoseWorld = [number, number, number][];
 
 export interface ButtonState {
   id: string;
@@ -167,6 +176,8 @@ export interface AppState {
   frame: { w: number; h: number };
   hands: HandState[];
   pose: PoseState | null;
+  /** metric 3D skeleton for the vtuber rig; null unless pose is running */
+  pose_world?: PoseWorld | null;
   session: {
     state: "menu" | "interactables" | "experiments";
     experiment: "black_hole" | "slingshot" | "orbitals" | null;

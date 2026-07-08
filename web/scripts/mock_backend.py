@@ -98,6 +98,39 @@ def vtuber_pose(t):
     return [[round(a, 4), round(b, 4), round(c, 2)] for a, b, c in lm]
 
 
+def vtuber_world(t):
+    """Synthetic metric 3D skeleton (`pose_world_landmarks`) matching the 2D
+    `vtuber_pose`: meters, origin at hips midpoint, +x image-right, +y DOWN,
+    +z away from camera. The image-right arm (idx 12/14/16) is raised and, on
+    a slow cycle, REACHES toward the camera (negative z) so the depth mapping
+    is visible; the image-left arm (11/13/15) is held out horizontally."""
+    reach = 0.5 * (1.0 - math.cos(t * 1.3))   # 0..1, raised arm reaches forward
+    zf = -0.38 * reach                        # toward camera (=> +z in three.js)
+    zl = 0.12 * math.sin(t * 1.5)             # left arm slow depth wobble
+    lm = [[0.0, 0.0, 0.0] for _ in range(33)]
+    lm[0] = [0.0, -0.72, -0.05]                       # nose
+    # image-LEFT arm (person's left) — held out horizontal to the left
+    lm[11] = [-0.18, -0.50, 0.0]                      # L shoulder
+    lm[13] = [-0.42, -0.50, zl]                       # L elbow
+    lm[15] = [-0.64, -0.50, zl]                       # L wrist
+    lm[19] = [-0.70, -0.50, zl]                       # L index
+    lm[17] = [-0.69, -0.47, zl]                       # L pinky
+    # image-RIGHT arm (person's right) — raised up, reaching toward camera
+    lm[12] = [0.18, -0.50, 0.0]                       # R shoulder
+    lm[14] = [0.30, -0.72, zf]                        # R elbow
+    lm[16] = [0.36, -0.95, zf]                        # R wrist
+    lm[20] = [0.38, -1.05, zf]                        # R index
+    lm[18] = [0.34, -1.03, zf]                        # R pinky
+    # hips + legs (mostly off-frame in the avatar shot; here just for the spine)
+    lm[23] = [-0.12, 0.0, 0.0]                        # L hip
+    lm[24] = [0.12, 0.0, 0.0]                         # R hip
+    lm[25] = [-0.13, 0.45, 0.0]                       # L knee
+    lm[26] = [0.13, 0.45, 0.0]                        # R knee
+    lm[27] = [-0.13, 0.90, 0.0]                       # L ankle
+    lm[28] = [0.13, 0.90, 0.0]                        # R ankle
+    return [[round(a, 3), round(b, 3), round(c, 3)] for a, b, c in lm]
+
+
 def scene_state(t):
     margin = int(H * 0.12)
     hover = int(t) % 2 == 0
@@ -292,6 +325,7 @@ def scene_state(t):
              "seen_ms": 0.0, "landmarks": None},
         ]
         base["pose"] = vtuber_pose(t)
+        base["pose_world"] = vtuber_world(t)
         base["objects"] = [{
             "type": "vtuber", "t": round(t % 1000.0, 3),
             "mouth": round(0.5 * (1 - math.cos(t * 1.8)), 3),

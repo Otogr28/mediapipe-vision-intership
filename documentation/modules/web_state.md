@@ -32,6 +32,7 @@ Compact separators; worst case (slingshot + 8 projectiles + 2 hands + debug)
               "experiment": null, "hint": {"visible": false}},
   "hands":  [ /* per-hand pinch snapshot + landmarks, see below */ ],
   "pose":   [[nx, ny, vis] /* ×33 */] | null,
+  "pose_world": [[mx, my, mz] /* ×33, meters */] | null,
   "buttons": [{"id": "menu.interactables", "label": "...",
                "rect": [x, y, w, h], "hovered": false, "pressed": false}],
   "speed":  {"rect": [x, y, w, h], "text": "1x"} | null,
@@ -45,6 +46,14 @@ Compact separators; worst case (slingshot + 8 projectiles + 2 hands + debug)
   `pinching` (one-frame edge), `held`, `seen_ms` (staleness — the client
   hides ghosts past ~200 ms like `cursor.py` does), and the raw normalized
   `landmarks` (null for grace-window survivors).
+- **pose** — 33 image-space landmarks `[nx, ny, vis]` (normalized), drives the
+  2D skeleton overlay and the vtuber head. `null` unless pose is running.
+- **pose_world** — the same 33 joints as MediaPipe's metric `pose_world_landmarks`
+  `[x, y, z]` in **meters**, origin at the hips midpoint, gravity-aligned and
+  camera-independent (axes: +x image-right, +y down, +z away from camera). This
+  is the real 3D skeleton that drives the vtuber rig's per-bone orientation
+  (`web/src/gl/VrmAvatar.tsx`); visibility is *not* repeated — the rig gates a
+  joint on `pose[i][2]`. `null` unless pose is running.
 - **session / buttons / speed / objects** — from `UIManager.to_state()`,
   which mirrors the per-state branching of `UIManager.draw()`: only what
   the cv2 path would draw this frame is included. Button ids are stable
