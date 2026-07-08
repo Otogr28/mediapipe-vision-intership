@@ -54,17 +54,20 @@ const FAST_FOREARM = true; // forearm tracks the fast hand stream, not slow pose
 // The body rides the ~13 fps CPU pose, so it can never beat that; but the
 // client smoothing was adding a lot of the felt lag on top. These are cut low
 // (snappier, a touch more stepping) since the user prioritised low delay.
-const UPPER_ARM_TAU = 0.035; // was 0.06
+// The backend now One-Euro-smooths + extrapolates the pose (PoseSmoother), so
+// the frontend body damping can be light — just enough to interp to display
+// rate — instead of doing (laggy) smoothing of its own.
+const UPPER_ARM_TAU = 0.025;
 const LOWER_ARM_TAU = 0.03; // rides the fast hand stream when FAST_FOREARM
 const HAND_TAU = 0.04; // coarse wrist aim (pose fallback, no matched hand)
 const HAND_ORIENT_TAU = 0.045; // palm orientation (fast hand stream)
 const FINGER_TAU = 0.04; // finger curl (fast hand stream)
-const SPINE_TAU = 0.04; // was 0.06
-const LEG_TAU = 0.045;
-const HEAD_TAU = 0.035; // was 0.05
+const SPINE_TAU = 0.03;
+const LEG_TAU = 0.035;
+const HEAD_TAU = 0.03;
 const RELAX_TAU = 0.16; // ease a bone back to rest when its landmarks vanish
-const BODY_MOVE_TAU = 0.055; // was 0.12 — root-follow was a big chunk of the "body delay"
-const BODY_SCALE_TAU = 0.12; // was 0.25
+const BODY_MOVE_TAU = 0.04; // root-follow (pose is already smoothed upstream)
+const BODY_SCALE_TAU = 0.12;
 // Max wrist deviation from rest (relative to the forearm) — caps the twist that
 // otherwise collapses the mesh at the wrist.
 const WRIST_MAX_RAD = (72 * Math.PI) / 180;

@@ -11,6 +11,9 @@ from config import (HALL_INFERENCE, HAND_MODEL_PATH,
                     NUM_HANDS, NUM_POSES, POSE_MODEL_PATH)
 
 latest_pose_result = None
+# (result, receive time.monotonic()) — like the hand packet, so the pose
+# smoother can extrapolate by the result's true age.
+latest_pose_packet = (None, None)
 latest_hand_result = None
 # (result, receive time.monotonic()) published as ONE tuple assignment so a
 # reader can never pair a new result with an old time — the callbacks run on
@@ -24,8 +27,9 @@ _hand_last_t = None
 
 
 def on_pose_result(result, output_image, timestamp_ms):
-    global latest_pose_result
+    global latest_pose_result, latest_pose_packet
     latest_pose_result = result
+    latest_pose_packet = (result, time.monotonic())
 
 
 def on_hand_result(result, output_image, timestamp_ms):

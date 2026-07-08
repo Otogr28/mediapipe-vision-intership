@@ -165,6 +165,26 @@ PINCH_CURSOR_BETA = 0.01
 PINCH_RATIO_MIN_CUTOFF = 2.0    # pinch ratio (lighter, keeps clicks snappy)
 PINCH_RATIO_BETA = 0.5
 
+# Body-pose smoothing (POSE_SMOOTHER): the same One-Euro + velocity
+# extrapolation the cursor gets, applied to every pose landmark (2D image +
+# 3D world). Pose runs ~13 fps on CPU and one inference behind, so raw it
+# stutters and lags while the faster, already-filtered hands feel fine. The
+# filter kills the stutter/teleport-jumps; the extrapolation (output + filtered
+# velocity × result age, capped) hides the latency so the body glides between
+# results instead of freezing. Landmarks are normalized (2D) / metres (3D), so
+# the cutoffs are lower than the pixel-space cursor's. Tune for smooth-at-rest,
+# snappy-on-motion. Set HALL_POSE_SMOOTH=0 to bypass (raw passthrough).
+POSE_SMOOTHING = os.environ.get("HALL_POSE_SMOOTH", "1") == "1"
+# Tuned against a real clip replayed at the Jetson's ~13 fps pose rate: vs the
+# raw "staircase" the body shows today, these cut the worst per-frame jump ~2.9x
+# (glide, not stutter) for ~5% more lag, which the extrapolation then hides.
+POSE_MIN_CUTOFF = 0.8
+POSE_BETA = 0.4
+POSE_EXTRAP_MAX_S = 0.12
+# Re-init the filters after a gap this long (pose turned off then on again),
+# so the body eases in from the new pose instead of snapping across the gap.
+POSE_SMOOTH_RESET_GAP_S = 0.4
+
 # Cursor anchor: the THUMB TIP (landmark 4, hard-wired in gestures.py).
 # The thumb is the stable side of a thumb-index pinch — the index does
 # most of the closing travel — so the cursor tracks the finger the user
