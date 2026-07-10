@@ -192,6 +192,9 @@ export interface AppState {
     hint: { visible: boolean };
     /** vtuber "Points" toggle — hide the avatar + draw the raw skeleton */
     show_points?: boolean;
+    /** which vtuber avatar to load (index into AVATARS); set by the backend's
+     *  "Avatar" pinch button. Absent on older backends → falls back to 0. */
+    avatar_index?: number;
   };
   buttons: ButtonState[];
   speed: SpeedPill | null;

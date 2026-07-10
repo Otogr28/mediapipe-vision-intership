@@ -7,6 +7,7 @@ import { HudLayer } from "./hud/HudLayer";
 import { Intro } from "./hud/Intro";
 import { SixSeven } from "./hud/SixSeven";
 import { AimReadout, SlingshotLegend } from "./hud/Slingshot";
+import { AVATARS } from "./gl/avatars";
 import { isVrmReady } from "./gl/vrmState";
 import { setSkeletonView } from "./overlay/debugView";
 import { OverlayCanvas } from "./overlay/OverlayCanvas";
@@ -41,6 +42,12 @@ export function App() {
   const [showSkeleton, setShowSkeleton] = useState(() =>
     new URLSearchParams(location.search).has("skeleton"),
   );
+  // `?avatar=N` fallback for local/mock runs whose backend doesn't send
+  // session.avatar_index (the real backend always does — see below).
+  const urlAvatar = (() => {
+    const n = Number(new URLSearchParams(location.search).get("avatar"));
+    return Number.isInteger(n) && n >= 0 && n < AVATARS.length ? n : 0;
+  })();
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -74,6 +81,12 @@ export function App() {
     state?.objects.some((o) => o.type === "black_hole") ?? false;
   const hasVtuber =
     state?.objects.some((o) => o.type === "vtuber") ?? false;
+  // The backend's "Avatar" pinch button owns which model is shown (rides
+  // session.avatar_index); `urlAvatar` only covers mock backends that omit it.
+  const avatarIdx = (() => {
+    const n = state?.session.avatar_index;
+    return typeof n === "number" && n >= 0 && n < AVATARS.length ? n : urlAvatar;
+  })();
 
   return (
     <div className="viewport">
@@ -90,7 +103,13 @@ export function App() {
         <OverlayCanvas pairRef={pairRef} frameW={frameW} frameH={frameH} />
         {hasVtuber && !skeletonView && (
           <Suspense fallback={null}>
-            <VrmAvatar pairRef={pairRef} frameW={frameW} frameH={frameH} />
+            <VrmAvatar
+              key={AVATARS[avatarIdx].src}
+              src={AVATARS[avatarIdx].src}
+              pairRef={pairRef}
+              frameW={frameW}
+              frameH={frameH}
+            />
           </Suspense>
         )}
         <HudLayer frameW={frameW} frameH={frameH}>

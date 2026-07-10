@@ -20,9 +20,13 @@ import type { SnapshotPair } from "../state/useAppState";
 import { setVrmReady } from "./vrmState";
 
 /**
- * Open-source VRM vtuber avatar (CC0 "Sendagaya Shino", at /avatar.vrm),
- * rendered with three.js + @pixiv/three-vrm as a WebGL layer. Mounted only
- * while a vtuber object is present (see App.tsx).
+ * VRM vtuber avatar (the model file is chosen by the `src` prop — see the
+ * AVATARS registry in avatars.ts and the switcher in App.tsx; the default is
+ * the CC0 "Sendagaya Shino" at /avatar.vrm), rendered with three.js +
+ * @pixiv/three-vrm as a WebGL layer. Mounted only while a vtuber object is
+ * present (see App.tsx). Switching `src` remounts this component, so the old
+ * VRM is disposed and the new one loaded fresh — the rig captures the new
+ * model's rest pose on load, so any humanoid VRM works with no code change.
  *
  * The rig spends ALL of MediaPipe's 3D output:
  *  - BODY (`state.pose_world`, 33 metric joints): each bone is aimed along its
@@ -600,9 +604,11 @@ interface Props {
   pairRef: React.RefObject<SnapshotPair | null>;
   frameW: number;
   frameH: number;
+  /** Path to the VRM file to load (from the AVATARS registry). */
+  src: string;
 }
 
-export function VrmAvatar({ pairRef, frameW, frameH }: Props) {
+export function VrmAvatar({ pairRef, frameW, frameH, src }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
 
   useEffect(() => {
@@ -630,7 +636,7 @@ export function VrmAvatar({ pairRef, frameW, frameH }: Props) {
     const loader = new GLTFLoader();
     loader.register((parser) => new VRMLoaderPlugin(parser));
     loader.load(
-      "/avatar.vrm",
+      src,
       (gltf) => {
         if (disposed) return;
         const vrm = gltf.userData.vrm as VRM;
@@ -794,7 +800,7 @@ export function VrmAvatar({ pairRef, frameW, frameH }: Props) {
       if (rig) VRMUtils.deepDispose(rig.vrm.scene);
       renderer.dispose();
     };
-  }, [pairRef, frameW, frameH]);
+  }, [pairRef, frameW, frameH, src]);
 
   return <canvas ref={canvasRef} className="layer" width={frameW} height={frameH} />;
 }

@@ -1410,3 +1410,142 @@ ON DEVICE, then: confirm `pose_fps` jumped from ~13, watch `tegrastats`/`free -h
 for the 8 GB ceiling (`HALL_TRT_MAX_WORKSPACE` caps it), and A/B the body-vs-hand
 feel the user complained about. Laptop pose is too fast to feel the win — the Jetson
 is the real test.
+
+## Update - 2026-07-09 12:20 - [Claude (Opus 4.8)]
+
+### What I did
+- **Multi-avatar switcher for the Vtuber.** The rig loaded a hardcoded
+  `/avatar.vrm` (CC0 "Sendagaya Shino"). Added a registry of 6 avatars and a
+  switcher pill (top-right) + `v` key + `?avatar=N` deep-link that cycles them
+  live. The user dropped 5 VRMs in `~/Downloads/vrm/`; copied them into
+  `web/public/avatars/` (CoolAlien, CoolBanana, Milk, Agnes, StitchWitch — all
+  VRM 0.x humanoid, 52 bones incl. fingers). The rig is model-agnostic (captures
+  each model's rest pose on load), so no rigging code changed.
+- `VrmAvatar` now takes a `src` prop; App.tsx keys the component on `src` so a
+  switch does a clean dispose→reload. Switcher button needs `pointer-events:auto`
+  (the `.hud-layer` is `pointer-events:none`; the pinch cursor drives gesture
+  buttons, this one is a plain mouse click).
+- Small test-ergonomics knob: `MOCK_NO_POINTS=1` pins the mock's points/skeleton
+  toggle off so a specific avatar can be screenshotted without waiting out the 4 s
+  cycle. Defaults to old behavior when unset.
+
+### Files changed (uncommitted)
+- NEW `web/src/gl/avatars.ts` (registry)
+- `web/src/gl/VrmAvatar.tsx` (`src` prop + doc), `web/src/App.tsx` (avatarIdx
+  state, switcher button, `v` key, `?avatar=N`), `web/src/styles.css`
+  (`.avatar-switcher`), `web/scripts/mock_backend.py` (`MOCK_NO_POINTS`)
+- NEW `web/public/avatars/*.vrm` (5 files, ~19 MB) + rebuilt `web/dist/`
+  (`npm run build`; dist/avatars mirrors it, +~19 MB)
+
+### Verified
+`npm run build` clean (tsc + vite). Mock `vtuber` scene + headless shots of all
+6 avatars (`?avatar=0..5`): each VRM loads, rigs (arms/hands/fingers follow the
+mock pose), switcher pill shows the right name/index, no console errors.
+
+### Important context for the other agent
+- **VRMs DO ride the git auto-update** (unlike the gitignored `.onnx` pose
+  models): `.vrm` is not in `.gitignore` and `web/dist` is committed, so once
+  committed the avatars reach the Jetson by `git pull` — no rsync needed. Cost:
+  ~38 MB added to the repo (public+dist). Precedent: the 15 MB Shino is already
+  committed. NOT committed yet — flagged the repo-size tradeoff to the user.
+- **Presentation-control request (from the user, this session):** they want the
+  presentation web page (being built by another agent) to be MediaPipe-driven on
+  the Jetson — show the user's skeleton and advance/go-back slides with a pinch.
+  Scoped as a follow-up (task #2). If you're the agent building that presentation,
+  coordinate here: the cleanest integration reuses THIS app's pinch pipeline
+  (`detection/gestures.py` edge-triggered pinch) + pose skeleton rather than
+  re-implementing hand tracking in the slide deck.
+
+### Next steps / unfinished work
+- User to pick which avatar should be the default (currently Shino / index 0) and
+  whether to commit the 5 VRMs (repo-size call).
+
+## Update - 2026-07-09 ~13:40 - [Claude (Opus 4.8)] — avatar switch is now a PINCH button + DEPLOYED
+
+- **User feedback:** the avatar switcher I first shipped was a DOM/mouse pill jammed
+  in the top-right CORNER — violates `EDGE_MARGIN_FRAC=0.12` (hand-landmark model
+  degrades at the frame edge → pinch fails) AND isn't pinch-operable on the touchless
+  kiosk at all. Reworked it into a real gesture button.
+- **Now:** `_avatar_btn` in `ui/manager.py` (Python owns it, like `_points_btn`):
+  bottom-left, stacked above Points, rect `[86,518,220,50]` at 720p (x=margin, edge-
+  safe). Label `Avatar: <name>` updates on press; `_cycle_avatar` advances
+  `_avatar_index` mod 6. Rides `to_state().session.avatar_index` (always present now).
+  `AVATAR_NAMES` in manager.py MUST stay in sync with `web/src/gl/avatars.ts` order.
+- **Frontend:** `App.tsx` now reads `state.session.avatar_index` (mouse pill + `v`
+  key REMOVED); `?avatar=N` kept only as a mock fallback. `web/src/state/types.ts`
+  session gained `avatar_index?`. Mock (`mock_backend.py` vtuber scene) emits a
+  cycling `avatar_index` for testing.
+- **Verified:** UIManager unit check (button edge-safe + in state + cycles/wraps),
+  `npm run build` clean, headless shot shows the mock's `avatar_index=4` → Agnes
+  renders (state-driven), isort clean.
+- **DEPLOYED to the Jetson** via `JETSON_HOST=yahboom deploy/hall-app/deploy.sh`
+  (rsyncs src + web/dist incl. the 5 VRMs). SSH alias `yahboom`/`jetson-hall` is on
+  **PORT 2222** + key `~/.ssh/id_ed25519` (plain `jetson@100.91.206.114:22` times
+  out — that cost me a wrong "device offline" call earlier). Restarted the app with
+  `systemctl --user restart hallkiosk` (env `XDG_RUNTIME_DIR=/run/user/$(id-u)`;
+  a manual `setsid hallrun &` over SSH did NOT persist). Confirmed from the laptop:
+  `http://100.91.206.114:8092/` serves the new build, `/state.session.avatar_index`
+  present. The laptop watches the Jetson session at that URL over Tailscale.
+- Build the pinch-controlled presentation (task #2) once the other agent's slide
+  page exists / its shape is known.
+
+## Update - 2026-07-09 13:00 - [Claude (Opus 4.8)]
+
+### What I did — MediaPipe pinch-swipe control for the Slidev presentation
+Built the gesture-controlled presentation the user asked for. The target deck is
+`../Presentations/internship-update-2/` (Slidev 0.50, "Research Update II" — the
+one the slide-content agent is actively editing). Integration is **add-only** (no
+`slides.md` edits, so no collision):
+
+- **HalLMediaPipe = the vision backend.** In `HALL_OUTPUT=web` mode it already
+  streams pose + hands + pinch over the `/state` SSE. I added a permissive CORS
+  header (`Access-Control-Allow-Origin: *`) to `src/output.py`'s `_send`, MJPEG,
+  and `/state` responses (and the mock's `/state`) so a cross-origin Slidev page
+  can read it. LAN appliance → wildcard is fine.
+- **The deck consumes it** via three new files: `components/GestureNav.vue` (SSE
+  subscribe → draw translucent full-frame pose skeleton on a body-teleported
+  canvas → fire Slidev's click-aware `useNav().next()/prev()`), `components/
+  gestureSwipe.ts` (pure swipe detector), `global-bottom.vue` (mounts it once).
+  `GESTURE_CONTROL.md` there has the runbook.
+- **Gesture (user's pick):** pinch + horizontal flick. Left → next, right → prev
+  (`slide-left` transition). One nav per pinch-hold, debounced. **Skeleton:** full
+  translucent overlay over the slides.
+
+### Verified
+- Swipe detector: 10/10 unit tests (Node type-strip) incl. a regression for the
+  bug below.
+- End-to-end in headless Chromium (playwright) against a synthetic swipe SSE:
+  cross-origin SSE connects, skeleton renders over a REAL slide with text still
+  readable, badge goes live, and a left-flick advances the deck FORWARD, click-
+  aware, one step per swipe. Screenshot inspected.
+
+### Bug found + fixed (worth knowing)
+`GestureNav.vue` built the detector config with `minDx: undefined` when the
+`?swipedx` param was absent; the object spread `{...DEFAULT, ...{minDx:undefined}}`
+CLOBBERED the default 0.22 with `undefined`, so `Math.abs(dx) < undefined` → NaN →
+always false → it fired on every held frame (dx≈0 → "prev"), i.e. the deck ran
+BACKWARDS. Fixed at the call site (only set defined keys) AND hardened the
+detector's constructor/`setConfig` to skip `undefined` values (`merge()`), so an
+absent param can never wipe a default again.
+
+### Files changed (uncommitted)
+- HalLMediaPipe repo: `src/output.py` (CORS ×3), `web/scripts/mock_backend.py`
+  (CORS on `/state`; also the `MOCK_NO_POINTS` knob from the avatar work).
+- Vault repo (NOT the submodule): `../Presentations/internship-update-2/`
+  `components/GestureNav.vue`, `components/gestureSwipe.ts`, `global-bottom.vue`,
+  `GESTURE_CONTROL.md` (all new; the whole `internship-update-2/` dir is itself
+  still untracked — the slide agent hasn't committed it).
+
+### For the slide-content agent
+- I did NOT touch `slides.md` or `global-top.vue`. My overlay is in
+  `global-bottom.vue` + `components/`. If you add your own `global-bottom.vue`,
+  merge — don't overwrite (mount both components).
+- The overlay is invisible/no-op unless the HalLMediaPipe backend is running, so
+  it won't affect a normal `slidev build`/export.
+
+### Next steps / on-camera tuning (the presenter must do live)
+- Confirm the swipe DIRECTION feels right (mirror/chirality) — flip with
+  `?swipeinvert=1` if backwards. Tune sensitivity with `?swipedx=` (lower = easier).
+- Run backend with `HALL_POSE=1` (skeleton needs body pose, off by default) —
+  on the Jetson: `HALL_OUTPUT=web HALL_POSE=1 hallrun`. Only one process can hold
+  the C920, so the deck machine reads `/state`, the Jetson holds the camera.

@@ -12,6 +12,12 @@ from ui.interactables import (BlackHole, BouncingSphere, Orbitals, Puppet,
 
 MENU_BTN_W, MENU_BTN_H = 260, 70
 RESET_W, RESET_H = 130, 50
+
+# Selectable vtuber avatars — MUST match the order of AVATARS in
+# web/src/gl/avatars.ts (the frontend maps this index to the .vrm file). The
+# pinch "Avatar" button cycles this list; the index rides to_state() so the
+# browser loads the matching model.
+AVATAR_NAMES = ["Shino", "Cool Alien", "Cool Banana", "Milk", "Agnes", "Stitch Witch"]
 SPEED_BTN = 46          # square -/+ sim-speed buttons (top-right)
 SPEED_LABEL_W = 92      # readout pill between them ("1x", "0.25x", ...)
 # Corner-anchored buttons keep a healthy margin from the frame edges: to
@@ -46,6 +52,10 @@ class UIManager:
         # draws the raw pose+hand inference on the body). Kiosk-accessible via
         # the pinch button below; mirrored to the frontend in to_state().
         self._show_points = False
+        # Which vtuber avatar is selected (index into AVATAR_NAMES /
+        # web/src/gl/avatars.ts). Cycled by the pinch "Avatar" button; rides
+        # to_state() so the frontend loads the matching .vrm.
+        self._avatar_index = 0
         # Lazy-initialised the first time the user spawns the black hole —
         # postpones GL context creation until something actually needs it, and
         # keeps startup cost out of the camera-only path.
@@ -170,6 +180,18 @@ class UIManager:
             font_scale=0.6,
         )
 
+        # "Avatar" cycler — stacked one row ABOVE Points (bottom-left, only
+        # while the vtuber puppet is live). Kept off the frame edge by `margin`
+        # (EDGE_MARGIN_FRAC) like every other button, so the pinch lands on a
+        # fully-in-frame hand. Label shows the current model; pressing advances.
+        self._avatar_btn = Button(
+            x=margin, y=fh - RESET_H - margin - RESET_H - 16,
+            width=220, height=RESET_H,
+            label=f"Avatar: {AVATAR_NAMES[0]}",
+            on_click=self._cycle_avatar,
+            font_scale=0.6,
+        )
+
     def _set_state(self, new_state):
         self.state = new_state
 
@@ -193,6 +215,10 @@ class UIManager:
     def _toggle_points(self):
         self._show_points = not self._show_points
         self._points_btn.selected = self._show_points
+
+    def _cycle_avatar(self):
+        self._avatar_index = (self._avatar_index + 1) % len(AVATAR_NAMES)
+        self._avatar_btn.label = f"Avatar: {AVATAR_NAMES[self._avatar_index]}"
 
     def _spawn_sixseven(self):
         # Re-pressing the button while a counter is active resets the
@@ -275,6 +301,7 @@ class UIManager:
             if self._puppet is not None:
                 self._puppet.update(hand_result, pose_landmarks)
                 self._points_btn.update(hand_result, pose_landmarks, self.frame_w, self.frame_h)
+                self._avatar_btn.update(hand_result, pose_landmarks, self.frame_w, self.frame_h)
             self._reset_btn.update(hand_result, pose_landmarks, self.frame_w, self.frame_h)
 
         elif self.state == "experiments":
@@ -309,7 +336,8 @@ class UIManager:
                     or self._reset_btn.pressed
                     or any(s.grabbed for s in self.spheres)
                     or (self._puppet is not None and (self._puppet.grabbed
-                        or self._points_btn.pressed)))
+                        or self._points_btn.pressed
+                        or self._avatar_btn.pressed)))
         if self.state == "experiments":
             if self._active_experiment is None:
                 return self._reset_btn.pressed or any(b.pressed for b in self._experiment_btns)
@@ -351,6 +379,7 @@ class UIManager:
             if self._puppet is not None:
                 objects.append(self._puppet.to_state())
                 buttons.append(self._points_btn.to_state("points"))
+                buttons.append(self._avatar_btn.to_state("avatar"))
 
         elif self.state == "experiments":
             if self._active_experiment is None:
@@ -383,6 +412,9 @@ class UIManager:
                 "hint": {"visible": self._pinch_hint.visible},
                 # Web-only: hide the avatar + draw the raw pose/hand skeleton.
                 "show_points": self._show_points,
+                # Which vtuber avatar the frontend should load (index into
+                # web/src/gl/avatars.ts). Cycled by the "Avatar" pinch button.
+                "avatar_index": self._avatar_index,
             },
             "buttons": buttons,
             "speed": speed,
@@ -419,6 +451,7 @@ class UIManager:
             if self._puppet is not None:
                 self._puppet.draw(frame)
                 self._points_btn.draw(frame)
+                self._avatar_btn.draw(frame)
             self._reset_btn.draw(frame)
 
         elif self.state == "experiments":

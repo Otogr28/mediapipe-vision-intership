@@ -554,6 +554,41 @@ body {
   color: var(--danger);
 }
 
+/* ---- avatar switcher (vtuber) --------------------------------------- */
+
+/* Overrides the HUD layer's pointer-events:none so it is actually clickable
+ * (the pinch cursor drives the gesture buttons; this one is a plain click). */
+.avatar-switcher {
+  pointer-events: auto;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 14px;
+  background: var(--glass);
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius);
+  backdrop-filter: blur(8px);
+  color: var(--ink);
+  font-size: 15px;
+  letter-spacing: 0.04em;
+}
+
+.avatar-switcher:hover {
+  border-color: var(--ink-dim);
+}
+
+.avatar-switcher .lbl {
+  color: var(--ink-dim);
+  font-size: 12px;
+  letter-spacing: 0.12em;
+}
+
+.avatar-switcher .idx {
+  color: var(--ink-dim);
+  font-variant-numeric: tabular-nums;
+}
+
 /* ---- connection banner ---------------------------------------------- */
 
 .conn-banner {
