@@ -154,6 +154,10 @@ class MjpegSink:
                 self.send_response(code)
                 self.send_header("Content-Type", ctype)
                 self.send_header("Content-Length", str(len(body)))
+                # Allow cross-origin reads (e.g. the Slidev presentation deck
+                # embedding the pose/pinch state to drive gesture navigation).
+                # This is a LAN vision appliance, so a wildcard is fine.
+                self.send_header("Access-Control-Allow-Origin", "*")
                 self.end_headers()
                 self.wfile.write(body)
 
@@ -167,6 +171,7 @@ class MjpegSink:
                         "Content-Type", "multipart/x-mixed-replace; boundary=frame"
                     )
                     self.send_header("Cache-Control", "no-cache, private")
+                    self.send_header("Access-Control-Allow-Origin", "*")
                     self.end_headers()
                     try:
                         last_seq = 0
@@ -275,6 +280,7 @@ class WebSink(MjpegSink):
                 self.send_response(200)
                 self.send_header("Content-Type", "text/event-stream")
                 self.send_header("Cache-Control", "no-cache, private")
+                self.send_header("Access-Control-Allow-Origin", "*")
                 self.end_headers()
                 last_seq = 0
                 try:

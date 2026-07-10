@@ -15,6 +15,7 @@ Then point the vite dev server at it:  npm run dev  (same port 8092).
 
 import json
 import math
+import os
 import sys
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -403,8 +404,13 @@ def scene_state(t):
         }]
         # "Points" pinch toggle (alternates every 4 s so a screenshot catches
         # both the avatar and the skeleton view driven by the backend flag).
-        show_points = int(t / 4) % 2 == 1
+        # MOCK_NO_POINTS=1 pins it off so the avatar is always shown (handy when
+        # verifying a specific avatar without waiting out the toggle).
+        show_points = int(t / 4) % 2 == 1 and os.environ.get("MOCK_NO_POINTS") != "1"
         base["session"]["show_points"] = show_points
+        # Cycle the avatar every 5 s so the state-driven switcher is testable
+        # (the real backend sets this from the "Avatar" pinch button).
+        base["session"]["avatar_index"] = int(t / 5) % 6
         pbtn = btn("points", "Points", margin, H - 50 - margin, 150, 50)
         pbtn["selected"] = show_points
         base["buttons"].append(pbtn)
@@ -436,6 +442,9 @@ class Handler(BaseHTTPRequestHandler):
         elif self.path == "/state":
             self.send_response(200)
             self.send_header("Content-Type", "text/event-stream")
+            # match the real backend (output.py): allow cross-origin reads so
+            # the Slidev deck's gesture overlay can subscribe from another port.
+            self.send_header("Access-Control-Allow-Origin", "*")
             self.end_headers()
             seq = 0
             try:
