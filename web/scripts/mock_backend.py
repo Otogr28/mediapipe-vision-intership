@@ -9,7 +9,7 @@ Run from the repo root (needs the repo venv for cv2/numpy):
     uv run python web/scripts/mock_backend.py [scene]
 
 Scenes: menu (default), sphere, sixseven, slingshot, blackhole, picker,
-orbitals, orbaim, vtuber.
+orbitals, orbaim, waves, vtuber.
 Then point the vite dev server at it:  npm run dev  (same port 8092).
 """
 
@@ -366,6 +366,47 @@ def scene_state(t):
             orb["readout"] = {"v0": 286.0, "angle": 39.0, "kind": "planet",
                               "mass": 42.0}
         base["objects"] = [orb]
+
+    elif SCENE == "waves":
+        base["session"]["state"] = "experiments"
+        base["session"]["experiment"] = "waves"
+        bw, bh, gap = 116, 46, 8
+        for i, (k, lab) in enumerate([("low", "Low"), ("mid", "Mid"),
+                                      ("high", "High")]):
+            b = btn(f"wave.freq.{k}", lab, margin + i * (bw + gap), margin,
+                    bw, bh)
+            b["selected"] = (k == "mid")
+            base["buttons"].append(b)
+        base["buttons"].append(
+            btn("wave.clear", "Clear", margin + 3 * (bw + gap), margin,
+                bw, bh))
+        sb, lw = 46, 92
+        plus_x = W - margin - sb
+        base["buttons"] += [
+            btn("speed.minus", "-", plus_x - lw - sb, margin, sb, sb),
+            btn("speed.plus", "+", plus_x, margin, sb, sb),
+            btn("reset", "Reset", W - 130 - margin, H - 50 - margin, 130, 50),
+        ]
+        base["speed"] = {"rect": [plus_x - lw, margin, lw, sb], "text": "1x"}
+        # Two static mid sources (interference fringes between them) + one
+        # slowly circling high source (Doppler wake).
+        cx, cy = W / 2, H / 2
+        sources = [
+            {"id": 0, "x": cx - 180, "y": cy + 40, "freq": 2.4, "amp": 1.0,
+             "born": 0.0, "grabbed": False},
+            {"id": 1, "x": cx + 180, "y": cy + 40, "freq": 2.4, "amp": 1.0,
+             "born": 0.0, "grabbed": False},
+            {"id": 2,
+             "x": round(cx + 320 * math.cos(t * 0.5), 1),
+             "y": round(cy - 180 + 60 * math.sin(t * 0.5), 1),
+             "freq": 4.0, "amp": 1.0, "born": 2.0,
+             "grabbed": int(t) % 4 == 0},
+        ]
+        base["objects"] = [{
+            "type": "waves", "t": round(t, 3), "c": 340.0,
+            "time_scale": 1.0, "kind": "mid", "count": len(sources),
+            "sources": sources,
+        }]
 
     elif SCENE == "vtuber":
         base["session"]["state"] = "interactables"

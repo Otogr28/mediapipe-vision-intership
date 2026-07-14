@@ -106,6 +106,18 @@ export function interpolate(pair: SnapshotPair, now: number): AppState {
           }),
         };
       }
+      case "waves": {
+        if (po.type !== "waves") return o;
+        const prevSrc = new Map(po.sources.map((s) => [s.id, s]));
+        return {
+          ...o,
+          sources: o.sources.map((s) => {
+            const ps = prevSrc.get(s.id);
+            if (!ps) return s;
+            return { ...s, x: lerp(ps.x, s.x, t), y: lerp(ps.y, s.y, t) };
+          }),
+        };
+      }
       default:
         return o;
     }

@@ -8,7 +8,7 @@ from ui.cursor import PinchCursor
 from ui.debug_hud import DebugHUD
 from ui.hints import IntroOverlay, PinchHint
 from ui.interactables import (BlackHole, BouncingSphere, Orbitals, Puppet,
-                              SixSevenCounter, Slingshot)
+                              SixSevenCounter, Slingshot, Waves)
 
 MENU_BTN_W, MENU_BTN_H = 260, 70
 RESET_W, RESET_H = 130, 50
@@ -140,8 +140,13 @@ class UIManager:
             label="Orbitals",
             on_click=self._spawn_orbitals,
         )
+        self._waves_btn = Button(
+            x=margin + (150 + 10) * 3, y=margin, width=150, height=50,
+            label="Waves",
+            on_click=self._spawn_waves,
+        )
         self._experiment_btns = [self._black_hole_btn, self._slingshot_btn,
-                                 self._orbitals_btn]
+                                 self._orbitals_btn, self._waves_btn]
 
         # Sim-speed stepper, pinned top-right: [-] 1x [+]. Only shown while
         # the active experiment exposes a `time_scale` (the slingshot).
@@ -208,6 +213,9 @@ class UIManager:
 
     def _spawn_orbitals(self):
         self._active_experiment = Orbitals(self.frame_w, self.frame_h)
+
+    def _spawn_waves(self):
+        self._active_experiment = Waves(self.frame_w, self.frame_h)
 
     def _spawn_puppet(self):
         self._puppet = Puppet(self.frame_w, self.frame_h)
@@ -387,6 +395,7 @@ class UIManager:
                     self._black_hole_btn.to_state("exp.black_hole"),
                     self._slingshot_btn.to_state("exp.slingshot"),
                     self._orbitals_btn.to_state("exp.orbitals"),
+                    self._waves_btn.to_state("exp.waves"),
                 ]
             else:
                 exp_state = self._active_experiment.to_state()

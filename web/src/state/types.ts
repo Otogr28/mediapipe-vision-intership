@@ -153,6 +153,32 @@ export interface OrbitalsObject {
   readout: { v0: number; angle: number; kind: string; mass: number } | null;
 }
 
+export interface WaveSource {
+  id: number;
+  x: number;
+  y: number;
+  /** oscillation frequency (Hz) */
+  freq: number;
+  /** source amplitude (field units) */
+  amp: number;
+  /** experiment-clock time the source appeared (s) — phase reference */
+  born: number;
+  grabbed: boolean;
+}
+
+export interface WavesObject {
+  type: "waves";
+  /** experiment clock (s) — the wave field's time base */
+  t: number;
+  /** propagation speed (frame px / s at 1x) */
+  c: number;
+  time_scale: number;
+  /** palette selection for the next placed source */
+  kind: "low" | "mid" | "high";
+  count: number;
+  sources: WaveSource[];
+}
+
 export interface VtuberObject {
   type: "vtuber";
   /** spawn-relative clock (s), wrapped — drives the idle bob */
@@ -167,6 +193,7 @@ export type SceneObject =
   | BlackHoleObject
   | SlingshotObject
   | OrbitalsObject
+  | WavesObject
   | VtuberObject;
 
 export interface DebugState {
@@ -188,7 +215,7 @@ export interface AppState {
   pose_world?: PoseWorld | null;
   session: {
     state: "menu" | "interactables" | "experiments";
-    experiment: "black_hole" | "slingshot" | "orbitals" | null;
+    experiment: "black_hole" | "slingshot" | "orbitals" | "waves" | null;
     hint: { visible: boolean };
     /** vtuber "Points" toggle — hide the avatar + draw the raw skeleton */
     show_points?: boolean;

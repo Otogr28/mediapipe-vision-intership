@@ -1,0 +1,23 @@
+#!/usr/bin/env bash
+# NetworkManager dispatcher hook: disable WiFi power-save the moment any
+# WiFi interface comes up. Installed to /etc/NetworkManager/dispatcher.d/.
+#
+# Why here (not just the connection property): the Realtek rtl8822ce vendor
+# driver frequently ignores NetworkManager's 802-11-wireless.powersave and
+# re-enables power-save on (re)association, which sleeps the radio when idle
+# and drops the Tailscale link. `iw ... set power_save off` on every 'up'
+# event is the reliable belt to the connection-property's suspenders.
+#
+# NM calls this as: <script> <interface> <action>
+interface="$1"
+action="$2"
+
+case "$action" in
+  up|dhcp4-change|dhcp6-change|connectivity-change)
+    if [ -d "/sys/class/net/${interface}/wireless" ] \
+       || iw dev "$interface" info >/dev/null 2>&1; then
+      iw dev "$interface" set power_save off 2>/dev/null || true
+    fi
+    ;;
+esac
+exit 0

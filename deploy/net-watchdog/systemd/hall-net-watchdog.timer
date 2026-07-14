@@ -1,0 +1,17 @@
+[Unit]
+Description=Run the HalLMediaPipe network watchdog every 2 minutes
+Documentation=https://github.com/Otogr28/mediapipe-vision-intership
+
+[Timer]
+# Fire ~30 s after boot (let NetworkManager/tailscaled settle), then every
+# 2 minutes. The frequent cadence is deliberate: the probe traffic itself
+# keeps the Realtek radio awake, so a drop is caught (and prevented) fast.
+OnBootSec=30s
+OnUnitActiveSec=2min
+# Small jitter so a fleet of nodes wouldn't stampede a probe endpoint.
+RandomizedDelaySec=10s
+AccuracySec=15s
+Persistent=false
+
+[Install]
+WantedBy=timers.target

@@ -167,6 +167,21 @@ MIN_HAND_DETECTION_CONFIDENCE = 0.5
 MIN_HAND_PRESENCE_CONFIDENCE = 0.5
 MIN_HAND_TRACKING_CONFIDENCE = 0.5
 
+# GPU hand backend (HALL_INFERENCE=gpu) ROI tracking, the fix for the
+# hand-landmark quality collapsing near the frame border (the reason
+# EDGE_MARGIN_FRAC keeps buttons away from it): a hand successfully
+# landmarked last frame is re-cropped this frame from its OWN landmarks
+# (MediaPipe's scheme); the palm detector only runs to fill empty hand
+# slots. Palm detection is the stage that fails first near the edge — a
+# partially visible palm scores below threshold and the hand vanished —
+# while the landmark model keeps tracking a partially visible hand fine
+# when handed a good crop. On the synthetic edge-pan bench this cut the
+# edge-crossing landmark error from 11.2 to 4.7 px and kept the hand
+# tracked (err 3-6 px) until only ~6 of 21 landmarks remained in frame.
+# HALL_HAND_ROI_TRACK=0 restores the v1 palm-detect-every-frame behaviour
+# (A/B knob for on-device tuning).
+HAND_ROI_TRACKING = os.environ.get("HALL_HAND_ROI_TRACK", "1") == "1"
+
 # Gesture detection (see detection/gestures.py for the full pipeline).
 # The thumb-index distance is normalized by the HAND's own size (knuckle
 # span |5-17| vs 0.75x palm length |0-9|, whichever is larger). Those
@@ -404,6 +419,40 @@ ORB_BODY_TYPES = {
     "comet":  {"mass": 2.5,    "radius": 6,  "rgb": [150, 240, 255]},
 }
 ORB_DEFAULT_KIND = "planet"
+
+# --- Waves experiment (interactive ripple tank) --------------------------
+# A 2D ripple tank: pinch on empty water to drop an oscillating point
+# source, pinch an existing source to drag it around (its wake compresses
+# ahead / stretches behind — a live Doppler pattern), and two or more
+# sources paint a standing interference pattern. Python owns the SOURCES
+# (placement, dragging, palette — all logic/hit-testing); the FIELD is pure
+# rendering and is integrated by the sink: the browser steps the 2D wave
+# equation in a WebGL ping-pong texture (web/src/gl/WavesLayer.tsx), and
+# the cv2 window/stream fallback runs the same finite-difference scheme in
+# numpy at low resolution. Screen edges reflect like real tank walls.
+WAVE_MAX_SOURCES = 6         # also the shader's uniform array size — keep
+                             # web/src/gl/waves_step.frag.glsl in sync
+WAVE_SPEED_PX_S = 340.0      # propagation speed c (frame px / s at 1x)
+WAVE_TIME_SCALES = (0.25, 0.5, 1.0, 2.0, 4.0)  # -/+ stepper values
+WAVE_FRAME_DT = 1.0 / 30.0   # simulated seconds one video frame represents
+WAVE_GRAB_PAD_PX = 46        # pinch-grab radius around a source centre
+WAVE_AMP = 1.0               # source amplitude (field units; render maps ~1
+                             # to full crest brightness)
+WAVE_RAMP_S = 0.3            # source onset ramp, avoids a shock front
+WAVE_DECAY_TAU_S = 1.6       # field ring-down time constant (damping)
+# Palette presets: the oscillation frequency the next placed source gets.
+# With c = 340 px/s these give wavelengths of ~280 / ~140 / ~85 px — "low"
+# reads as slow rolling swells, "high" as tight ripples, and two "mid"
+# sources a few hundred px apart show textbook two-slit fringes.
+WAVE_SOURCE_TYPES = {
+    "low":  {"freq": 1.2, "label": "Low"},
+    "mid":  {"freq": 2.4, "label": "Mid"},
+    "high": {"freq": 4.0, "label": "High"},
+}
+WAVE_DEFAULT_KIND = "mid"
+# cv2 fallback field only (the WebGL path has its own grid): sim cell size
+# in frame px. 8 px/cell keeps the numpy grid ~160x90 at 720p.
+WAVE_GRID_PX = 8
 
 # Vtuber / Puppet interactable.
 # A friendly cosmic mascot puppeteered by the live landmarks: its paws ride

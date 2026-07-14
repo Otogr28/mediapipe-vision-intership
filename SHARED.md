@@ -1549,3 +1549,110 @@ absent param can never wipe a default again.
 - Run backend with `HALL_POSE=1` (skeleton needs body pose, off by default) —
   on the Jetson: `HALL_OUTPUT=web HALL_POSE=1 hallrun`. Only one process can hold
   the C920, so the deck machine reads `/state`, the Jetson holds the camera.
+
+## Update - 2026-07-14 11:23 - [Claude (Fable 5)]
+
+### What I did — GPU-hand edge fix + new "Waves" experiment
+
+**1. Hand inference near the frame edge (the user's complaint) — FIXED in the
+GPU backend via ROI tracking** (`detection/gpu_hands.py`, knob
+`HALL_HAND_ROI_TRACK`, default on):
+- Root cause: v1 ran palm DETECTION on the full frame every call; a palm
+  partially out of frame drops below threshold long before the landmark
+  model would lose it → the hand vanished/degraded exactly at the border.
+- Now a landmarked hand is re-cropped next frame from its OWN landmarks
+  (MediaPipe's scheme, via a synthetic palm-detection row —
+  `_palm_from_landmarks`); the palm detector only runs to fill empty hand
+  slots, with centre-in-bbox dedup so it can't re-add a tracked hand. With
+  both slots tracked the palm net is SKIPPED entirely (perf win).
+- Verified headless (no camera, per the no-laptop-camera rule) with a
+  synthetic edge-pan bench (scratchpad, real hand photo sliding off-frame):
+  edge-crossing error 11.2 → **4.7 px**, tracked at 3–6 px until only ~6/21
+  landmarks remain visible (baseline lost the hand at 9 visible). In-frame
+  cost: ~+1 px (2.5 → 3.5). Two-hands dedup: stable, no duplicates.
+- Two REJECTED approaches, measured worse — don't redo them: (a) fixing
+  `mp_handpose._cropAndPadFromPalm`'s clip+recentre geometry (the zoo model
+  actually prefers the recentred crop: 10.2 vs 4.7 px), (b) padding the
+  frame before palm detection (no acquisition gain, slight in-frame bias).
+- `uv add --group gpu onnxruntime` so the GPU backend is testable on the
+  laptop (`uv run --group gpu`, CPUExecutionProvider); default sync unchanged.
+- NOTE: the MediaPipe (CPU) hand backend already does its own ROI tracking
+  internally — this brings the GPU path (what the Jetson kiosk runs) to par.
+
+**2. New experiment: "Waves" — interactive ripple tank** (Experiments →
+Waves; see IDEAS.md Shipped for the full description):
+- `Waves` in `ui/interactables.py` (sources/palette/clock only — Python
+  authoritative), `WAVE_*` in `config.py`, picker button in `ui/manager.py`
+  (`exp.waves`), state contract: `"waves"` object with `sources[]`, `t`,
+  `c`, `time_scale` (`types.ts` + `interp.ts` mirror it).
+- Field rendering: WebGL2 ping-pong FDTD (`web/src/gl/WavesLayer.tsx`,
+  `waves_step.frag.glsl` + `waves_render.frag.glsl`, RG16F at frame/4,
+  needs EXT_color_buffer_float; keep MAX sources 6 in sync with
+  `WAVE_MAX_SOURCES`); cv2 fallback = same scheme in numpy (~14 ms/frame at
+  720p). 9-point Laplacian on BOTH paths (5-point renders square ripples).
+- Verified: Python smoke (state contract, palette, source cap, clear,
+  `build_state` JSON ~1.2 KB), `npm run build` clean (tsc included),
+  headless shot of mock scene `waves` (new) shows interference fringes +
+  Doppler wake, no console errors.
+
+### Files changed (uncommitted)
+- `src/detection/gpu_hands.py`, `src/config.py` (ROI tracking + WAVE_*),
+  `src/ui/interactables.py`, `src/ui/manager.py`, `src/web/state.py` (none),
+  `web/src/{App.tsx, state/types.ts, state/interp.ts, overlay/scene.ts}`,
+  `web/src/gl/{WavesLayer.tsx, waves_step.frag.glsl, waves_render.frag.glsl}`,
+  `web/scripts/mock_backend.py` (waves scene), `pyproject.toml`+`uv.lock`
+  (gpu group), `documentation/architecture.md`, `IDEAS.md`, this file.
+
+### Next steps / unfinished work
+- **Deploy to the Jetson NOT done** — the board is OFFLINE (Tailscale last
+  saw it 4 days ago, USB link also down; likely powered off). When it's on:
+  `JETSON_HOST=yahboom deploy/hall-app/deploy.sh` then
+  `ssh yahboom 'systemctl --user restart hallkiosk'` (alias = port 2222).
+  No TRT rebuild expected (models unchanged).
+- On-camera validation of both features (edge fix feel, wave placement UX).
+- `HALL_HAND_ROI_TRACK=0` is the A/B escape hatch if anything regresses.
+
+## Update - 2026-07-15 00:20 - [Claude (Opus 4.8)] — Jetson "vanishing from Tailscale" FIXED + app deployed
+
+### Root cause of the Jetson dropping off Tailscale (was NOT Tailscale)
+WiFi **power-save** on the Realtek `rtl8822ce` (vendor out-of-tree driver):
+it sleeps the radio when idle → tears down the Tailscale NAT/DERP mapping →
+with no inbound traffic to wake it, the node looks offline for days until a
+reboot. `iw dev wlP1p1s0 get power_save` reported `on` while NM's property
+read `default` (which resolves to on with this driver). Tailscale itself was
+healthy the whole time (`WantRunning:true`, service enabled+active).
+
+### Fix shipped — new repo package `deploy/net-watchdog/` (versioned, travels)
+- **Power-save OFF, belt-and-suspenders:** NM property `powersave 2` on every
+  saved WiFi conn + a NM dispatcher hook `99-hall-wifi-powersave-off` that
+  runs `iw ... set power_save off` on every link-up (the driver ignores the
+  NM property alone — the hook is the reliable layer).
+- **Connectivity watchdog** `/opt/hall-net-watchdog/net-watchdog.sh` on a
+  systemd timer (`hall-net-watchdog.timer`, every 2 min + 30s post-boot):
+  re-asserts power-save off, 204-probes the internet (probe traffic also
+  keeps the radio awake — doubles as keepalive), heals net (nmcli con up →
+  restart NetworkManager) and Tailscale (`tailscale up` → restart tailscaled,
+  with a poll-before-escalate so transients don't churn the daemon).
+- Install from laptop: `JETSON_HOST=yahboom deploy/net-watchdog/deploy.sh`.
+  Needs sudo on the box (interactive; installer uses `sudo`). Logs:
+  `journalctl -u hall-net-watchdog.service` + `/var/log/hall-net-watchdog.log`
+  (file survives reboots; journald is volatile on this image).
+- **VERIFIED on-device:** forced `tailscale down` → watchdog detected + healed
+  (`tailscale up` → daemon restart → `OK recovered`) in ~5s; power_save stays
+  off across reassoc; timer armed + firing.
+
+### App deployed (the pending edge-fix + Waves from the prior update)
+- `deploy/hall-app/deploy.sh` (rsync src + web/dist), then
+  `systemctl --user restart hallkiosk` (needed so the running Python picks up
+  the new backend — the dist is served fresh from disk, but the process was
+  the old code). Rebound :8092 in ~12s, no TRT rebuild (models unchanged).
+- **VERIFIED on-device** (Jetson system py3.10 + vendor opencv 4.10.0): the
+  `exp.waves` picker button is emitted, Waves spawns/updates/serializes, and
+  the cv2 fallback `draw()` runs (`cv2.blendLinear` IS present on their build).
+  App healthz `ok`, no import traceback.
+
+### Note for next agent
+- `deploy/net-watchdog/deploy.sh` uses `ssh -t … sudo`; from a non-interactive
+  shell that has no tty, pipe the sudo password to `sudo -S -p ''` instead
+  (password is in gitignored SECRETS.local.md, line 5).
+- The whole thing is uncommitted along with the prior update's changes.

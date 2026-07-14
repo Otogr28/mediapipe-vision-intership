@@ -21,6 +21,8 @@ main.py
     ├── ui/interactables.py           (BouncingSphere)    ──▶ detection/gestures.py
     │                                  (SixSevenCounter)  ──▶ (pose landmarks only)
     │                                  (Slingshot)        ──▶ detection/gestures.py
+    │                                  (Orbitals)         ──▶ detection/gestures.py
+    │                                  (Waves)            ──▶ detection/gestures.py
     │                                  (BlackHole)        ──▶ rendering/gl_lensing.py
     └── rendering/gl_lensing.py       (LensingRenderer)   ──▶ shaders/black_hole.frag
                                                               shaders/fullscreen.vert
@@ -76,7 +78,10 @@ sink.present(raw frame)              sink.publish_state(build_state())
                                  │
                                  ├─ <img> video layer
                                  ├─ WebGL2 black-hole shader (only while BH active)
-                                 ├─ Canvas2D: skeleton, cursor, sphere, slingshot
+                                 ├─ WebGL2 waves field (ping-pong FDTD ripple tank,
+                                 │                      only while Waves active)
+                                 ├─ Canvas2D: skeleton, cursor, sphere, slingshot,
+                                 │            orbitals, wave-source markers
                                  └─ DOM HUD: buttons, panels, onboarding
 ```
 
