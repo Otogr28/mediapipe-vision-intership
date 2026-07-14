@@ -6,6 +6,7 @@ import type {
   SlingshotObject,
   SphereObject,
   Vec2,
+  WavesObject,
 } from "../state/types";
 
 /**
@@ -444,6 +445,36 @@ function drawArrow(
   ctx.fill();
 }
 
+// ---- waves (source markers only — the field renders in gl/WavesLayer) ---
+
+function drawWaves(
+  ctx: CanvasRenderingContext2D,
+  o: WavesObject,
+  now: number,
+) {
+  for (const s of o.sources) {
+    const hot = s.grabbed;
+    const col = hot ? "rgba(255,255,255,0.95)" : "rgba(210,232,255,0.8)";
+    // A ring that breathes at the source's own frequency, so the marker
+    // itself telegraphs low vs high before the ripples read.
+    const phase = Math.sin(2 * Math.PI * s.freq * (now / 1000));
+    const r = 11 + 2.5 * phase;
+    ctx.strokeStyle = col;
+    ctx.lineWidth = hot ? 3 : 1.5;
+    ctx.beginPath();
+    ctx.arc(s.x, s.y, r, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.fillStyle = col;
+    ctx.beginPath();
+    ctx.arc(s.x, s.y, 4, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.font = "500 15px 'IBM Plex Sans', system-ui, sans-serif";
+    ctx.textAlign = "left";
+    ctx.textBaseline = "bottom";
+    ctx.fillText(`${s.freq} Hz`, s.x + 16, s.y - 10);
+  }
+}
+
 // ---- vtuber avatar (loading state) ------------------------------------
 // The real avatar is the WebGL VRM (gl/VrmAvatar). Here we only dim the
 // camera and, until the model is live, show a clean loading spinner — NO
@@ -503,6 +534,9 @@ export function drawScene(
         break;
       case "orbitals":
         drawOrbitals(ctx, obj);
+        break;
+      case "waves":
+        drawWaves(ctx, obj, _now);
         break;
       case "vtuber":
         drawPuppet(ctx, state, _now);

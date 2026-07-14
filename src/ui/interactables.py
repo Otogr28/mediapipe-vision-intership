@@ -18,7 +18,11 @@ from config import (BH_DEFAULT_POS_FACTOR, BH_DISK_BRIGHTNESS,
                     ORB_PREDICT_SAMPLE, ORB_PREDICT_TIME_S, ORB_PRUNE_MARGIN,
                     ORB_RESTITUTION, ORB_SOFTENING_PX, ORB_TIME_SCALES,
                     ORB_TRAIL_LEN, PUPPET_IDLE_BOB_S, SIXSEVEN_FLASH_FRAMES,
-                    SIXSEVEN_HYSTERESIS, SIXSEVEN_MIN_VISIBILITY)
+                    SIXSEVEN_HYSTERESIS, SIXSEVEN_MIN_VISIBILITY, WAVE_AMP,
+                    WAVE_DECAY_TAU_S, WAVE_DEFAULT_KIND, WAVE_FRAME_DT,
+                    WAVE_GRAB_PAD_PX, WAVE_GRID_PX, WAVE_MAX_SOURCES,
+                    WAVE_RAMP_S, WAVE_SOURCE_TYPES, WAVE_SPEED_PX_S,
+                    WAVE_TIME_SCALES)
 from detection.gestures import hand_id, pinch_info, pinch_state
 from ui.button import Button
 
@@ -1749,6 +1753,280 @@ class Orbitals:
             cv2.putText(frame, f"{self._kind}  v0 {mag:.0f} px/s",
                         (sx + 12, sy - 12), cv2.FONT_HERSHEY_SIMPLEX, 0.55,
                         (240, 240, 240), 2, cv2.LINE_AA)
+
+
+# --- Waves experiment (interactive ripple tank) ---------------------------
+
+
+class _WaveSource:
+    __slots__ = ("id", "x", "y", "kind", "freq", "born")
+
+    def __init__(self, sid, x, y, kind, freq, born):
+        self.id = sid
+        self.x = x
+        self.y = y
+        self.kind = kind
+        self.freq = freq   # oscillation frequency (Hz)
+        self.born = born   # experiment-clock time the source appeared (s)
+
+
+class Waves:
+    """Interactive ripple tank: point sources on a 2D wave-equation field.
+
+    A pinch on empty water drops an oscillating source of the palette's
+    selected frequency; a pinch on an existing source grabs it — dragging a
+    live source compresses its wake ahead and stretches it behind (a real
+    Doppler pattern), and two or more sources paint a standing interference
+    pattern. Screen edges reflect like tank walls.
+
+    This class owns the SOURCES only (placement, dragging, palette, the
+    experiment clock) — all the logic. The field itself is presentation and
+    lives with whichever sink renders it: the browser integrates the wave
+    equation in a WebGL ping-pong texture (web/src/gl/WavesLayer.tsx); the
+    cv2 window/stream fallback runs the same damped finite-difference
+    scheme in numpy at ``WAVE_GRID_PX`` resolution (in :meth:`draw`, so web
+    mode never pays for it). The -/+ sim-speed stepper scales the clock,
+    which both renderers follow, so it speeds oscillation and propagation
+    together.
+    """
+
+    def __init__(self, frame_width, frame_height):
+        self.w = frame_width
+        self.h = frame_height
+        self.sources = []
+        self._next_id = 0
+        self._kind = WAVE_DEFAULT_KIND
+        self._clock = 0.0
+        self._scale_idx = WAVE_TIME_SCALES.index(1.0)
+        # Grab (drag a source) state, mirroring the Orbitals grab.
+        self.grab_src = None
+        self.grab_hand = None
+        self.grab_offset_x = 0.0
+        self.grab_offset_y = 0.0
+        # cv2-fallback field state, lazily built on first draw() call.
+        self._u = None          # field at t (float32, grid res)
+        self._u_prev = None     # field at t - dt
+        self._field_t = 0.0     # how far the field has been integrated
+        self._build_palette()
+        self._apply_selection()
+
+    # ---- palette -------------------------------------------------------
+
+    def _build_palette(self):
+        margin = int(self.h * 0.12)
+        bw, bh, gap = 116, 46, 8
+        x0, y0 = margin, margin
+        self._freq_btns = []
+        for i, (kind, spec) in enumerate(WAVE_SOURCE_TYPES.items()):
+            btn = Button(
+                x=x0 + i * (bw + gap), y=y0, width=bw, height=bh,
+                label=spec["label"], on_click=(lambda k=kind: self._select(k)),
+                font_scale=0.6,
+            )
+            self._freq_btns.append((f"wave.freq.{kind}", kind, btn))
+        self._clear_btn = Button(
+            x=x0 + len(self._freq_btns) * (bw + gap), y=y0, width=bw, height=bh,
+            label="Clear", on_click=self.clear, font_scale=0.6,
+        )
+
+    @property
+    def palette(self):
+        """(id, Button) list the UIManager updates / draws / serializes."""
+        return ([(bid, btn) for bid, _kind, btn in self._freq_btns]
+                + [("wave.clear", self._clear_btn)])
+
+    def _select(self, kind):
+        self._kind = kind
+        self._apply_selection()
+
+    def _apply_selection(self):
+        for _bid, kind, btn in self._freq_btns:
+            btn.selected = (kind == self._kind)
+
+    # ---- sim-speed stepper (same interface as the slingshot) -----------
+
+    @property
+    def time_scale(self):
+        return WAVE_TIME_SCALES[self._scale_idx]
+
+    def speed_up(self):
+        self._scale_idx = min(self._scale_idx + 1, len(WAVE_TIME_SCALES) - 1)
+
+    def speed_down(self):
+        self._scale_idx = max(self._scale_idx - 1, 0)
+
+    @property
+    def grabbed(self):
+        # Retires the onboarding hint while dragging a source.
+        return self.grab_src is not None
+
+    # ---- interaction ---------------------------------------------------
+
+    def clear(self):
+        """Drop every source. The field is NOT zeroed — the last ripples
+        ring down naturally in both renderers, like a real tank."""
+        self.sources.clear()
+        self.grab_src = None
+        self.grab_hand = None
+
+    def _place(self, x, y):
+        spec = WAVE_SOURCE_TYPES[self._kind]
+        src = _WaveSource(self._next_id, x, y, self._kind, spec["freq"],
+                          self._clock)
+        self._next_id += 1
+        self.sources.append(src)
+        # Hard cap (it is also the shader's uniform array size): the oldest
+        # source gives way.
+        if len(self.sources) > WAVE_MAX_SOURCES:
+            self.sources.pop(0)
+
+    def _source_at(self, px, py):
+        best, best_d = None, None
+        for s in self.sources:
+            d = math.hypot(s.x - px, s.y - py)
+            if d <= WAVE_GRAB_PAD_PX and (best_d is None or d < best_d):
+                best, best_d = s, d
+        return best
+
+    def update(self, hand_result, pose_landmarks):
+        # 1) Continue an in-progress drag (owner-latched: the pinch machine
+        #    outlives a brief tracking dropout; the drag ends on release).
+        if self.grab_src is not None:
+            _, held, (mx, my) = pinch_state(self.grab_hand)
+            if held and self.grab_src in self.sources:
+                self.grab_src.x = mx + self.grab_offset_x
+                self.grab_src.y = my + self.grab_offset_y
+            else:
+                self.grab_src = None
+                self.grab_hand = None
+
+        # 2) A fresh pinch grabs the source it landed on, or drops a new one.
+        if self.grab_src is None and hand_result is not None:
+            for i in range(len(hand_result.hand_landmarks)):
+                hid = hand_id(hand_result, i)
+                pinching, _, (mx, my) = pinch_state(hid)
+                if not pinching:
+                    continue
+                hit = self._source_at(mx, my)
+                if hit is not None:
+                    self.grab_src = hit
+                    self.grab_hand = hid
+                    self.grab_offset_x = hit.x - mx
+                    self.grab_offset_y = hit.y - my
+                else:
+                    self._place(mx, my)
+                break
+
+        # 3) Advance the experiment clock (the renderers' time base).
+        self._clock += self.time_scale * WAVE_FRAME_DT
+
+    # ---- serialization --------------------------------------------------
+
+    def to_state(self):
+        return {
+            "type": "waves",
+            "t": round(self._clock, 3),
+            "c": WAVE_SPEED_PX_S,
+            "time_scale": self.time_scale,
+            "kind": self._kind,
+            "count": len(self.sources),
+            "sources": [{
+                "id": s.id,
+                "x": round(s.x, 1),
+                "y": round(s.y, 1),
+                "freq": s.freq,
+                "amp": WAVE_AMP,
+                "born": round(s.born, 3),
+                "grabbed": s is self.grab_src,
+            } for s in self.sources],
+        }
+
+    # ---- cv2 drawing (window / stream fallback) ------------------------
+    #
+    # The same damped 2D wave equation the WebGL layer integrates, on a
+    # coarse numpy grid:  u_next = (2-d)u - (1-d)u_prev + s^2 * lap(u), with
+    # sources blended in as Dirichlet oscillators. Edge-replicated padding
+    # gives Neumann boundaries -> the frame edges reflect.
+
+    def _step_field(self, dt):
+        c_dx = WAVE_SPEED_PX_S * dt / WAVE_GRID_PX
+        s2 = c_dx * c_dx
+        delta = min(1.0, 2.0 * dt / WAVE_DECAY_TAU_S)
+        u, up = self._u, self._u_prev
+        pad = np.pad(u, 1, mode="edge")
+        # 9-point isotropic Laplacian — the plain 5-point stencil propagates
+        # measurably faster along the axes than the diagonals, which turns
+        # circular ripples visibly square after a few wavelengths.
+        lap = (4.0 * (pad[:-2, 1:-1] + pad[2:, 1:-1]
+                      + pad[1:-1, :-2] + pad[1:-1, 2:])
+               + (pad[:-2, :-2] + pad[:-2, 2:] + pad[2:, :-2] + pad[2:, 2:])
+               - 20.0 * u) / 6.0
+        u_next = (2.0 - delta) * u - (1.0 - delta) * up + s2 * lap
+
+        gh, gw = u.shape
+        for s in self.sources:
+            age = self._field_t - s.born
+            if age < 0.0:
+                continue
+            ramp = min(1.0, age / WAVE_RAMP_S)
+            target = WAVE_AMP * ramp * math.sin(2.0 * math.pi * s.freq * age)
+            gx = min(gw - 1, max(0, int(s.x / WAVE_GRID_PX)))
+            gy = min(gh - 1, max(0, int(s.y / WAVE_GRID_PX)))
+            x0, x1 = max(0, gx - 2), min(gw, gx + 3)
+            y0, y1 = max(0, gy - 2), min(gh, gy + 3)
+            yy, xx = np.mgrid[y0:y1, x0:x1]
+            w = np.exp(-((xx - gx) ** 2 + (yy - gy) ** 2) / 2.0).astype(np.float32)
+            u_next[y0:y1, x0:x1] = (u_next[y0:y1, x0:x1] * (1.0 - w)
+                                    + target * w)
+
+        self._u_prev = u
+        self._u = u_next
+
+    def _advance_field(self):
+        if self._u is None:
+            gw = max(2, self.w // WAVE_GRID_PX)
+            gh = max(2, self.h // WAVE_GRID_PX)
+            self._u = np.zeros((gh, gw), np.float32)
+            self._u_prev = np.zeros((gh, gw), np.float32)
+            self._field_t = self._clock
+        # CFL-stable sub-steps up to the clock; after a stall (draw not
+        # called for a while) integrate at most a quarter second of it.
+        dt_max = 0.6 * WAVE_GRID_PX / WAVE_SPEED_PX_S
+        if self._clock - self._field_t > 0.25:
+            self._field_t = self._clock - 0.25
+        while self._field_t < self._clock - 1e-9:
+            dt = min(dt_max, self._clock - self._field_t)
+            self._field_t += dt
+            self._step_field(dt)
+
+    # Crests tint toward icy white, troughs toward deep blue (BGR).
+    _CREST_BGR = np.array([255, 238, 190], np.uint8)
+    _TROUGH_BGR = np.array([150, 70, 20], np.uint8)
+
+    def draw(self, frame):
+        self._advance_field()
+        u = self._u
+        # Overlay colour + per-pixel blend weight are built at GRID
+        # resolution and upscaled, so the only full-resolution pass is one
+        # SIMD cv2.blendLinear — the float-numpy version of this composite
+        # cost ~75 ms/frame at 720p, this is a few ms.
+        color = np.where((u > 0.0)[..., None], self._CREST_BGR,
+                         self._TROUGH_BGR)
+        w = np.clip(np.abs(u) * 0.45, 0.0, 0.7).astype(np.float32)
+        color = cv2.resize(color, (self.w, self.h),
+                           interpolation=cv2.INTER_LINEAR)
+        w = cv2.resize(w, (self.w, self.h), interpolation=cv2.INTER_LINEAR)
+        frame[:] = cv2.blendLinear(frame, color, 1.0 - w, w)
+
+        # Source markers: a dot + a ring, highlighted while grabbed.
+        for s in self.sources:
+            cx, cy = int(s.x), int(s.y)
+            hot = s is self.grab_src
+            col = (255, 255, 255) if hot else (230, 214, 170)
+            cv2.circle(frame, (cx, cy), 5, col, -1, cv2.LINE_AA)
+            cv2.circle(frame, (cx, cy), 12, col, 2 if hot else 1, cv2.LINE_AA)
+            cv2.putText(frame, f"{s.freq:g} Hz", (cx + 16, cy - 10),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.45, col, 1, cv2.LINE_AA)
 
 
 # --- Vtuber / Puppet interactable ---------------------------------------

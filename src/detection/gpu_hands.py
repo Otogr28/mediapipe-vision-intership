@@ -27,10 +27,38 @@ default MediaPipe path does not require onnxruntime to be installed.
 import threading
 import traceback
 
+import cv2
 import numpy as np
 
-from config import (HAND_ONNX, MIN_HAND_DETECTION_CONFIDENCE, NUM_HANDS,
-                    ONNX_PROVIDERS, PALM_ONNX)
+from config import (HAND_ONNX, HAND_ROI_TRACKING,
+                    MIN_HAND_DETECTION_CONFIDENCE, NUM_HANDS, ONNX_PROVIDERS,
+                    PALM_ONNX)
+
+# Hand-landmark indices that make up the palm-detector keypoint set, in the
+# exact order MPHandPose.PALM_LANDMARK_IDS expects (wrist, the four finger
+# MCPs, thumb CMC, thumb MCP) — used to synthesize a palm-detection row from
+# the previous frame's landmarks for ROI tracking.
+_PALM_LANDMARK_IDS = np.array([0, 5, 9, 13, 17, 1, 2])
+
+
+def _palm_from_landmarks(screen_landmarks):
+    """Build a palm-detector-format row [bbox(4), 7 keypoints(14), score]
+    from a previous frame's 21 screen landmarks (pixels). The keypoints are
+    the same hand landmarks MPHandPose reads for crop rotation, so the
+    crop/rotate math sees exactly the geometry it expects."""
+    pts = screen_landmarks[_PALM_LANDMARK_IDS, :2]
+    x1, y1 = pts.min(axis=0)
+    x2, y2 = pts.max(axis=0)
+    return np.concatenate([[x1, y1, x2, y2], pts.reshape(-1), [1.0]]).astype(np.float32)
+
+
+def _center_in_bbox(palm, bbox):
+    """True when a palm detection's bbox centre lies inside a tracked hand's
+    bbox — i.e. the detector re-found a hand we are already tracking."""
+    cx = (palm[0] + palm[2]) / 2
+    cy = (palm[1] + palm[3]) / 2
+    x1, y1, x2, y2 = bbox
+    return x1 <= cx <= x2 and y1 <= cy <= y2
 
 # --- result shim classes (attribute-compatible with mediapipe's result) ----
 
@@ -92,6 +120,12 @@ class GpuHandDetector:
     on completion hands the result to ``result_callback`` exactly like
     MediaPipe's async callback, which stores it into
     ``detectors.latest_hand_result``.
+
+    Hands are ROI-TRACKED across frames (config.HAND_ROI_TRACKING): once a
+    hand is landmarked, the next frame's crop comes from its own landmarks
+    and the palm detector only runs to fill empty hand slots — this is what
+    keeps a hand tracked near the frame edge, where a partially visible palm
+    stops being detectable long before the landmarks stop being trackable.
     """
 
     def __init__(
@@ -125,6 +159,13 @@ class GpuHandDetector:
             providers=providers,
         )
 
+        # ROI tracking state (worker thread only): one entry per hand that was
+        # successfully landmarked last frame — {"palm": synthetic palm row for
+        # this frame's crop, "bbox": last enlarged hand bbox for dedup against
+        # fresh palm detections}. See config.HAND_ROI_TRACKING.
+        self._roi_tracking = HAND_ROI_TRACKING
+        self._tracked = []
+
         # Background inference worker. detect_async drops the latest frame into
         # `_pending` and signals `_wakeup`; the worker processes the most recent
         # frame and drops any it couldn't keep up with — so the main loop is
@@ -144,8 +185,6 @@ class GpuHandDetector:
         expects BGR, so convert here (also yielding an owned copy that is safe
         to hand to the worker thread) and return immediately.
         """
-        import cv2
-
         bgr = cv2.cvtColor(image.numpy_view(), cv2.COLOR_RGB2BGR)
         frame_h, frame_w = bgr.shape[:2]
         with self._lock:
@@ -175,61 +214,82 @@ class GpuHandDetector:
             self._result_callback(result, None, timestamp_ms)
 
     def _infer(self, bgr, frame_w, frame_h):
-        # TODO: ROI tracking from prev-frame landmarks. v1 runs palm detection
-        # on the full frame every call; a later optimization can skip palm
-        # detection while a hand is tracked and re-derive the palm box from the
-        # previous frame's landmarks.
-        palms = self._palm.infer(bgr)  # ndarray (N, 19): [bbox(4), lmk(14), score]
+        # ROI tracking (MediaPipe's own scheme): a hand successfully
+        # landmarked last frame is re-cropped this frame from its own
+        # landmarks; the palm detector only runs to fill remaining hand
+        # slots. Near the frame edge this is the difference between keeping
+        # the hand and losing it — a partially visible palm falls below the
+        # detector's threshold long before the landmark model loses track.
+        rois = [t["palm"] for t in self._tracked]
+        tracked_bboxes = [t["bbox"] for t in self._tracked]
+
+        if len(rois) < self._num_hands:
+            # ndarray (N, 19): [bbox(4), lmk(14), score].
+            palms = self._palm.infer(bgr)
+            if palms is not None and len(palms) > 0:
+                order = np.argsort(palms[:, -1])[::-1]
+                for idx in order:
+                    if len(rois) >= self._num_hands:
+                        break
+                    palm = palms[idx]
+                    # Skip detections of hands we are already tracking.
+                    if any(_center_in_bbox(palm, bb) for bb in tracked_bboxes):
+                        continue
+                    rois.append(palm)
 
         hand_landmarks = []
         handedness = []
         hand_world_landmarks = []
+        new_tracked = []
 
-        if palms is not None and len(palms) > 0:
-            # Keep the highest-scoring palms (score is the last column, idx 18).
-            order = np.argsort(palms[:, -1])[::-1]
-            for idx in order[: self._num_hands]:
-                palm = palms[idx]
-                res = self._handpose.infer(bgr, palm)
-                if res is None:  # below confidence threshold
-                    continue
+        for palm in rois:
+            res = self._handpose.infer(bgr, palm)
+            if res is None:  # below confidence threshold -> track dropped too
+                continue
 
-                # res layout (see mp_handpose._postprocess):
-                #   [0:4]   hand bbox (px)
-                #   [4:67]  21 screen landmarks (x,y,z) in IMAGE PIXELS
-                #   [67:130] 21 world landmarks
-                #   [130]   handedness (0=left .. 1=right)
-                #   [131]   confidence
-                screen = res[4:67].reshape(21, 3)
-                world = res[67:130].reshape(21, 3)
-                handed_score = float(res[130])
+            # res layout (see mp_handpose._postprocess):
+            #   [0:4]   hand bbox (px)
+            #   [4:67]  21 screen landmarks (x,y,z) in IMAGE PIXELS
+            #   [67:130] 21 world landmarks
+            #   [130]   handedness (0=left .. 1=right)
+            #   [131]   confidence
+            screen = res[4:67].reshape(21, 3)
+            world = res[67:130].reshape(21, 3)
+            handed_score = float(res[130])
 
-                lms = [
-                    # Normalize pixel coords to [0, 1]. z is in the same pixel
-                    # scale as x/y (relative to the wrist), so normalize it by
-                    # width to keep it on roughly the same scale as MediaPipe's
-                    # z (the app does not currently use z, so exact scale is not
-                    # load-bearing).
-                    _Landmark(
-                        x=float(px) / frame_w,
-                        y=float(py) / frame_h,
-                        z=float(pz) / frame_w,
-                    )
-                    for px, py, pz in screen
-                ]
-                hand_landmarks.append(lms)
+            lms = [
+                # Normalize pixel coords to [0, 1]. z is in the same pixel
+                # scale as x/y (relative to the wrist), so normalize it by
+                # width to keep it on roughly the same scale as MediaPipe's
+                # z (the app does not currently use z, so exact scale is not
+                # load-bearing).
+                _Landmark(
+                    x=float(px) / frame_w,
+                    y=float(py) / frame_h,
+                    z=float(pz) / frame_w,
+                )
+                for px, py, pz in screen
+            ]
+            hand_landmarks.append(lms)
 
-                world_lms = [
-                    _Landmark(x=float(wx), y=float(wy), z=float(wz))
-                    for wx, wy, wz in world
-                ]
-                hand_world_landmarks.append(world_lms)
+            world_lms = [
+                _Landmark(x=float(wx), y=float(wy), z=float(wz))
+                for wx, wy, wz in world
+            ]
+            hand_world_landmarks.append(world_lms)
 
-                # Stable, consistent handedness keying (see data contract):
-                # "Right" if score > 0.5 else "Left".
-                name = "Right" if handed_score > 0.5 else "Left"
-                handedness.append([_Category(category_name=name, score=handed_score)])
+            # Stable, consistent handedness keying (see data contract):
+            # "Right" if score > 0.5 else "Left".
+            name = "Right" if handed_score > 0.5 else "Left"
+            handedness.append([_Category(category_name=name, score=handed_score)])
 
+            if self._roi_tracking:
+                new_tracked.append({
+                    "palm": _palm_from_landmarks(screen),
+                    "bbox": tuple(float(v) for v in res[0:4]),
+                })
+
+        self._tracked = new_tracked
         return _HandResult(hand_landmarks, handedness, hand_world_landmarks)
 
     def close(self):

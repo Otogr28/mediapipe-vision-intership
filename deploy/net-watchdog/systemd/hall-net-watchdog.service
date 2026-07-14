@@ -1,0 +1,20 @@
+[Unit]
+Description=HalLMediaPipe network watchdog (WiFi power-save + Tailscale keepalive)
+Documentation=https://github.com/Otogr28/mediapipe-vision-intership
+After=network.target NetworkManager.service tailscaled.service
+Wants=NetworkManager.service
+
+[Service]
+Type=oneshot
+# Root: needs iw / nmcli / systemctl restart / tailscale up.
+ExecStart=/opt/hall-net-watchdog/net-watchdog.sh
+# Defaults; override with a systemd drop-in if the WiFi device or timeouts
+# ever change. WD_WIFI_DEV empty = auto-detect the first wifi device.
+Environment=WD_WIFI_DEV=
+Environment=WD_TIMEOUT=6
+Environment=WD_LOG=/var/log/hall-net-watchdog.log
+# A single run must never hang the timer: hard-cap the whole invocation.
+TimeoutStartSec=90
+
+[Install]
+WantedBy=multi-user.target
