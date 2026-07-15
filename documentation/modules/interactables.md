@@ -263,6 +263,37 @@ Tuning constants (`SLING_*`) live at the top of `interactables.py` next to the c
 
 ---
 
+## `Spacetime`
+
+Relativistic gravity sandbox: a wireframe sheet that bends under the masses you place, and test particles whose orbits **precess**. Tuning constants are `ST_*` in [[config]] (following the newer `ORB_*`/`WAVE_*`/`CHG_*` precedent rather than the module-local `SLING_*` one).
+
+> The three experiments added before this one (`Orbitals`, `Waves`, `Charges`) are not yet written up in this file — see their `ST_*`-style config blocks and class docstrings, which carry the same detail.
+
+### One geometry, two uses
+
+Each mass gets a Schwarzschild radius `rs = ST_RS_PER_MASS * m`, and that same `rs` drives both halves — so the shape on screen and the physics the particles feel are the same spacetime, not two unrelated effects. Fixing `rs` per unit mass also fixes `c` in screen units (`rs = 2GM/c²`), which is why there is no separate `c` knob.
+
+- **The sheet** is Flamm's paraboloid `z(r) = 2·√(rs·(r − rs))`, the exact embedding of the Schwarzschild equatorial slice, measured *downward* from `ST_CURV_REACH_PX` so each well is local and finite (it bottoms out at the throat instead of diverging like a Newtonian 1/r funnel). Summing one-mass paraboloids is **not** a solution of Einstein's equations — they are nonlinear, so wells do not really superpose. It is the standard visual approximation, and exact for a single mass.
+- **The orbits** use the Paczyński–Wiita potential `a = −GM/(r − rs)²`. Moving the pole from the centre to the horizon is the whole trick: it reproduces perihelion **precession** and an **ISCO** at `3·rs`, inside which nothing orbits and the particle plunges and is swallowed. Measured: a Star at r ≈ 22·rs precesses ~47° per lap, stable over long runs (velocity-Verlet is symplectic).
+
+The masses are static, like `Charges`' charges — the arrangement is the subject.
+
+### Display-only geometry
+
+`ST_DEPTH_GAIN` exaggerates the sheet and `ST_MAX_DEPTH_PX` soft-clamps it (`z = −max·tanh(|z|/max)`). Both exist because `dz/dr → ∞` at the throat: a to-scale funnel is genuinely vertical there and projects to a tangle of near-parallel lines. **`_accel` never reads `_depth`** — keep it that way, or the art starts changing the physics.
+
+### Gestures
+
+- one pinch on empty space → arms a placement, committed on **release** (a ghost shows where)
+- one pinch on a mass → drag it live; the curvature follows
+- **two pinches at once** → 3D camera: midpoint travel yaws/pitches, hand span zooms. This *supersedes* place/drag and cancels any pending placement, so a mass never appears just because the user was reaching for the second pinch. Hands that took part stay inert until they re-pinch.
+
+### Backdrop
+
+`draw()` dims the camera image (`ST_BACKDROP_ALPHA`) so the thin wireframe reads. This is **display-only by construction**: it runs after `toMpImage` has already handed inference its own RGB copy, so the model always sees the raw frame. In web mode the point is moot — the backend draws nothing and the browser dims its own canvas (`drawBackdrop` in `overlay/scene.ts`, before the skeleton so only the video darkens). Do not hoist any of it earlier in the loop.
+
+---
+
 ## Adding New Interactables
 
 1. Add a new class to this file following the `update(hand_result, pose_landmarks)` / `draw(frame)` interface.

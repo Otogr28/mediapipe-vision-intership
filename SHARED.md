@@ -1883,3 +1883,66 @@ test, isolated to `Charges.draw` (drawing the whole UI contaminated it at 51%
 — the intro/hint overlays animate too): 0.87% changed over 0.7 s vs 0.128%
 with no time gap, confirming the tint is static and only the arrows move.
 Line density still encodes |q| (q -> 12 lines, 2q -> 24); dipole E unchanged.
+
+## 2026-07-15 — Spacetime experiment (relativistic gravity)
+
+New experiment, sixth in the picker: a rubber sheet that bends under placed
+masses, with orbits that precess. Files: `ST_*` block in `config.py`,
+`Spacetime`/`_Mass`/`_Orbiter`/`_flamm_depth` in `ui/interactables.py`, picker
+wiring in `ui/manager.py`, `SpacetimeObject` in `web/src/state/types.ts`,
+renderer + `drawBackdrop` in `web/src/overlay/scene.ts`, interp case in
+`state/interp.ts`, `spacetime` scene in `mock_backend.py`. `web/dist` rebuilt.
+
+### Design decisions worth not re-litigating
+- ONE geometry drives both halves: `rs = ST_RS_PER_MASS * m` sets the sheet's
+  throat AND the orbit potential's pole, so the picture and the physics are the
+  same spacetime. That also fixes `c` in screen units — hence no `c` knob.
+- SHEET = Flamm's paraboloid (exact Schwarzschild equatorial embedding),
+  measured down from `ST_CURV_REACH_PX` so wells are local + finite. Summing
+  them is NOT a GR solution (nonlinear); it is the standard visual
+  approximation and is exact for one mass. Documented, not accidental.
+- ORBITS = Paczynski-Wiita `a = -GM/(r-rs)^2`. Moving the pole to the horizon
+  is what buys precession + an ISCO at 3*rs. This is what makes the experiment
+  relativistic rather than a sagging mesh. Masses are STATIC (Charges' call).
+- DISPLAY-only geometry is kept strictly out of the physics: `ST_DEPTH_GAIN`
+  and the `ST_MAX_DEPTH_PX` tanh clamp shape the sheet; `_accel` never calls
+  `_depth`. The clamp is not cosmetic fussiness — dz/dr -> inf at the throat,
+  so a to-scale compact hole (~310 px deep on a 720 px frame) projects to a
+  tangle of near-parallel lines. tanh leaves shallow wells untouched (same
+  trick as `WAVE_DISPLAY_GAIN`).
+- TWO-HAND gesture is new to this codebase: two simultaneous pinches drive the
+  camera and SUPERSEDE place/drag (touchscreen convention). Hence placement
+  commits on RELEASE, not on the pinch edge — otherwise a mass appears while
+  the user is still reaching for the second pinch. Hands that rotated stay
+  inert until they re-pinch. Reuse this if another scene needs two hands.
+- Grid is stroked ONE polyline per line (~48 draw calls/frame), not per
+  segment (~3500) — deliberate, for the Jetson kiosk. Fog uses a per-line mean
+  depth; the well reads from the geometry, not from per-segment shading.
+- `ST_GRID_MARGIN = 1.7` is sized for the YAWED case: at 1.25 a ~70 deg yaw
+  swung the finite sheet's corner into frame and left a bare triangle.
+
+### Verified (no camera — mock_backend + shot.mjs, per the usual loop)
+- Physics: preset spawns at r/rs = 22.2, periapsis 60 px vs ISCO 27 px (stable,
+  no plunge); precession measured at 47/47/48/47/47 deg per lap over 6 laps —
+  constant, i.e. a genuine apsidal walk, not drift.
+- Gestures (stubbed pinch machines): placement waits for release; a second
+  pinch promotes to rotate AND cancels the pending placement (mass count stays
+  0 through release); midpoint +100 px -> yaw +0.600 rad exactly; span 200->400
+  -> zoom 1.0->2.0; pitch clamps at 89 deg under a 60-cycle hammer.
+- INFERENCE ISOLATION (the explicit ask): replayed main.py's ordering —
+  `toMpImage(frame)` then `Spacetime.draw(frame)` — and asserted the model's
+  buffer is byte-identical afterwards (True) while the display frame's mean
+  drops 185.3 -> 106.9. Safe because `toMpImage` cvtColors into a NEW array, so
+  the async detector never aliases the frame we draw on. Web mode is moot
+  (backend draws nothing; `drawBackdrop` dims the browser canvas only, and runs
+  before `drawSkeleton` so it darkens the video and not the UI).
+- Caught two missing imports (`pinch_infos`, `ST_ROT_*_GAIN`) only because the
+  gesture test actually ran the code path — the experiment would have thrown on
+  open. Worth a smoke test on any new scene.
+
+### Open / next
+- `documentation/modules/interactables.md` now documents Spacetime, but
+  Orbitals/Waves/Charges are still undocumented there (pre-existing drift).
+- Not yet run on the Jetson. Grid cost is ~3.5k projected points/frame in JS;
+  expected fine, but the `?glscale` escape hatch does NOT apply (Canvas2D, not
+  a GL layer) — if it bites, drop `ST_LINE_SAMPLES` or the grid counts.

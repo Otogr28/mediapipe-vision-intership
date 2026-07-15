@@ -5,6 +5,7 @@ import type {
   ChargesObject,
   OrbitalsObject,
   SlingshotObject,
+  SpacetimeObject,
   SphereObject,
   Vec2,
   WavesObject,
@@ -53,6 +54,9 @@ const trails = new Map<number, Vec2[]>();
 // distinct so a leftover id can't cross-contaminate).
 const orbTrails = new Map<number, Vec2[]>();
 const ORB_TRAIL_LEN = 64; // ORB_TRAIL_LEN
+// Spacetime orbiter id -> recent PLANE positions (the sheet depth is derived,
+// so storing (x, y) is enough to re-project a whole trail each frame).
+const stTrails = new Map<number, Vec2[]>();
 let trailSeq = -1;
 
 /** Push one point per live id, capped, and drop ids that vanished. */
@@ -92,6 +96,14 @@ export function updateTrails(state: AppState) {
   );
   if (orb) accumulate(orbTrails, orb.bodies, ORB_TRAIL_LEN);
   else if (orbTrails.size) orbTrails.clear();
+
+  // Spacetime orbiters: the trail is the whole point here — a precessing
+  // ellipse only reads as precessing if you can see where it has been.
+  const st = state.objects.find(
+    (o): o is SpacetimeObject => o.type === "spacetime",
+  );
+  if (st) accumulate(stTrails, st.orbiters, st.trail_len);
+  else if (stTrails.size) stTrails.clear();
 }
 
 // ---- drawing helpers ----------------------------------------------------
@@ -756,6 +768,250 @@ function drawPuppet(
   ctx.fillText("summoning avatar\u2026", cx, cy + r + 34);
 }
 
+// ---- spacetime (relativistic gravity) -----------------------------------
+
+/**
+ * Ports of `_flamm_depth` and `Spacetime._project` in ui/interactables.py —
+ * KEEP IN SYNC. The backend sends the masses, the camera and the constants;
+ * the sheet itself is re-derived here so it costs nothing in the payload.
+ */
+function flammDepth(r: number, rs: number, reach: number, gain: number) {
+  if (rs <= 0 || r >= reach || rs >= reach) return 0;
+  const rr = Math.max(r, rs); // inside the horizon the embedding ends
+  const edge = 2 * Math.sqrt(rs * (reach - rs));
+  const here = 2 * Math.sqrt(rs * (rr - rs));
+  return -gain * (edge - here);
+}
+
+function sheetDepth(o: SpacetimeObject, x: number, y: number) {
+  let z = 0;
+  for (const m of o.masses) {
+    z += flammDepth(Math.hypot(x - m.x, y - m.y), m.rs, o.reach, o.depth_gain);
+  }
+  // Soft depth ceiling — mirrors Spacetime._depth. The embedding is vertical
+  // at the throat, so an unclamped funnel projects to a tangle; tanh leaves a
+  // shallow well untouched and saturates the deep ones smoothly.
+  return -o.max_depth * Math.tanh(-z / o.max_depth);
+}
+
+/** World (plane px, depth) -> [screenX, screenY, cameraDepth]. */
+function project(
+  o: SpacetimeObject,
+  x: number,
+  y: number,
+  z: number,
+  fw: number,
+  fh: number,
+): [number, number, number] {
+  const cx = fw * 0.5;
+  const cy = fh * 0.5;
+  const px = x - cx;
+  const py = y - cy;
+  const cyaw = Math.cos(o.yaw);
+  const syaw = Math.sin(o.yaw);
+  const x1 = px * cyaw - py * syaw;
+  const y1 = px * syaw + py * cyaw;
+  const cp = Math.cos(o.pitch);
+  const sp = Math.sin(o.pitch);
+  const y2 = y1 * sp - z * cp;
+  const d = y1 * cp + z * sp;
+  const f = o.focal / Math.max(o.focal + d, 1);
+  return [cx + x1 * f * o.zoom, cy + y2 * f * o.zoom, d];
+}
+
+/** Perspective scale at a camera depth — sizes markers with the grid. */
+function depthScale(o: SpacetimeObject, d: number) {
+  return (o.focal / Math.max(o.focal + d, 1)) * o.zoom;
+}
+
+/**
+ * The backdrop dim. Drawn on the OVERLAY canvas, which sits above the camera
+ * <img> — so it darkens the video only, and the skeleton/grid/HUD stack on top
+ * at full strength. The frame the backend hands to inference is never touched
+ * (in web mode the backend does not draw at all).
+ */
+export function drawBackdrop(ctx: CanvasRenderingContext2D, state: AppState) {
+  const o = state.objects.find(
+    (s): s is SpacetimeObject => s.type === "spacetime",
+  );
+  if (!o) return;
+  const [r, g, b] = o.dim_rgb;
+  ctx.fillStyle = `rgba(${r},${g},${b},${o.dim})`;
+  ctx.fillRect(0, 0, ctx.canvas.width, ctx.canvas.height);
+}
+
+function drawSpacetime(
+  ctx: CanvasRenderingContext2D,
+  o: SpacetimeObject,
+  fw: number,
+  fh: number,
+) {
+  const [cols, rows, samples, extent] = o.grid;
+  const cx = fw * 0.5;
+  const cy = fh * 0.5;
+  const halfW = fw * extent * 0.5;
+  const halfH = fh * extent * 0.5;
+  const x0 = cx - halfW;
+  const x1 = cx + halfW;
+  const y0 = cy - halfH;
+  const y1 = cy + halfH;
+
+  // One stroke per gridline (not per segment): ~40 draw calls a frame instead
+  // of ~3000, which is what keeps this affordable on the Jetson kiosk. The
+  // well reads from the GEOMETRY (the sag) plus the mass markers; the fog only
+  // has to sell near-vs-far, so a per-line mean depth is enough.
+  const strokeLine = (pts: [number, number, number][]) => {
+    if (pts.length < 2) return;
+    let meanD = 0;
+    for (const p of pts) meanD += p[2];
+    meanD /= pts.length;
+    // Fog: +/- one frame-width of depth maps to the alpha range.
+    const t = Math.max(0, Math.min(1, 0.5 - meanD / (fw * 1.6)));
+    ctx.strokeStyle = `rgba(${120 + 80 * t},${170 + 60 * t},255,${0.16 + 0.42 * t})`;
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(pts[0][0], pts[0][1]);
+    for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i][0], pts[i][1]);
+    ctx.stroke();
+  };
+
+  for (let i = 0; i <= cols; i++) {
+    const x = x0 + ((x1 - x0) * i) / cols;
+    const pts: [number, number, number][] = [];
+    for (let j = 0; j <= samples; j++) {
+      const y = y0 + ((y1 - y0) * j) / samples;
+      pts.push(project(o, x, y, sheetDepth(o, x, y), fw, fh));
+    }
+    strokeLine(pts);
+  }
+  for (let j = 0; j <= rows; j++) {
+    const y = y0 + ((y1 - y0) * j) / rows;
+    const pts: [number, number, number][] = [];
+    for (let i = 0; i <= samples; i++) {
+      const x = x0 + ((x1 - x0) * i) / samples;
+      pts.push(project(o, x, y, sheetDepth(o, x, y), fw, fh));
+    }
+    strokeLine(pts);
+  }
+
+  // Orbiter trails — the precession evidence.
+  const [tr, tg, tb] = o.orbiter_rgb;
+  for (const orb of o.orbiters) {
+    const trail = stTrails.get(orb.id);
+    if (!trail || trail.length < 2) continue;
+    ctx.strokeStyle = `rgba(${tr},${tg},${tb},0.5)`;
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    for (let i = 0; i < trail.length; i++) {
+      const [wx, wy] = trail[i];
+      const [sx, sy] = project(o, wx, wy, sheetDepth(o, wx, wy), fw, fh);
+      if (i === 0) ctx.moveTo(sx, sy);
+      else ctx.lineTo(sx, sy);
+    }
+    ctx.stroke();
+  }
+
+  // Markers, far to near, so a body behind a well is occluded by the one in
+  // front rather than punching through it.
+  type Marker = { d: number; draw: () => void };
+  const markers: Marker[] = [];
+
+  for (const orb of o.orbiters) {
+    const [sx, sy, d] = project(
+      o,
+      orb.x,
+      orb.y,
+      sheetDepth(o, orb.x, orb.y),
+      fw,
+      fh,
+    );
+    const rad = Math.max(2.5, 5 * depthScale(o, d));
+    markers.push({
+      d,
+      draw: () => {
+        ctx.fillStyle = `rgb(${tr},${tg},${tb})`;
+        ctx.beginPath();
+        ctx.arc(sx, sy, rad, 0, Math.PI * 2);
+        ctx.fill();
+      },
+    });
+  }
+
+  for (const m of o.masses) {
+    const [sx, sy, d] = project(o, m.x, m.y, sheetDepth(o, m.x, m.y), fw, fh);
+    const sc = depthScale(o, d);
+    // A compact body IS its horizon, so it is drawn at rs; a star only gets a
+    // marker, floored so it stays visible when the camera pulls back.
+    const rad = m.compact
+      ? Math.max(4, m.rs * sc)
+      : Math.max(7, m.rs * sc * 0.9);
+    const [r, g, b] = m.rgb;
+    markers.push({
+      d,
+      draw: () => {
+        if (!m.compact) {
+          const glow = ctx.createRadialGradient(sx, sy, 0, sx, sy, rad * 3);
+          glow.addColorStop(0, `rgba(${r},${g},${b},0.5)`);
+          glow.addColorStop(1, `rgba(${r},${g},${b},0)`);
+          ctx.fillStyle = glow;
+          ctx.beginPath();
+          ctx.arc(sx, sy, rad * 3, 0, Math.PI * 2);
+          ctx.fill();
+        }
+        ctx.fillStyle = `rgb(${r},${g},${b})`;
+        ctx.beginPath();
+        ctx.arc(sx, sy, rad, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.strokeStyle = m.grabbed
+          ? "#3fdc82"
+          : m.compact
+            ? "rgba(190,200,255,0.85)"
+            : "rgba(255,255,255,0.6)";
+        ctx.lineWidth = m.grabbed ? 2.5 : 1;
+        ctx.stroke();
+        if (m.flash > 0) {
+          ctx.strokeStyle = `rgba(255,255,255,${m.flash})`;
+          ctx.lineWidth = 2;
+          ctx.beginPath();
+          ctx.arc(sx, sy, rad + 30 * (1 - m.flash), 0, Math.PI * 2);
+          ctx.stroke();
+        }
+      },
+    });
+  }
+
+  markers.sort((a, b) => b.d - a.d);
+  for (const mk of markers) mk.draw();
+
+  // Ghost: where a release would drop the next object.
+  if (o.ghost) {
+    const [sx, sy] = project(
+      o,
+      o.ghost.x,
+      o.ghost.y,
+      sheetDepth(o, o.ghost.x, o.ghost.y),
+      fw,
+      fh,
+    );
+    ctx.strokeStyle = "rgba(230,230,240,0.8)";
+    ctx.lineWidth = 1.5;
+    ctx.setLineDash([4, 4]);
+    ctx.beginPath();
+    ctx.arc(sx, sy, 11, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.setLineDash([]);
+  }
+
+  // Rotate affordance: while both hands drive the camera, say so.
+  if (o.rotating) {
+    ctx.fillStyle = "rgba(140,235,255,0.9)";
+    ctx.font = "600 22px ui-sans-serif, system-ui, sans-serif";
+    ctx.textAlign = "center";
+    ctx.textBaseline = "top";
+    ctx.fillText("3D rotate", cx, 16);
+  }
+}
+
 // ---- dispatch -----------------------------------------------------------
 
 export function drawScene(
@@ -779,6 +1035,9 @@ export function drawScene(
         break;
       case "charges":
         drawCharges(ctx, obj, _now);
+        break;
+      case "spacetime":
+        drawSpacetime(ctx, obj, state.frame.w, state.frame.h);
         break;
       case "vtuber":
         drawPuppet(ctx, state, _now);

@@ -8,7 +8,8 @@ from ui.cursor import PinchCursor
 from ui.debug_hud import DebugHUD
 from ui.hints import IntroOverlay, PinchHint
 from ui.interactables import (BlackHole, BouncingSphere, Charges, Orbitals,
-                              Puppet, SixSevenCounter, Slingshot, Waves)
+                              Puppet, SixSevenCounter, Slingshot, Spacetime,
+                              Waves)
 
 MENU_BTN_W, MENU_BTN_H = 260, 70
 RESET_W, RESET_H = 130, 50
@@ -150,9 +151,15 @@ class UIManager:
             label="Charges",
             on_click=self._spawn_charges,
         )
+        self._spacetime_btn = Button(
+            x=margin + (150 + 10) * 5, y=margin, width=150, height=50,
+            label="Spacetime",
+            on_click=self._spawn_spacetime,
+            font_scale=0.6,
+        )
         self._experiment_btns = [self._black_hole_btn, self._slingshot_btn,
                                  self._orbitals_btn, self._waves_btn,
-                                 self._charges_btn]
+                                 self._charges_btn, self._spacetime_btn]
 
         # Sim-speed stepper, pinned top-right: [-] 1x [+]. Only shown while
         # the active experiment exposes a `time_scale` (the slingshot).
@@ -225,6 +232,9 @@ class UIManager:
 
     def _spawn_charges(self):
         self._active_experiment = Charges(self.frame_w, self.frame_h)
+
+    def _spawn_spacetime(self):
+        self._active_experiment = Spacetime(self.frame_w, self.frame_h)
 
     def _spawn_puppet(self):
         self._puppet = Puppet(self.frame_w, self.frame_h)
@@ -406,6 +416,7 @@ class UIManager:
                     self._orbitals_btn.to_state("exp.orbitals"),
                     self._waves_btn.to_state("exp.waves"),
                     self._charges_btn.to_state("exp.charges"),
+                    self._spacetime_btn.to_state("exp.spacetime"),
                 ]
             else:
                 exp_state = self._active_experiment.to_state()

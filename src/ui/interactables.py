@@ -23,13 +23,25 @@ from config import (BH_DEFAULT_POS_FACTOR, BH_DISK_BRIGHTNESS,
                     ORB_PREDICT_TIME_S, ORB_PRUNE_MARGIN, ORB_RESTITUTION,
                     ORB_SOFTENING_PX, ORB_TIME_SCALES, ORB_TRAIL_LEN,
                     PUPPET_IDLE_BOB_S, SIXSEVEN_FLASH_FRAMES,
-                    SIXSEVEN_HYSTERESIS, SIXSEVEN_MIN_VISIBILITY, WAVE_AMP,
-                    WAVE_DECAY_TAU_S, WAVE_DEFAULT_KIND, WAVE_DISPLAY_GAIN,
+                    SIXSEVEN_HYSTERESIS, SIXSEVEN_MIN_VISIBILITY,
+                    ST_BACKDROP_ALPHA, ST_BACKDROP_RGB, ST_CAM_SMOOTH,
+                    ST_CAPTURE_FLASH_DECAY, ST_CURV_REACH_PX, ST_DEFAULT_KIND,
+                    ST_DEPTH_GAIN, ST_FOCAL_PX, ST_FRAME_DT, ST_GRAB_PAD_PX,
+                    ST_GRID_COLS, ST_GRID_MARGIN, ST_GRID_ROWS,
+                    ST_LINE_SAMPLES, ST_MASS_TYPES, ST_MAX_DEPTH_PX,
+                    ST_MAX_MASSES, ST_MAX_ORBITERS, ST_MAX_SUBSTEPS, ST_ORB_G,
+                    ST_ORB_MIN_SPAWN_RS, ST_ORB_SPAWN_VFRAC, ST_ORB_TRAIL_LEN,
+                    ST_ORBITER_KIND, ST_ORBITER_RGB, ST_PHYS_DT,
+                    ST_PITCH_DEFAULT_RAD, ST_PITCH_MAX_RAD, ST_PITCH_MIN_RAD,
+                    ST_PRUNE_MARGIN, ST_ROT_PITCH_GAIN, ST_ROT_YAW_GAIN,
+                    ST_RS_PER_MASS, ST_TIME_SCALES, ST_YAW_DEFAULT_RAD,
+                    ST_ZOOM_MAX, ST_ZOOM_MIN, WAVE_AMP, WAVE_DECAY_TAU_S,
+                    WAVE_DEFAULT_KIND, WAVE_DISPLAY_GAIN,
                     WAVE_DISPLAY_MAX_ALPHA, WAVE_FRAME_DT, WAVE_GRAB_PAD_PX,
                     WAVE_GRID_PX, WAVE_MAX_DEBT_S, WAVE_MAX_SOURCES,
                     WAVE_MAX_SUBSTEPS, WAVE_PHYS_DT, WAVE_RAMP_S,
                     WAVE_SOURCE_TYPES, WAVE_SPEED_PX_S, WAVE_TIME_SCALES)
-from detection.gestures import hand_id, pinch_info, pinch_state
+from detection.gestures import hand_id, pinch_info, pinch_infos, pinch_state
 from ui.button import Button
 
 POSE_LEFT_ELBOW = 13
@@ -2416,6 +2428,594 @@ class Charges:
 
 
 # --- Vtuber / Puppet interactable ---------------------------------------
+
+
+class _Mass:
+    __slots__ = ("id", "x", "y", "m", "rs", "kind", "flash")
+
+    def __init__(self, mid, x, y, m, rs, kind):
+        self.id = mid
+        self.x = x
+        self.y = y
+        self.m = m
+        self.rs = rs      # Schwarzschild radius (px) — sets BOTH the sheet's
+                          # throat and the PW potential's pole
+        self.kind = kind
+        self.flash = 0.0  # transient glow when it swallows an orbiter
+
+
+class _Orbiter:
+    __slots__ = ("id", "x", "y", "vx", "vy", "ax", "ay")
+
+    def __init__(self, oid, x, y, vx, vy):
+        self.id = oid
+        self.x = x
+        self.y = y
+        self.vx = vx
+        self.vy = vy
+        self.ax = 0.0
+        self.ay = 0.0
+
+
+def _clamp(v, lo, hi):
+    return lo if v < lo else (hi if v > hi else v)
+
+
+def _flamm_depth(r, rs):
+    """Sheet depth (px, negative = down) of one mass at radius ``r``.
+
+    Flamm's paraboloid ``z(r) = 2*sqrt(rs*(r - rs))`` is the exact embedding of
+    the Schwarzschild equatorial slice. Taken literally it grows without bound
+    with ``r``, so we measure it DOWNWARD from ``ST_CURV_REACH_PX`` — the radius
+    where we declare space flat again. The well is then local (0 at the reach)
+    and finite (it bottoms out at the throat, ``r = rs``) instead of diverging
+    like a Newtonian 1/r funnel.
+
+    Mirrored in ``web/src/overlay/scene.ts`` (``flammDepth``) — keep in sync.
+    """
+    reach = ST_CURV_REACH_PX
+    if rs <= 0.0 or r >= reach or rs >= reach:
+        return 0.0
+    # Inside the horizon the embedding simply ends; clamp to the throat so the
+    # sheet has a flat floor rather than a NaN.
+    r = max(r, rs)
+    edge = 2.0 * math.sqrt(rs * (reach - rs))
+    here = 2.0 * math.sqrt(rs * (r - rs))
+    return -ST_DEPTH_GAIN * (edge - here)
+
+
+class Spacetime:
+    """Relativistic gravity sandbox: watch spacetime bend, and orbits precess.
+
+    Pinch empty space to drop a mass (Star / Giant / Hole) and the grid sags
+    into its well; pinch a mass to drag it and the curvature follows. Select
+    "Orbiter" to launch a test particle around the nearest mass. Pinch with
+    BOTH hands at once to orbit the camera in 3D.
+
+    Why this is not just a sagging mesh (see the ST_* block in config for the
+    full note): one Schwarzschild radius ``rs = ST_RS_PER_MASS * m`` drives
+    both halves, so the shape you see and the physics the particles feel are
+    the same geometry.
+
+    * the SHEET is Flamm's paraboloid, the exact Schwarzschild embedding
+      (:func:`_flamm_depth`), summed per mass — a visual approximation, since
+      GR is nonlinear and wells do not really superpose, but exact for one mass
+    * the ORBITS use the Paczynski-Wiita potential, ``a = -GM/(r - rs)^2``,
+      which reproduces what Newton cannot: perihelion PRECESSION (the ellipse
+      rotates) and an ISCO at ``3*rs``, inside which the particle spirals in
+      and is swallowed
+
+    The masses are STATIC — they do not fall toward each other. That is
+    deliberate, the same call Charges makes: the user's arrangement is the
+    subject, and mutually attracting masses would collapse into Orbitals.
+
+    This class owns the mass/orbiter lists, the camera angles and the
+    integration; both renderers derive the picture from
+    :meth:`to_state`. The projection and depth math are mirrored in
+    ``web/src/overlay/scene.ts``.
+    """
+
+    def __init__(self, frame_width, frame_height):
+        self.w = frame_width
+        self.h = frame_height
+        self.masses = []
+        self.orbiters = []
+        self._next_id = 0
+        self._kind = ST_DEFAULT_KIND
+        self._scale_idx = ST_TIME_SCALES.index(1.0)
+        self._time_acc = 0.0
+
+        # Camera. The two-hand gesture drives the *_t targets; the values the
+        # renderer sees ease toward them (ST_CAM_SMOOTH) so a bare hand's
+        # tremor does not shake the scene.
+        self._yaw_t = ST_YAW_DEFAULT_RAD
+        self._pitch_t = ST_PITCH_DEFAULT_RAD
+        self._zoom_t = 1.0
+        self._yaw = self._yaw_t
+        self._pitch = self._pitch_t
+        self._zoom = self._zoom_t
+        self._rot_prev = None      # (midpoint, span) of the last rotate frame
+        self.rotating = False
+
+        # Hands that are mid-rotate (or were, and have not released yet): they
+        # must not place or grab anything until they re-pinch.
+        self._consumed = set()
+
+        # Pointer state: one drag OR one pending placement at a time.
+        self._grab_mass = None
+        self._grab_hand = None
+        self._grab_dx = 0.0
+        self._grab_dy = 0.0
+        self._pending = None       # {"hand", "x", "y"} — committed on release
+
+        self._build_palette()
+        self._apply_selection()
+
+    # ---- palette -------------------------------------------------------
+
+    def _build_palette(self):
+        margin = int(self.h * 0.12)
+        bw, bh, gap = 96, 46, 8
+        x0, y0 = margin, margin
+        self._type_btns = []
+        kinds = [(k, spec["label"]) for k, spec in ST_MASS_TYPES.items()]
+        kinds.append((ST_ORBITER_KIND, "Orbiter"))
+        for i, (kind, label) in enumerate(kinds):
+            btn = Button(
+                x=x0 + i * (bw + gap), y=y0, width=bw, height=bh,
+                label=label, on_click=(lambda k=kind: self._select(k)),
+                font_scale=0.55,
+            )
+            self._type_btns.append((f"st.type.{kind}", kind, btn))
+        n = len(self._type_btns)
+        self._preset_btn = Button(
+            x=x0 + n * (bw + gap), y=y0, width=bw, height=bh,
+            label="Precess", on_click=self._preset_precession, font_scale=0.5,
+        )
+        self._clear_btn = Button(
+            x=x0 + (n + 1) * (bw + gap), y=y0, width=bw, height=bh,
+            label="Clear", on_click=self.clear, font_scale=0.6,
+        )
+
+    @property
+    def palette(self):
+        """(id, Button) list the UIManager updates / draws / serializes."""
+        return ([(bid, btn) for bid, _kind, btn in self._type_btns]
+                + [("st.preset.precess", self._preset_btn),
+                   ("st.clear", self._clear_btn)])
+
+    def _select(self, kind):
+        self._kind = kind
+        self._apply_selection()
+
+    def _apply_selection(self):
+        for _bid, kind, btn in self._type_btns:
+            btn.selected = (kind == self._kind)
+
+    @property
+    def time_scale(self):
+        """Sim speed, stepped by the UIManager's -/+ buttons."""
+        return ST_TIME_SCALES[self._scale_idx]
+
+    def speed_up(self):
+        self._scale_idx = min(self._scale_idx + 1, len(ST_TIME_SCALES) - 1)
+
+    def speed_down(self):
+        self._scale_idx = max(self._scale_idx - 1, 0)
+
+    @property
+    def grabbed(self):
+        # Retires the onboarding hint while dragging a mass or rotating.
+        return self._grab_mass is not None or self.rotating
+
+    # ---- placement -----------------------------------------------------
+
+    def clear(self):
+        self.masses.clear()
+        self.orbiters.clear()
+        self._grab_mass = None
+        self._grab_hand = None
+        self._pending = None
+
+    def _place_mass(self, x, y, kind=None):
+        kind = self._kind if kind is None else kind
+        spec = ST_MASS_TYPES[kind]
+        m = _Mass(self._next_id, x, y, spec["m"],
+                  ST_RS_PER_MASS * spec["m"], kind)
+        self._next_id += 1
+        self.masses.append(m)
+        if len(self.masses) > ST_MAX_MASSES:
+            self.masses.pop(0)
+        return m
+
+    def _nearest_mass(self, x, y):
+        best, best_d = None, None
+        for m in self.masses:
+            d = math.hypot(m.x - x, m.y - y)
+            if best_d is None or d < best_d:
+                best, best_d = m, d
+        return best
+
+    def _place_orbiter(self, x, y):
+        """Launch a test particle at (x, y) around the nearest mass.
+
+        Tangential launch at ``ST_ORB_SPAWN_VFRAC`` of the local PW circular
+        speed ``v = sqrt(G*M*r)/(r - rs)``. Below 1.0 the launch point is the
+        APOapsis, so the orbit is an ellipse of eccentricity ~``1 - f^2`` — a
+        circle would precess invisibly (a rotating circle looks identical).
+        """
+        host = self._nearest_mass(x, y)
+        if host is None:
+            return None            # nothing to orbit yet
+        dx, dy = x - host.x, y - host.y
+        r = math.hypot(dx, dy)
+        if r < 1e-6:
+            dx, dy, r = 1.0, 0.0, 1.0
+        # Keep the spawn just outside the ISCO (3*rs): a particle started
+        # inside it has no circular orbit to be a fraction of.
+        r_min = ST_ORB_MIN_SPAWN_RS * host.rs
+        if r < r_min:
+            s = r_min / r
+            dx, dy, r = dx * s, dy * s, r_min
+            x, y = host.x + dx, host.y + dy
+        v_circ = math.sqrt(ST_ORB_G * host.m * r) / max(r - host.rs, 1e-3)
+        v = ST_ORB_SPAWN_VFRAC * v_circ
+        # Counter-clockwise tangent.
+        o = _Orbiter(self._next_id, x, y, -dy / r * v, dx / r * v)
+        o.ax, o.ay = self._accel(o.x, o.y)
+        self._next_id += 1
+        self.orbiters.append(o)
+        if len(self.orbiters) > ST_MAX_ORBITERS:
+            self.orbiters.pop(0)
+        return o
+
+    def _preset_precession(self):
+        """One press gets the money shot: a lone star and an eccentric orbit
+        whose axis visibly walks around it (the Mercury effect)."""
+        self.clear()
+        cx, cy = self.w * 0.5, self.h * 0.5
+        self._place_mass(cx, cy, "star")
+        self._place_orbiter(cx + 200, cy)
+
+    def _mass_at(self, px, py):
+        best, best_d = None, None
+        for m in self.masses:
+            d = math.hypot(m.x - px, m.y - py)
+            if d <= ST_GRAB_PAD_PX and (best_d is None or d < best_d):
+                best, best_d = m, d
+        return best
+
+    def _commit_pending(self):
+        p = self._pending
+        if p is None:
+            return
+        if self._kind == ST_ORBITER_KIND:
+            self._place_orbiter(p["x"], p["y"])
+        else:
+            self._place_mass(p["x"], p["y"])
+
+    # ---- gesture -------------------------------------------------------
+
+    def update(self, hand_result, pose_landmarks):
+        # Held pinches, ordered by hand id so the two-hand pairing is stable
+        # frame to frame (the dict order is not).
+        held = sorted((hid, m.cursor) for hid, m in pinch_infos() if m.closed)
+
+        if len(held) >= 2:
+            # Two pinches mean "rotate", and they SUPERSEDE whatever one hand
+            # had started — the same promotion a touchscreen does when a
+            # one-finger pan becomes a two-finger gesture. Dropping the pending
+            # placement is why placement waits for release: a mass never
+            # appears just because the user was reaching for the second pinch.
+            self._pending = None
+            self._grab_mass = None
+            self._grab_hand = None
+            self._consumed = {hid for hid, _ in held}
+            self._rotate(held)
+        else:
+            self._rot_prev = None
+            self.rotating = False
+            # A hand that took part in a rotate stays inert until it releases.
+            self._consumed &= {hid for hid, _ in held}
+            self._point(hand_result)
+
+        self._ease_camera()
+        self._advance()
+
+    def _rotate(self, held):
+        (_, pa), (_, pb) = held[0], held[1]
+        mid = ((pa[0] + pb[0]) * 0.5, (pa[1] + pb[1]) * 0.5)
+        span = math.hypot(pb[0] - pa[0], pb[1] - pa[1])
+        if self._rot_prev is not None:
+            pmid, pspan = self._rot_prev
+            # Drag both hands sideways to spin the sheet; up/down to tilt
+            # between the three-quarter view and straight down.
+            self._yaw_t += (mid[0] - pmid[0]) * ST_ROT_YAW_GAIN
+            self._pitch_t = _clamp(
+                self._pitch_t - (mid[1] - pmid[1]) * ST_ROT_PITCH_GAIN,
+                ST_PITCH_MIN_RAD, ST_PITCH_MAX_RAD)
+            # Spreading the hands zooms, the familiar pinch-to-zoom.
+            if pspan > 1.0 and span > 1.0:
+                self._zoom_t = _clamp(self._zoom_t * (span / pspan),
+                                      ST_ZOOM_MIN, ST_ZOOM_MAX)
+        self._rot_prev = (mid, span)
+        self.rotating = True
+
+    def _ease_camera(self):
+        self._yaw += (self._yaw_t - self._yaw) * ST_CAM_SMOOTH
+        self._pitch += (self._pitch_t - self._pitch) * ST_CAM_SMOOTH
+        self._zoom += (self._zoom_t - self._zoom) * ST_CAM_SMOOTH
+
+    def _point(self, hand_result):
+        # 1) Continue a drag (owner-latched, like every other experiment).
+        if self._grab_mass is not None:
+            _, held, (mx, my) = pinch_state(self._grab_hand)
+            if held and self._grab_mass in self.masses:
+                self._grab_mass.x = mx + self._grab_dx
+                self._grab_mass.y = my + self._grab_dy
+            else:
+                self._grab_mass = None
+                self._grab_hand = None
+
+        # 2) Track / commit a pending placement. It lands on RELEASE so the
+        #    second hand always has a chance to promote the gesture to a
+        #    rotate first; the ghost shows where it will go meanwhile.
+        if self._pending is not None:
+            _, held, (mx, my) = pinch_state(self._pending["hand"])
+            if held:
+                self._pending["x"], self._pending["y"] = mx, my
+            else:
+                self._commit_pending()
+                self._pending = None
+
+        # 3) A fresh pinch grabs the mass it landed on, or arms a placement.
+        if hand_result is None or self._grab_mass is not None \
+                or self._pending is not None:
+            return
+        for i in range(len(hand_result.hand_landmarks)):
+            hid = hand_id(hand_result, i)
+            if hid in self._consumed:
+                continue
+            pinching, _, (mx, my) = pinch_state(hid)
+            if not pinching:
+                continue
+            hit = self._mass_at(mx, my)
+            if hit is not None:
+                self._grab_mass = hit
+                self._grab_hand = hid
+                self._grab_dx = hit.x - mx
+                self._grab_dy = hit.y - my
+            else:
+                self._pending = {"hand": hid, "x": mx, "y": my}
+            break
+
+    # ---- physics -------------------------------------------------------
+
+    def _accel(self, x, y):
+        """Paczynski-Wiita acceleration at (x, y): ``a = G*M/(r - rs)^2``.
+
+        The pole sits at the horizon rather than at the centre — that single
+        change is what buys precession and the ISCO. Capture removes anything
+        that reaches ``rs``, so the clamp below only guards the last sub-step.
+        """
+        ax = ay = 0.0
+        for m in self.masses:
+            dx, dy = m.x - x, m.y - y
+            r = math.hypot(dx, dy)
+            if r < 1e-6:
+                continue
+            a = ST_ORB_G * m.m / max(r - m.rs, 1e-3) ** 2
+            ax += a * dx / r
+            ay += a * dy / r
+        return ax, ay
+
+    def _step(self, dt):
+        """Velocity-Verlet: symplectic, so a bound orbit stays bound over a
+        long exhibit run instead of spiralling out the way RK4 would."""
+        for o in self.orbiters:
+            o.x += o.vx * dt + 0.5 * o.ax * dt * dt
+            o.y += o.vy * dt + 0.5 * o.ay * dt * dt
+            nax, nay = self._accel(o.x, o.y)
+            o.vx += 0.5 * (o.ax + nax) * dt
+            o.vy += 0.5 * (o.ay + nay) * dt
+            o.ax, o.ay = nax, nay
+
+    def _capture(self):
+        """Swallow anything that crosses a horizon — the visible end of a
+        plunge from inside the ISCO."""
+        kept = []
+        for o in self.orbiters:
+            eaten = False
+            for m in self.masses:
+                if math.hypot(o.x - m.x, o.y - m.y) <= m.rs:
+                    m.flash = 1.0
+                    eaten = True
+                    break
+            if not eaten:
+                kept.append(o)
+        self.orbiters = kept
+
+    def _prune(self):
+        cx, cy = self.w * 0.5, self.h * 0.5
+        ex, ey = self.w * ST_PRUNE_MARGIN * 0.5, self.h * ST_PRUNE_MARGIN * 0.5
+        self.orbiters = [o for o in self.orbiters
+                         if abs(o.x - cx) <= ex and abs(o.y - cy) <= ey]
+
+    def _advance(self):
+        # Bank this frame's simulated time and step in whole ST_PHYS_DT
+        # chunks — never a sub-step derived from the frame remainder (see the
+        # WAVE_PHYS_DT note in config: that mismatch pumps energy).
+        self._time_acc += self.time_scale * ST_FRAME_DT
+        steps = 0
+        while self._time_acc >= ST_PHYS_DT and steps < ST_MAX_SUBSTEPS:
+            self._time_acc -= ST_PHYS_DT
+            self._step(ST_PHYS_DT)
+            steps += 1
+        if steps == ST_MAX_SUBSTEPS:
+            self._time_acc = 0.0
+        self._capture()
+        self._prune()
+        for m in self.masses:
+            if m.flash > 0.0:
+                m.flash = max(0.0, m.flash - ST_CAPTURE_FLASH_DECAY)
+
+    # ---- geometry (mirrored in web/src/overlay/scene.ts) ----------------
+
+    def _depth(self, x, y):
+        """Sheet depth at a plane point: the summed wells of every mass, soft-
+        clamped by ST_MAX_DEPTH_PX (see the config note — the embedding is
+        vertical at the throat, so a to-scale funnel renders as a tangle).
+
+        DISPLAY only: :meth:`_accel` never calls this, so the compression
+        cannot leak into the orbits.
+        """
+        z = 0.0
+        for m in self.masses:
+            z += _flamm_depth(math.hypot(x - m.x, y - m.y), m.rs)
+        return -ST_MAX_DEPTH_PX * math.tanh(-z / ST_MAX_DEPTH_PX)
+
+    def _project(self, x, y, z):
+        """World (plane px + depth) -> (screen px, camera depth).
+
+        Yaw spins about the sheet's normal, pitch is elevation above the plane
+        (90 deg = straight down, 0 = edge-on), then a mild perspective divide.
+        Returns the camera-space depth too so callers can fog/sort by it.
+        """
+        cx, cy = self.w * 0.5, self.h * 0.5
+        px, py = x - cx, y - cy
+        cyaw, syaw = math.cos(self._yaw), math.sin(self._yaw)
+        x1 = px * cyaw - py * syaw
+        y1 = px * syaw + py * cyaw
+        cp, sp = math.cos(self._pitch), math.sin(self._pitch)
+        y2 = y1 * sp - z * cp
+        d = y1 * cp + z * sp
+        f = ST_FOCAL_PX / max(ST_FOCAL_PX + d, 1.0)
+        return cx + x1 * f * self._zoom, cy + y2 * f * self._zoom, d
+
+    # ---- serialization --------------------------------------------------
+
+    def to_state(self):
+        return {
+            "type": "spacetime",
+            "yaw": round(self._yaw, 4),
+            "pitch": round(self._pitch, 4),
+            "zoom": round(self._zoom, 4),
+            "focal": ST_FOCAL_PX,
+            "rotating": self.rotating,
+            "reach": ST_CURV_REACH_PX,
+            "depth_gain": ST_DEPTH_GAIN,
+            "max_depth": ST_MAX_DEPTH_PX,
+            "grid": [ST_GRID_COLS, ST_GRID_ROWS, ST_LINE_SAMPLES,
+                     ST_GRID_MARGIN],
+            "dim": ST_BACKDROP_ALPHA,
+            "dim_rgb": ST_BACKDROP_RGB,
+            "kind": self._kind,
+            "time_scale": self.time_scale,
+            "count": len(self.masses),
+            "masses": [{
+                "id": m.id,
+                "x": round(m.x, 1),
+                "y": round(m.y, 1),
+                "m": m.m,
+                "rs": round(m.rs, 1),
+                "rgb": ST_MASS_TYPES[m.kind]["rgb"],
+                "compact": ST_MASS_TYPES[m.kind]["compact"],
+                "kind": m.kind,
+                "flash": round(m.flash, 3),
+                "grabbed": m is self._grab_mass,
+            } for m in self.masses],
+            "orbiters": [{
+                "id": o.id,
+                "x": round(o.x, 1),
+                "y": round(o.y, 1),
+            } for o in self.orbiters],
+            "orbiter_rgb": ST_ORBITER_RGB,
+            # The browser accumulates orbiter trails itself (as Orbitals does),
+            # so the payload stays a handful of points per frame.
+            "trail_len": ST_ORB_TRAIL_LEN,
+            # Where a release would drop the next object (None unless armed).
+            "ghost": (None if self._pending is None else
+                      {"x": round(self._pending["x"], 1),
+                       "y": round(self._pending["y"], 1)}),
+        }
+
+    # ---- cv2 fallback ---------------------------------------------------
+
+    def draw(self, frame):
+        """Window/stream fallback: the same scene the browser renders, in cv2.
+
+        NOTE the backdrop dim below. It is applied HERE, in the display path,
+        which runs after ``toMpImage`` has already handed inference its own
+        RGB copy of the frame — so the model never sees a darkened image. Do
+        not hoist any of this earlier in the loop: the inference input must
+        stay the raw camera frame (in web mode the point is moot, the backend
+        draws nothing and the browser dims its own canvas).
+        """
+        # Backdrop: darken the camera image so the thin wireframe reads.
+        b, g, r = ST_BACKDROP_RGB[2], ST_BACKDROP_RGB[1], ST_BACKDROP_RGB[0]
+        overlay = frame.copy()
+        cv2.rectangle(overlay, (0, 0), (self.w, self.h), (b, g, r), -1)
+        cv2.addWeighted(overlay, ST_BACKDROP_ALPHA,
+                        frame, 1.0 - ST_BACKDROP_ALPHA, 0, frame)
+
+        cols, rows = ST_GRID_COLS, ST_GRID_ROWS
+        n = ST_LINE_SAMPLES
+        half_w = self.w * ST_GRID_MARGIN * 0.5
+        half_h = self.h * ST_GRID_MARGIN * 0.5
+        cx, cy = self.w * 0.5, self.h * 0.5
+        x0, x1 = cx - half_w, cx + half_w
+        y0, y1 = cy - half_h, cy + half_h
+
+        def polyline(pts):
+            if len(pts) < 2:
+                return
+            arr = np.array(pts, dtype=np.int32).reshape((-1, 1, 2))
+            cv2.polylines(frame, [arr], False, (150, 120, 70), 1, cv2.LINE_AA)
+
+        # Lines of constant x, then of constant y.
+        for i in range(cols + 1):
+            x = x0 + (x1 - x0) * i / cols
+            pts = []
+            for j in range(n + 1):
+                y = y0 + (y1 - y0) * j / n
+                sx, sy, _d = self._project(x, y, self._depth(x, y))
+                pts.append((sx, sy))
+            polyline(pts)
+        for j in range(rows + 1):
+            y = y0 + (y1 - y0) * j / rows
+            pts = []
+            for i in range(n + 1):
+                x = x0 + (x1 - x0) * i / n
+                sx, sy, _d = self._project(x, y, self._depth(x, y))
+                pts.append((sx, sy))
+            polyline(pts)
+
+        # Orbiters ride the sheet.
+        for o in self.orbiters:
+            sx, sy, _d = self._project(o.x, o.y, self._depth(o.x, o.y))
+            cv2.circle(frame, (int(sx), int(sy)), 5,
+                       (ST_ORBITER_RGB[2], ST_ORBITER_RGB[1],
+                        ST_ORBITER_RGB[0]), -1, cv2.LINE_AA)
+
+        # Masses sit at the bottom of their own throat.
+        for m in self.masses:
+            sx, sy, _d = self._project(m.x, m.y, self._depth(m.x, m.y))
+            rgb = ST_MASS_TYPES[m.kind]["rgb"]
+            rad = max(6, int(m.rs))
+            cv2.circle(frame, (int(sx), int(sy)), rad,
+                       (rgb[2], rgb[1], rgb[0]), -1, cv2.LINE_AA)
+            cv2.circle(frame, (int(sx), int(sy)), rad, (210, 210, 220), 1,
+                       cv2.LINE_AA)
+            if m.flash > 0.0:
+                cv2.circle(frame, (int(sx), int(sy)),
+                           int(rad + 26 * (1.0 - m.flash)), (255, 255, 255),
+                           1, cv2.LINE_AA)
+
+        if self._pending is not None:
+            px, py = self._pending["x"], self._pending["y"]
+            sx, sy, _d = self._project(px, py, self._depth(px, py))
+            cv2.circle(frame, (int(sx), int(sy)), 10, (200, 200, 200), 1,
+                       cv2.LINE_AA)
 
 
 class Puppet:

@@ -1,3 +1,4 @@
+import math
 import os
 
 import mediapipe as mp
@@ -558,6 +559,140 @@ CHG_EQUIPOT_STEP = 900.0
 # cv2 fallback only: potential is evaluated on a grid this coarse (px/cell)
 # and upscaled, mirroring the Waves fallback's approach.
 CHG_GRID_PX = 8
+
+# --- Spacetime experiment (relativistic gravity) -------------------------
+# The rubber-sheet picture, done honestly. Pinch empty space to drop a mass
+# and the grid sags into a well; pinch a mass to drag it and the curvature
+# follows. Pinch with BOTH hands at once to orbit the camera in 3D (see the
+# ST_ROT_* gains) — two pinches supersede place/drag, the same way a
+# two-finger gesture supersedes a one-finger pan on a touchscreen.
+#
+# One geometry drives everything: each mass gets a Schwarzschild radius
+# rs = ST_RS_PER_MASS * m (px), and that SAME rs feeds both the sheet's shape
+# and the orbit dynamics — so what you see and what the particles feel are the
+# same spacetime rather than two unrelated effects. Fixing rs per unit mass
+# fixes the speed of light in screen units too (rs = 2GM/c^2 => c^2 =
+# 2*ST_ORB_G/ST_RS_PER_MASS), which is why there is no separate `c` knob.
+#
+# THE SHEET is Flamm's paraboloid — the exact embedding of the Schwarzschild
+# equatorial slice, z(r) = 2*sqrt(rs*(r - rs)) — measured downward from a
+# radius where we declare space flat again (ST_CURV_REACH_PX) so each well is
+# local and FINITE (the throat bottoms out at the horizon instead of diverging
+# like the Newtonian 1/r). Caveat worth knowing before "fixing" it: summing
+# one-mass paraboloids is NOT a solution of Einstein's equations — they are
+# nonlinear, so two wells do not superpose. It is the standard visual
+# approximation and is exact for the single-mass case.
+#
+# THE ORBITS use the Paczynski-Wiita pseudo-Newtonian potential,
+# a = -G*M/(r - rs)^2, the standard cheap stand-in for Schwarzschild geodesics:
+# it reproduces the two things Newtonian gravity cannot show — perihelion
+# PRECESSION (the ellipse rotates; this is the Mercury effect) and an ISCO at
+# r = 3*rs, inside which no circular orbit exists and the particle spirals in.
+# That is what makes this experiment "relativistic" rather than a sagging mesh.
+#
+# Python owns the mass/orbiter lists, the camera angles and the integration;
+# both renderers derive the picture. The projection + depth math is mirrored in
+# web/src/overlay/scene.ts — keep the two in sync.
+ST_MAX_MASSES = 6
+ST_MAX_ORBITERS = 12
+ST_GRAB_PAD_PX = 46
+ST_RS_PER_MASS = 9.0         # Schwarzschild radius (px) per unit mass
+ST_CURV_REACH_PX = 460.0     # radius at which a well is declared flat again
+# Vertical exaggeration of the sheet. Flamm's paraboloid is drawn to scale in
+# the plane, so at true scale the funnel is far too shallow to read on a 720p
+# kiosk; this is honest artistic licence on the z axis only (the ORBIT physics
+# never sees it).
+ST_DEPTH_GAIN = 1.25
+# Soft depth ceiling: z_shown = -MAX * tanh(|z| / MAX).
+#
+# Needed because dz/dr -> infinity as r -> rs: the embedding is genuinely
+# VERTICAL at the throat, so a to-scale funnel projects to a tangle of
+# near-parallel lines plunging off the bottom of the frame (a compact hole is
+# ~310 px deep against a 720 px frame). tanh is linear for shallow wells — a
+# lone star's dip is untouched — and saturates smoothly instead of creasing,
+# the same trick WAVE_DISPLAY_GAIN uses to serve one and six sources at once.
+# Display only; the ORBIT physics reads the unclamped geometry.
+ST_MAX_DEPTH_PX = 210.0
+
+# Mass presets: (m, label, rgb). `compact` marks a horizon-sized body drawn as
+# a black disk — same mass scale, but its rs is where the sheet's throat is, so
+# it is the one preset where the horizon is visibly bigger than the marker.
+ST_MASS_TYPES = {
+    "star":  {"m": 1.0, "label": "Star", "rgb": [255, 226, 158], "compact": False},
+    "giant": {"m": 2.4, "label": "Giant", "rgb": [255, 168, 104], "compact": False},
+    "bh":    {"m": 4.0, "label": "Hole", "rgb": [18, 16, 26], "compact": True},
+}
+ST_DEFAULT_KIND = "star"
+# The "Orbiter" palette entry places a test particle instead of a mass.
+ST_ORBITER_KIND = "orbiter"
+ST_ORBITER_RGB = [140, 235, 255]
+
+# Grid: how many lines each way, and how finely each line is sampled. The
+# sample count is what makes a line CURVE through the well, so it is much
+# higher than the line count (a 24x14 grid sampled at its crossings only would
+# render the funnel as a coarse polygon).
+ST_GRID_COLS = 30
+ST_GRID_ROWS = 18
+ST_LINE_SAMPLES = 72
+# Sheet extent as a fraction of the frame. Sized for the YAWED case, not the
+# default one: the sheet is a finite patch, so at 1.25 a 70-degree yaw swings
+# its corner into view and leaves a bare triangle. 1.7 keeps the edges out of
+# frame through a full spin; cols/rows are scaled with it to hold cell density.
+ST_GRID_MARGIN = 1.7
+
+# Camera. `pitch` is elevation above the sheet: 90 deg looks straight down
+# (flat map, no visible depth), 0 deg is edge-on. ~34 deg is the classic
+# rubber-sheet three-quarter view.
+ST_YAW_DEFAULT_RAD = 0.0
+ST_PITCH_DEFAULT_RAD = math.radians(34.0)
+ST_PITCH_MIN_RAD = math.radians(8.0)    # below this the sheet is a line
+ST_PITCH_MAX_RAD = math.radians(89.0)   # 90 exactly kills the depth cue
+ST_FOCAL_PX = 1700.0         # perspective focal length; larger = flatter
+ST_ZOOM_MIN, ST_ZOOM_MAX = 0.55, 2.4
+# Two-hand rotate gains, per pixel of two-hand MIDPOINT travel. Deliberately
+# gentle: the pinch cursor is already One-Euro smoothed, but a hand-held
+# gesture has no detent, so a high gain makes the scene impossible to aim.
+ST_ROT_YAW_GAIN = 0.0060     # rad per px of horizontal midpoint travel
+ST_ROT_PITCH_GAIN = 0.0040   # rad per px of vertical midpoint travel
+# Camera easing (0..1 per frame): the angles the renderer sees chase the
+# gesture's targets. Kills the residual tremor a bare hand cannot avoid.
+ST_CAM_SMOOTH = 0.25
+
+# Orbit integration. Velocity-Verlet in fixed ST_PHYS_DT chunks, exactly like
+# Orbitals (see the ORB_PHYS_DT note: never derive a sub-step from the frame
+# remainder). The masses are STATIC — they do not fall toward each other — so
+# the user's arrangement is preserved and the sheet stays where it was put;
+# only the test particles move.
+# G is fixed by wanting a READABLE orbit, then everything else follows: a Star
+# (m=1) at r=180 px comes out at v_circ = sqrt(G*m*r)/(r-rs) ~= 162 px/s, i.e.
+# one lap every ~7 s. Note this puts the orbiter at only ~20 rs — deep in the
+# strong field, where PW precession is ~45 deg per lap and unmistakable. Real
+# Mercury (r ~ 2.5e7 rs) precesses 43 arcsec per CENTURY; the effect is honest,
+# the regime is chosen so a person can see it in one visit.
+ST_ORB_G = 4.2e6             # px^3 / (mass * s^2)
+ST_PHYS_DT = 1.0 / 240.0
+ST_FRAME_DT = 1.0 / 30.0
+ST_MAX_SUBSTEPS = 40
+ST_TIME_SCALES = (0.25, 0.5, 1.0, 2.0, 4.0)
+ST_ORB_TRAIL_LEN = 360       # ~2 laps at 1x — enough to see the axis walk
+ST_PRUNE_MARGIN = 1.8        # orbiters beyond this * frame extent are dropped
+# Spawn velocity as a fraction of the local circular speed. 1.0 would give a
+# circle, which precesses invisibly (a rotating circle looks identical); 0.72
+# gives a clearly eccentric ellipse whose axis visibly walks around.
+ST_ORB_SPAWN_VFRAC = 0.72
+ST_ORB_MIN_SPAWN_RS = 3.4    # spawn no closer than this * rs — just outside
+                             # the ISCO at 3*rs, so a fresh orbiter is stable
+ST_CAPTURE_FLASH_DECAY = 0.04
+
+# Backdrop dimming. The camera image is darkened UNDER the grid so the thin
+# wireframe reads against a bright room — "a bit", not blacked out: the point
+# is still a person standing inside a warped spacetime.
+#
+# IMPORTANT: this is a DISPLAY-only effect and must stay that way. The dim is
+# applied by the renderer (browser canvas, or the cv2 fallback's draw()), never
+# to the frame handed to inference. See the Spacetime.draw docstring.
+ST_BACKDROP_ALPHA = 0.45
+ST_BACKDROP_RGB = [6, 8, 18]
 
 # Vtuber / Puppet interactable.
 # A friendly cosmic mascot puppeteered by the live landmarks: its paws ride

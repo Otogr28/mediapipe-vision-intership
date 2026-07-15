@@ -29,6 +29,16 @@ uv run python web/scripts/mock_backend.py slingshot   # fake any scene, no camer
 node web/scripts/shot.mjs http://localhost:5173/ out.png 3000  # headless screenshot check
 ```
 
+**`web/dist` is committed on purpose** — the Jetson auto-updates by `git pull` and never
+runs Node, so the built frontend must travel in the repo (`.gitignore` has an explicit
+`!web/dist/` negation re-including it past the generic `dist/` rule; that rule was once
+silently dropping it, so frontend changes never reached the device). After any change
+under `web/src/`, **run `npm run build` and commit `web/dist` too** — otherwise the laptop
+dev server shows your change and the exhibit never does.
+
+To verify UI work without a camera, use `mock_backend.py` (it fakes any scene) plus
+`shot.mjs`, rather than pointing the app at a real webcam.
+
 **Always run from the repo root**, never from inside `src/`. The model paths in
 `config.py` are relative to the repo root, and Python puts `src/` on `sys.path[0]`
 so the modules import as top-level (`from detection import ...`, not `from src...`).
@@ -42,10 +52,28 @@ deploy/hall-app/deploy.sh          # rsync src/+models/, install `hallrun` launc
 deploy/hall-app/remote-infer.sh    # laptop webcam → Jetson infers → laptop browser; auto-teardown
 ```
 
-On the Jetson itself the app is launched with `hallrun` (a foreground GUI app, not a
-service — the camera LED is only on while it runs). See `deploy/hall-app/README.md`
-for the full remote-inference wiring and the CPU-vs-GPU breakdown. `deploy/camera-stream/`
-is a *separate* headless MJPEG feed; only one thing can hold the C920 at a time.
+**The Jetson is an appliance that updates itself from git — pushing to `main` deploys.**
+`setup-boot.sh` (one-time, on the device) converts `~/HalLMediaPipe` into a git checkout
+and installs two *user* systemd units: `hallkiosk.service` (starts with the graphical
+session — with GDM autologin, straight after boot) and `hall-update.timer` (polls
+`origin/main` every ~60 s; on a new commit it does `git reset --hard` and restarts the
+kiosk). So a push to `main` reaches the exhibit within a minute, with no deploy step.
+Treat pushes accordingly. `hall-update.sh` also carries a health watchdog that restarts a
+kiosk whose HTTP server stops answering (a wedged V4L2 reopen can freeze the process
+holding the GIL, leaving systemd reading "active").
+
+On the device, `hallrun` runs the backend alone; `hallkiosk` runs the exhibit pair
+(backend + fullscreen browser, kept always-on-top via `wmctrl`) and exits non-zero if
+either half dies so systemd restarts both. Firefox must be the **deb** from the Mozilla
+apt repo — snap-confine is broken on this L4T kernel, so snap browsers cannot launch.
+`kiosk-lockdown.sh` (sudo, one-time) prepares the desktop for unattended duty.
+
+Note `deploy/hall-app/README.md` still opens by describing the app as manual-launch-only
+("not a service … camera LED only on while it runs"); that intro predates appliance mode
+and is contradicted by its own "Appliance mode" section further down.
+`deploy/camera-stream/` is a *separate* headless MJPEG feed and `deploy/net-watchdog/`
+keeps WiFi power-save from dropping Tailscale; only one thing can hold the C920 at a time
+(`camctl off` releases it).
 
 ## Runtime configuration
 
@@ -62,6 +90,13 @@ or a headless inference appliance. Key knobs:
 | `HALL_POSE` | `0` | Body-pose inference is OFF by default (the UI is fully hand-driven; pose cost ~1.5 CPU cores at ~13 fps). `1` re-enables it + the pose-driven 6-7 counter. |
 | `HALL_ONNX_PROVIDERS` | `CUDA,CPU` | onnxruntime provider priority. `hallrun` prepends `TensorrtExecutionProvider` (~2.9x faster; first launch pays a ~2 min engine build, then cached to `.trt_cache/`) |
 | `HALL_DEBUG` | `0` | `1` draws the pinch-pipeline debug HUD (live ratio vs thresholds, machine state, detection age/FPS) — for tuning gesture constants |
+| `HALL_CAPTURE_W/H` | `1920`/`1080` | Requested capture size. Inference cost does **not** scale with it (models resize internally) but JPEG encode/decode and canvas work do — `hallkiosk` drops to 1280x720 to keep the Orin from saturating |
+| `HALL_STREAM_BIND/PORT/QUALITY` | `auto`(`0.0.0.0` in web)/`8092`/`80` | MJPEG server. Web mode binds all interfaces because the kiosk browser hits `localhost`, which a Tailscale-resolved bind would refuse |
+| `HALL_CAMERA_STALL_S` | `10` | Web mode: exit if no new frame for this long, so the supervisor restarts with a fresh handle. `0` disables; window/stream never self-exit |
+| `HALL_START_VTUBER` | `0` | Dev: boot straight into the Vtuber scene with the puppet alive, so a recorded video file (`HALL_CAMERA=<file>`) can drive it without live pinches. Implies pose |
+| `HALL_POSE_SMOOTH` | `1` | One-Euro + velocity extrapolation on every pose landmark. `0` = raw passthrough (the stutter/lag the smoother exists to hide) |
+| `HALL_HAND_ROI_TRACK` | `1` | GPU hand backend: re-crop a tracked hand from its own landmarks instead of re-running palm detection. A/B knob — `0` restores palm-detect-every-frame |
+| `HALL_TRT_MAX_WORKSPACE` | unset (`512` in `hallrun`) | Cap each TensorRT engine's build workspace (MiB). The Orin's 8 GB is shared CPU/GPU and the Vtuber runs four engines alongside the browser |
 
 ## Architecture
 
@@ -78,10 +113,14 @@ The big picture:
   thread that keeps only the newest frame and drops the backlog — so when the loop runs
   slower than the camera (CPU-bound pose), capture latency stays ~1 frame instead of the
   driver queue growing. This is the fix for the "camera delay".
-- **Two hand backends behind one interface.** `HALL_INFERENCE` selects MediaPipe (CPU)
-  vs. the onnxruntime/TensorRT path in `detection/gpu_hands.py` (models under
-  `models/gpu/`, vendored zoo wrappers in `detection/_zoo/`). Pose always stays on
-  MediaPipe CPU — the Tasks API has no GPU build on the Jetson image.
+- **Two backends behind one interface, per pipeline.** `HALL_INFERENCE` selects the hand
+  backend: MediaPipe (CPU `.task`) vs. the onnxruntime/TensorRT path in
+  `detection/gpu_hands.py`. `HALL_POSE_INFERENCE` does the same for the body:
+  MediaPipe vs. the BlazePose ONNX pipeline in `detection/gpu_pose.py`. Models live under
+  `models/gpu/`, vendored zoo wrappers in `detection/_zoo/`. Both GPU backends emit a
+  result object drop-in compatible with the MediaPipe one (`pose_landmarks`,
+  `hand_landmarks`, …), so the smoother, rig, gestures and state layers never branch on
+  the backend — that compatibility is the contract to preserve when touching either.
 - **GPU rendering.** The black-hole mode (`rendering/gl_lensing.py`) runs a Schwarzschild
   lensing shader (`rendering/shaders/`) via a standalone moderngl EGL context — the one
   piece that genuinely uses the GPU even in headless stream mode.
@@ -94,9 +133,60 @@ The big picture:
   everything — skeleton/cursor/scene on Canvas2D, buttons/HUD in DOM, and the black hole
   as a WebGL2 port of the lensing shader (`web/src/gl/blackhole.frag.glsl`). Python stays
   authoritative for all logic (state machine, hit-testing, physics); the browser is a pure
-  renderer. Keep `src/web/state.py`, `web/src/state/types.ts` and the shader pair in sync.
+  renderer. The state payload itself is a hand-mirrored contract: `src/web/state.py` and
+  `web/src/state/types.ts` must be changed together (see the sync table below).
 - **Resilient loop.** The per-frame body is wrapped so a single bad frame/draw/GPU call
   logs once and continues rather than taking down a long-running headless appliance.
+  In web mode only, the app **self-exits** if the camera stops delivering new frames for
+  `HALL_CAMERA_STALL_S` — a deliberate crash so the kiosk supervisor restarts it with a
+  fresh camera handle.
+
+### The experiments (`ui/interactables.py`, ~2.5k lines — the bulk of the app)
+
+Each scene is one class: `BouncingSphere`, `BlackHole`, `SixSevenCounter`, `Slingshot`,
+`Orbitals` (n-body gravity), `Waves` (ripple tank), `Charges` (electrostatic field),
+`Spacetime` (relativistic gravity), `Puppet` (VRM Vtuber). They share one contract, and it
+is the thing to understand before adding another:
+
+**Python owns the object list and all logic; the renderer derives every visual from it.**
+Python holds the charges/sources/bodies and does placement, hit-testing, dragging and
+physics-that-must-be-authoritative. It does *not* compute the picture. The browser derives
+the visuals: Orbitals' trails accumulate client-side, Waves' field is stepped in a WebGL
+ping-pong texture, Charges' potential is an analytic single-pass shader. This keeps the
+state payload tiny (a few objects, not a field) and the Jetson's CPU out of pixel work.
+
+**Every scene therefore has two renderers that must agree** — the WebGL/JS path and a
+numpy/cv2 fallback for `window`/`stream` mode. Constants are mirrored across files by hand,
+and `config.py` marks each with a "keep in sync" comment. When you touch one side, grep the
+constant and fix the other:
+
+| Scene | Python | Browser |
+| --- | --- | --- |
+| Waves | `WAVE_MAX_SOURCES`, display tone curve | `web/src/gl/waves_step.frag.glsl`, `waves_render.frag.glsl` |
+| Charges | `CHG_MAX`, arrow constants | `web/src/gl/charges.frag.glsl`, `web/src/overlay/scene.ts` |
+| Black hole | `rendering/shaders/black_hole.frag` | `web/src/gl/blackhole.frag.glsl` |
+| Spacetime | `_flamm_depth`, `Spacetime._project`, `_depth`'s tanh clamp | `web/src/overlay/scene.ts` (`flammDepth` / `project` / `sheetDepth`) |
+
+Two physics lessons already paid for, recorded in `config.py` and worth not re-learning:
+the leapfrog integrators (`WAVE_PHYS_DT`, `ORB_PHYS_DT`, `ST_PHYS_DT`) **must** step in
+fixed whole chunks — deriving a sub-step from the frame remainder mismatches time levels
+and pumps energy (the wave field diverged to ~1e32 in 5 s). And `Charges` has *no* time
+integration at all, by design: the charges are static because the field is the subject;
+letting them attract would just collapse into Orbitals-with-signs. `Spacetime` pins its
+masses for the same reason.
+
+**Display-only vs. physics.** `Spacetime` deliberately keeps two geometries apart:
+`ST_DEPTH_GAIN` and the `ST_MAX_DEPTH_PX` tanh clamp exaggerate then compress the sheet so
+a funnel reads on a 720p kiosk, while the orbits integrate the *unclamped* Paczynski-Wiita
+field. Anything that makes the sheet prettier belongs in `_depth`, never in `_accel` —
+mixing them would silently change the physics to match the art.
+
+**Two-hand gestures.** `Spacetime` is the first scene to use both hands at once: two
+simultaneous pinches drive the camera and *supersede* place/drag, the way a two-finger
+gesture supersedes a one-finger pan. That is why it places on RELEASE rather than on the
+pinch edge — a mass must not appear just because the user was reaching for the second
+pinch — and why hands that took part in a rotate stay inert until they re-pinch. Reuse
+that pattern rather than inventing a new one if another scene needs two hands.
 
 ### Modularity preference
 
@@ -109,6 +199,9 @@ dedicated modules — never inline in `main.py`. When adding a feature:
 - New button behavior → `ui/button.py`
 - New GPU effect → new shader pair in `rendering/shaders/` + method on `LensingRenderer`
 - New gesture → helper in `detection/gestures.py`; new threshold → constant in `config.py`
+- New scene → the Python class is only half of it: it also needs serializing in
+  `web/state.py`, typing in `web/src/state/types.ts`, a renderer under `web/src/gl/` or
+  `web/src/overlay/scene.ts`, and a rebuilt+committed `web/dist`
 
 Models (`.task`, `.onnx`) are **gitignored** — they are not in the repo. Download the
 MediaPipe `.task` files into `models/` (see `documentation/setup.md`).

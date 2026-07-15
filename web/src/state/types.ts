@@ -204,6 +204,73 @@ export interface ChargesObject {
   charges: PointCharge[];
 }
 
+export type SpacetimeKind = "star" | "giant" | "bh" | "orbiter";
+
+export interface SpacetimeMass {
+  id: number;
+  x: number;
+  y: number;
+  /** mass in palette units */
+  m: number;
+  /** Schwarzschild radius (px) — the sheet's throat AND the PW potential pole */
+  rs: number;
+  rgb: [number, number, number];
+  /** horizon-sized body: drawn as a black disk of radius rs */
+  compact: boolean;
+  kind: SpacetimeKind;
+  /** transient glow (1→0) when it swallows an orbiter */
+  flash: number;
+  grabbed: boolean;
+}
+
+export interface SpacetimeOrbiter {
+  id: number;
+  x: number;
+  y: number;
+}
+
+/**
+ * Relativistic gravity sandbox. The backend owns the masses, the orbiters,
+ * the camera angles and the integration; the renderer derives the picture.
+ *
+ * The sheet is Flamm's paraboloid summed per mass and the projection is a
+ * yaw/pitch/perspective camera — both mirrored from `ui/interactables.py`
+ * (`_flamm_depth` / `_project`) into `overlay/scene.ts`. Keep them in sync.
+ */
+export interface SpacetimeObject {
+  type: "spacetime";
+  /** camera yaw (rad), spun by the two-hand rotate gesture */
+  yaw: number;
+  /** camera elevation above the sheet (rad): π/2 = straight down */
+  pitch: number;
+  zoom: number;
+  /** perspective focal length (px) */
+  focal: number;
+  /** true while two pinches are driving the camera */
+  rotating: boolean;
+  /** radius (px) at which each well is declared flat again */
+  reach: number;
+  /** vertical exaggeration of the sheet (display only — orbits never see it) */
+  depth_gain: number;
+  /** soft depth ceiling (px): z = -max*tanh(|z|/max). Display only. */
+  max_depth: number;
+  /** [cols, rows, samplesPerLine, extentAsFractionOfFrame] */
+  grid: [number, number, number, number];
+  /** backdrop dim alpha + colour — darkens the camera image under the grid */
+  dim: number;
+  dim_rgb: [number, number, number];
+  kind: SpacetimeKind;
+  time_scale: number;
+  count: number;
+  masses: SpacetimeMass[];
+  orbiters: SpacetimeOrbiter[];
+  orbiter_rgb: [number, number, number];
+  /** client-accumulated trail length, in snapshots */
+  trail_len: number;
+  /** where a release would drop the next object; null unless armed */
+  ghost: { x: number; y: number } | null;
+}
+
 export interface VtuberObject {
   type: "vtuber";
   /** spawn-relative clock (s), wrapped — drives the idle bob */
@@ -220,6 +287,7 @@ export type SceneObject =
   | OrbitalsObject
   | WavesObject
   | ChargesObject
+  | SpacetimeObject
   | VtuberObject;
 
 export interface DebugState {
@@ -247,6 +315,7 @@ export interface AppState {
       | "orbitals"
       | "waves"
       | "charges"
+      | "spacetime"
       | null;
     hint: { visible: boolean };
     /** vtuber "Points" toggle — hide the avatar + draw the raw skeleton */

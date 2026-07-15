@@ -26,6 +26,8 @@ import numpy as np
 W, H = 1280, 720
 PORT = 8092
 SCENE = sys.argv[1] if len(sys.argv) > 1 else "menu"
+# spacetime: set HALL_MOCK_YAW=0 to freeze the camera at the default view.
+MOCK_YAW = os.environ.get("HALL_MOCK_YAW", "1") == "1"
 
 START = time.monotonic()
 
@@ -448,6 +450,72 @@ def scene_state(t):
             "type": "charges", "k": 90000.0, "soften": 14.0,
             "equipot_step": 900.0, "lines_per_q": 12, "kind": "pos1",
             "count": len(charges), "charges": charges,
+        }]
+
+    elif SCENE == "spacetime":
+        base["session"]["state"] = "experiments"
+        base["session"]["experiment"] = "spacetime"
+        bw, bh, gap = 96, 46, 8
+        kinds = [("star", "Star"), ("giant", "Giant"), ("bh", "Hole"),
+                 ("orbiter", "Orbiter")]
+        for i, (k, lab) in enumerate(kinds):
+            b = btn(f"st.type.{k}", lab, margin + i * (bw + gap), margin,
+                    bw, bh)
+            b["selected"] = (k == "star")
+            base["buttons"].append(b)
+        base["buttons"] += [
+            btn("st.preset.precess", "Precess", margin + 4 * (bw + gap),
+                margin, bw, bh),
+            btn("st.clear", "Clear", margin + 5 * (bw + gap), margin, bw, bh),
+            btn("speed.minus", "-", W - margin - 46 - 92 - 46, margin, 46, 46),
+            btn("speed.plus", "+", W - margin - 46, margin, 46, 46),
+            btn("reset", "Reset", W - 130 - margin, H - 50 - margin, 130, 50),
+        ]
+        base["speed"] = {"rect": [W - margin - 46 - 92, margin, 92, 46],
+                         "text": "1x"}
+        cx, cy = W / 2, H / 2
+        # Two wells (a star and a compact hole) so the summed sheet is visible,
+        # plus an analytic PRECESSING ellipse — the trail the frontend
+        # accumulates is what proves the renderer is drawing the walk.
+        masses = [
+            {"id": 0, "x": cx, "y": cy, "m": 1.0, "rs": 9.0,
+             "rgb": [255, 226, 158], "compact": False, "kind": "star",
+             "flash": 0.0, "grabbed": False},
+            {"id": 1, "x": round(cx + 330, 1), "y": round(cy - 90, 1),
+             "m": 4.0, "rs": 36.0, "rgb": [18, 16, 26], "compact": True,
+             "kind": "bh", "flash": 0.0, "grabbed": False},
+        ]
+        a_axis, ecc = 200.0, 0.45
+        theta = t * 0.9
+        apsis = t * 0.25            # apsidal precession
+        rr = a_axis * (1 - ecc * ecc) / (1 + ecc * math.cos(theta))
+        orbiters = [{
+            "id": 0,
+            "x": round(cx + rr * math.cos(theta + apsis), 1),
+            "y": round(cy + rr * math.sin(theta + apsis), 1),
+        }]
+        base["objects"] = [{
+            "type": "spacetime",
+            # Slow yaw sweep so a screenshot at any t shows the 3D structure.
+            "yaw": round(t * 0.15, 4) if MOCK_YAW else 0.0,
+            "pitch": round(math.radians(34.0), 4),
+            "zoom": 1.0,
+            "focal": 1700.0,
+            "rotating": int(t) % 8 < 2,
+            "reach": 460.0,
+            "depth_gain": 1.25,
+            "max_depth": 210.0,
+            "grid": [30, 18, 72, 1.7],
+            "dim": 0.45,
+            "dim_rgb": [6, 8, 18],
+            "kind": "star",
+            "time_scale": 1.0,
+            "count": len(masses),
+            "masses": masses,
+            "orbiters": orbiters,
+            "orbiter_rgb": [140, 235, 255],
+            "trail_len": 360,
+            "ghost": None,
         }]
 
     elif SCENE == "vtuber":
