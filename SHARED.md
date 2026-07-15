@@ -2096,3 +2096,77 @@ a wound-up camera would spin for seconds getting there.
   precession is untouched by all of this.
 - tests/smoke_scenes.py now ASSERTS the tangency, the depth ordering
   (hole > 3x sun), the PW limit, and that no pitch clamp has crept back. 9/9.
+
+## 2026-07-15 (round 4) — post-Newtonian dynamics + the radiated wave
+
+Two asks: make everything interact accurately, and show how SPACE REACTS.
+
+### "Just use numerical relativity" is not on the table — say so with numbers
+NR = integrating Einstein's field equations on a 3D grid (BSSN/Z4c, moving
+punctures, AMR). A 2025 BNS merger covering 1.5 SECONDS cost 130 MILLION
+CPU-hours on Fugaku across 20k-80k cores. This board has 6 cores and needs
+30 fps: ~9 orders of magnitude. Nothing crosses that, and it is not Python's
+fault. Do not accept a task framed as "port NR to the Jetson".
+
+### What replaced the pseudo-potential: EIH 1PN
+The pairwise test-particle pseudo-potential had NO validity for comparable
+masses. Now the N-body dynamics are the Einstein-Infeld-Hoffmann 1PN equations
+[EIH 1938; Will 1993 eq 6.80] — the same framework JPL's DE440 uses to place
+the planets. Includes the many-body terms where every OTHER mass modifies the
+i-j interaction: gravity gravitates, which is what makes it GR and not a
+two-body patch. Implicit in a_j, so seeded with Newton and iterated
+(ST_PN_ITERS = 2).
+VALIDATED against the exact GR perihelion precession dphi = 6 pi GM/(c^2 a
+(1-e^2)) — the Mercury formula: 2.1% error at v/c = 0.091, and the error grows
+as (v/c)^2 exactly as a 1PN truncation must. It converges to GR.
+
+### The regime change that MAKES that claim true (most important line here)
+ST_RS_PER_MASS 9.0 -> 2.5. At 9.0 orbits sat ~5 rs out at v/c ~ 0.47, where
+the PN series does not converge and the numbers were decoration. At 2.5 orbits
+are 20-40 rs out at v/c ~ 0.11-0.16 and 1PN is good to a couple of percent.
+The visuals barely pay: depth ~ sqrt(rs) (40% shallower, still hundreds of px),
+precession ~ rs/a (~20 deg/lap, still unmistakable). What shrinks is the horizon
+disk, which BUYS room for orbits. If anyone retunes rs, re-check v/c.
+
+### Momentum was silently broken and it was subtle
+Feeding each body the OTHER's rs (the obvious first cut) breaks Newton's third
+law: the pseudo-potential's pole sits at the source's horizon, so F_ij != -F_ji
+and total momentum walked ~10%. Fixed by evaluating the pair force in the PAIR's
+geometry (rs_i + rs_j, exact since rs is linear in mass). Now 1.5e-7 over 4000
+sub-steps. (Superseded by EIH for the main force, but _pair_force still backs
+_orbit_velocity.)
+
+### Space reacts: the radiated wave
+h_ij^TT = (2G/(c^4 D)) Qddot_ij(t - D/c) — retarded quadrupole, the SAME formula
+that sets the energy loss, so the wave and the inspiral are consistent by
+construction. Qddot in closed form (Iddot = SUM m (2 v_i v_j + x_i a_j + a_i
+x_j)) about the COM, so no numerical differentiation. Only the newest sample
+crosses the wire; the browser accumulates history and does its own retarded
+lookup (the trails trick) — the retarded window is only ~0.65 s.
+VERIFIED: 1/D falloff exact (h*D = 0.1918/0.1919/0.1920 at three distances —
+4 significant figures); speed from the arrival-time slope 2000 vs c = 1833 px/s
+(one frame of quantisation); quadrupolar lobes vary with angle; h_x = 0 in-plane
+(linear polarisation) falls out of the geometry rather than being imposed, which
+is why the wave correctly renders as a HEIGHT ripple and not an in-plane wobble.
+
+### The honest number, which IS the lesson
+Real strain here is h ~ 5e-4: a 400 px grid line changes length by 0.04 px.
+Invisible. ST_GW_STRAIN_GAIN = 4e4 buys the picture (~19 px ripple). LIGO
+measures h ~ 1e-21 — 1e17x smaller than ours; hence a century and a Nobel.
+(First tried 6e5 and got a 288 px ripple pinned to the cap. Measure, don't
+guess — same lesson as ST_GW_GAIN, where I assumed 4e4 was needed to speed up
+inspirals and it actually just blew up the integrator: at v/c ~ 0.4 Peters
+already merges things in ~1 s of sim time. Both were wrong by orders of
+magnitude in OPPOSITE directions.)
+
+### Still approximate, on purpose and on the record
+- Radiation reaction is Peters orbit-averaged (2.5PN order) bolted onto
+  conservative EIH — a standard hybrid, but a hybrid.
+- Peters' P uses the CIRCULAR formula at the instantaneous separation.
+- 1PN truncation: honest to ~2% at v/c ~ 0.09, degrading as (v/c)^2.
+  ST_PN_VC_WARN = 0.3 marks where it should stop being believed.
+
+### Open
+- Bodies now render small (the rs rescale). User wants them drawn BIGGER while
+  keeping real properties — the clean way is to split the RENDER radius from
+  the physical r_body that feeds the cap/well geometry. Not done yet.

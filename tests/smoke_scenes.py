@@ -69,7 +69,9 @@ def check_spacetime_physics():
     import math
 
     import config as C
-    from ui.interactables import _embed_height, _kerr_force_factor
+    from ui.interactables import (_C_SCREEN, Spacetime, _embed_height,
+                                  _kerr_force_factor)
+    G, c = C.ST_ORB_G, _C_SCREEN
 
     # 1. The interior cap and the exterior paraboloid must meet with a COMMON
     #    TANGENT at the body's surface [MTW 1973 Box 23.2]: both slopes equal
@@ -94,19 +96,113 @@ def check_spacetime_physics():
         return _embed_height(C.ST_CURV_REACH_PX, rs, R) - _embed_height(max(R, rs), rs, R)
 
     d_sun = depth(C.ST_MASS_TYPES["sun"])
+    d_neu = depth(C.ST_MASS_TYPES["neutron"])
     d_bh = depth(C.ST_MASS_TYPES["bh"])
-    assert d_bh > 3 * d_sun, f"hole ({d_bh:.0f}px) not dramatically deeper than sun ({d_sun:.0f}px)"
+    # Ordering, not a magic ratio: compactness is what deepens the well.
+    assert d_sun < d_neu < d_bh, f"depth ordering wrong: {d_sun:.0f}/{d_neu:.0f}/{d_bh:.0f}"
+    assert d_bh > 2.5 * d_sun, f"hole ({d_bh:.0f}px) not much deeper than sun ({d_sun:.0f}px)"
+
+    # The claim that actually distinguishes them is the THROAT: a hole's sheet
+    # goes vertical at its horizon, a star's is a smooth cap. Assert the kind
+    # difference, not a tuned number — depth scales with sqrt(rs) and moves
+    # whenever the regime is retuned, but this never should.
+    def surface_slope(spec):
+        rs = C.ST_RS_PER_MASS * spec["m"]
+        R = max(rs * spec["r_over_rs"], rs)
+        r0 = R + 1e-3
+        h = 1e-3
+        return (_embed_height(r0 + h, rs, R) - _embed_height(r0, rs, R)) / h
+
+    assert surface_slope(C.ST_MASS_TYPES["sun"]) < 1.0, "sun grew a throat"
+    assert surface_slope(C.ST_MASS_TYPES["bh"]) > 50.0, "hole lost its vertical throat"
 
     # 3. Mukhopadhyay must collapse to Paczynski-Wiita at zero spin, or the
     #    measured 47 deg/lap precession silently changes meaning.
     for x in (3.0, 6.0, 50.0):
         assert abs(_kerr_force_factor(x, 0.0) - 1.0 / (x - 2.0) ** 2) < 1e-12
 
-    # 4. Pitch is UNCLAMPED on purpose (the user must be able to orbit under
+    # 4. The GW drag must remove energy at EXACTLY Peters' rate and be
+    #    equal-and-opposite (momentum conserved). This is the design claim.
+    from ui.interactables import _C_SCREEN, Spacetime
+    G, c = C.ST_ORB_G, _C_SCREEN
+    for a0 in (160.0, 300.0):
+        st = Spacetime(1280, 720)
+        m1 = st._place_mass(640.0, 360.0, "bh")
+        m1.spin = 0.0
+        m1.vx = m1.vy = 0.0
+        m2 = st._place_mass(640.0 + a0, 360.0, "bh")
+        m2.spin = 0.0
+        M = m1.m + m2.m
+        vrel = math.sqrt(G * M / a0)
+        m2.vx, m2.vy = 0.0, vrel * m1.m / M
+        m1.vx, m1.vy = 0.0, -vrel * m2.m / M
+        for b in st.bodies():
+            b.ax = b.ay = 0.0
+        st._gw_drag(m1, m2, a0)
+        work = (m1.ax * m1.m * m1.vx + m1.ay * m1.m * m1.vy
+                + m2.ax * m2.m * m2.vx + m2.ay * m2.m * m2.vy)
+        p_peters = (32.0 / 5.0) * G ** 4 * (m1.m * m2.m) ** 2 * M / (c ** 5 * a0 ** 5)
+        assert abs(-work - p_peters) / p_peters < 1e-9, "GW drag off Peters' rate"
+        net = (m1.ax * m1.m + m2.ax * m2.m, m1.ay * m1.m + m2.ay * m2.m)
+        assert abs(net[0]) < 1e-6 and abs(net[1]) < 1e-6, "GW drag breaks momentum"
+
+    # 5. A hole-hole merger radiates ~5% of the total mass and conserves the rest.
+    st = Spacetime(1280, 720)
+    a = st._place_mass(500.0, 360.0, "bh")
+    # Place the second one just inside contact, derived from the bodies rather
+    # than hardcoded — rs per unit mass is a regime knob and has moved before.
+    b = st._place_mass(500.0 + max(a.r_horizon, a.r_body), 360.0, "bh")
+    b.vx = b.vy = 0.0
+    st._merge_masses()
+    assert len(st.masses) == 1, "horizons touching did not merge"
+    assert abs(st.masses[0].m - 8.0 * (1 - C.ST_MERGE_GW_MASS_LOSS)) < 1e-9
+
+    # 6. EIH (1PN) must converge to the EXACT GR perihelion precession,
+    #    dphi = 6*pi*G*M/(c^2 a (1-e^2)) — the Mercury formula. This is the
+    #    claim that the dynamics are relativistic and not merely plausible.
+    import ui.interactables as _I
+    from ui.interactables import _Orbiter
+    gw_was = _I.ST_GW_ENABLED
+    _I.ST_GW_ENABLED = False          # isolate the conservative sector
+    try:
+        a0 = 600.0
+        st = Spacetime(1280, 720)
+        host = st._place_mass(640.0, 360.0, "bh")
+        host.spin = 0.0
+        host.vx = host.vy = 0.0
+        vp = math.sqrt(G * host.m / a0)
+        o = _Orbiter(999, 640.0 + a0, 360.0, 0.0, vp, m=1e-6)
+        st.orbiters.append(o)
+        st._accelerate()
+        angs, prev_r, falling = [], None, False
+        for _ in range(int(600 / C.ST_PHYS_DT)):
+            st._step(C.ST_PHYS_DT)
+            if not st.orbiters:
+                break
+            r = math.hypot(o.x - host.x, o.y - host.y)
+            if prev_r is not None:
+                if r > prev_r and falling:
+                    angs.append(math.atan2(o.y - host.y, o.x - host.x))
+                    if len(angs) >= 4:
+                        break
+                falling = r < prev_r
+            prev_r = r
+        assert len(angs) >= 3, "orbit did not complete enough laps"
+        d = [((angs[i + 1] - angs[i] + math.pi) % (2 * math.pi)) - math.pi
+             for i in range(len(angs) - 1)]
+        meas = sum(d) / len(d)
+        exact = 6 * math.pi * G * host.m / (c * c * a0)
+        err = abs(meas - exact) / exact
+        assert err < 0.05, f"EIH precession {math.degrees(meas):.2f} vs GR {math.degrees(exact):.2f} ({err*100:.1f}%)"
+    finally:
+        _I.ST_GW_ENABLED = gw_was
+
+    # 7. Pitch is UNCLAMPED on purpose (the user must be able to orbit under
     #    the sheet). Guard against a well-meaning clamp creeping back in.
     assert not hasattr(C, "ST_PITCH_MAX_RAD"), "pitch clamp came back"
     assert not hasattr(C, "ST_PITCH_MIN_RAD"), "pitch clamp came back"
-    print("  ok    Spacetime physics (tangency / depth ordering / PW limit / free pitch)")
+    print("  ok    Spacetime physics (tangency / depth / PW limit / GW rate /"
+          " momentum / merger / EIH-vs-GR precession / free pitch)")
 
 
 def main():

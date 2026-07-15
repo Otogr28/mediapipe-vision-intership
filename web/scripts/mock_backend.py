@@ -481,18 +481,18 @@ def scene_state(t):
         # plus an analytic PRECESSING ellipse — the trail the frontend
         # accumulates is what proves the renderer is drawing the walk.
         masses = [
-            {"id": 0, "x": cx, "y": cy, "m": 1.0, "rs": 9.0,
-             "rgb": [255, 226, 158], "compact": False, "kind": "sun", "r_body": 180.0,
+            {"id": 0, "x": cx, "y": cy, "m": 1.0, "rs": 2.5,
+             "rgb": [255, 226, 158], "compact": False, "kind": "sun", "r_body": 50.0,
              "flash": 0.0, "grabbed": False, "spin": 0.1,
              "phase": round(t * 0.8 % 6.283, 3),
-             "r_horizon": 8.9, "r_ergo": 9.0},
+             "r_horizon": 2.49, "r_ergo": 2.5},
             # a* = 0.9: horizon shrinks to 0.63*rs while the ergosphere stays
             # at rs -> a visible gap, and a strong 1/r^3 twist nearby.
             {"id": 1, "x": round(cx + 330, 1), "y": round(cy - 90, 1),
-             "m": 4.0, "rs": 36.0, "rgb": [18, 16, 26], "compact": True,
-             "kind": "bh", "r_body": 36.0, "flash": 0.0, "grabbed": False, "spin": 0.9,
+             "m": 4.0, "rs": 10.0, "rgb": [18, 16, 26], "compact": True,
+             "kind": "bh", "r_body": 10.0, "flash": 0.0, "grabbed": False, "spin": 0.9,
              "phase": round(t * 2.4 % 6.283, 3),
-             "r_horizon": 25.85, "r_ergo": 36.0},
+             "r_horizon": 7.18, "r_ergo": 10.0},
         ]
         a_axis, ecc = 200.0, 0.45
         theta = t * 0.9
@@ -519,7 +519,7 @@ def scene_state(t):
             "lattice_verticals": True,
             "lattice_gain": 7.0,
             "vert_stride": 2,
-            "c": round((2 * 4.2e6 / 9.0) ** 0.5, 4),
+            "c": round((2 * 4.2e6 / 2.5) ** 0.5, 4),
             "g": 4.2e6,
             "lt_gain": 1.0,
             "lt_max": 1.1,
@@ -532,6 +532,15 @@ def scene_state(t):
             "orbiters": orbiters,
             "orbiter_rgb": [140, 235, 255],
             "trail_len": 360,
+            # A fake binary's quadrupole, so the ripple can be seen headless.
+            "sim_t": round(t, 4),
+            "quad": [round(4e4*math.cos(2*t*1.6), 3),
+                     round(-4e4*math.cos(2*t*1.6), 3),
+                     round(4e4*math.sin(2*t*1.6), 3)],
+            "com": [cx, cy],
+            "gw_gain": 4.0e4,
+            "gw_max": 60.0,
+            "gw_hist_s": 2.0,
             "ghost": None,
         }]
 

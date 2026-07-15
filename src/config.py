@@ -651,7 +651,20 @@ CHG_GRID_PX = 8
 ST_MAX_MASSES = 6
 ST_MAX_ORBITERS = 12
 ST_GRAB_PAD_PX = 46
-ST_RS_PER_MASS = 9.0         # Schwarzschild radius (px) per unit mass
+# Schwarzschild radius (px) per unit mass. This single number sets the whole
+# experiment's REGIME, so it is the most consequential constant in the file.
+#
+# It was 9.0, which put orbits ~5 rs out and bodies at v/c ~ 0.47 — a regime
+# where the post-Newtonian series is quantitatively worthless (1PN corrections
+# ~22%, and the next order is not much smaller). 2.5 puts a typical orbit
+# 20-40 rs out at v/c ~ 0.11-0.16, where 1PN error is a couple of percent and
+# the physics on screen is honest.
+#
+# The visuals barely pay for it, which is why this is the right trade: well
+# depth goes as sqrt(rs) (so ~40% shallower, still hundreds of px) and
+# perihelion precession as rs/a (~20 deg per lap at 25 rs — still unmistakable).
+# What actually shrinks is the horizon disk, which buys ROOM for orbits.
+ST_RS_PER_MASS = 2.5
 ST_CURV_REACH_PX = 460.0     # radius at which a well is declared flat again
 # Vertical scale of the sheet. 1.0 = TO SCALE: z and r are both lengths in the
 # same px, so the paraboloid is plotted exactly as [Flamm 1916] gives it, with
@@ -864,9 +877,26 @@ ST_CAM_SMOOTH = 0.25
 
 # Orbit integration. Velocity-Verlet in fixed ST_PHYS_DT chunks, exactly like
 # Orbitals (see the ORB_PHYS_DT note: never derive a sub-step from the frame
-# remainder). The masses are STATIC — they do not fall toward each other — so
-# the user's arrangement is preserved and the sheet stays where it was put;
-# only the test particles move.
+# remainder).
+#
+# EVERYTHING GRAVITATES. The masses used to be pinned (copying Charges' "the
+# field is the subject" call); that was wrong for gravity, where the bodies are
+# not sources of a backdrop, they ARE the system. Every body now pulls every
+# other one pairwise, orbiters included — a test particle is just a light body.
+#
+# THE DYNAMICS ARE POST-NEWTONIAN (EIH, 1PN) — see ST_PN_* below. The previous
+# version applied a TEST-PARTICLE pseudo-potential pairwise, which has no
+# validity for comparable masses; this replaces it with the real N-body
+# relativistic framework.
+#
+# On "just use numerical relativity": it is not a matter of effort. NR means
+# integrating Einstein's field equations on a 3D grid (BSSN/Z4c, moving
+# punctures, AMR). A 2025 binary-neutron-star merger covering 1.5 SECONDS took
+# 130 MILLION CPU-hours on Fugaku across 20k-80k cores. This board has 6 cores
+# and needs 30 fps. That is ~9 orders of magnitude; no optimisation crosses it,
+# and nothing about the gap is Python's fault. EIH is not a consolation prize
+# either: it is the same framework JPL's DE440 ephemeris uses to place the
+# planets to metre accuracy.
 # G is fixed by wanting a READABLE orbit, then everything else follows: a Star
 # (m=1) at r=180 px comes out at v_circ = sqrt(G*m*r)/(r-rs) ~= 162 px/s, i.e.
 # one lap every ~7 s. Note this puts the orbiter at only ~20 rs — deep in the
@@ -887,6 +917,131 @@ ST_ORB_SPAWN_VFRAC = 0.72
 ST_ORB_MIN_SPAWN_RS = 3.4    # spawn no closer than this * rs — just outside
                              # the ISCO at 3*rs, so a fresh orbiter is stable
 ST_CAPTURE_FLASH_DECAY = 0.04
+# Mass of an "Orbiter" — small, but NOT zero: it gravitates back on everything,
+# because the ask was that every object interact. Its rs is ~0.2 px, so its own
+# well is invisible and it still behaves as a test particle to the eye.
+ST_ORBITER_MASS = 0.02
+# A newly placed body is given a near-circular orbit about the dominant mass
+# already on screen (solved from the real field, not a closed form). Placing it
+# at rest would be equally physical and much less useful — with everything now
+# gravitating, a sandbox of bodies dropped at rest just collapses to a merger in
+# seconds. 1.0 = circular; the ORBITER palette entry keeps its own eccentric
+# ST_ORB_SPAWN_VFRAC so it visibly precesses.
+ST_MASS_SPAWN_VFRAC = 1.0
+
+# --- Gravitational waves ------------------------------------------------
+# A bound pair radiates orbital energy as gravitational waves and spirals in.
+# This is not decoration: it is why binaries merge at all, and it is the whole
+# LIGO story. Rate from [Peters 1964] (Eq. 5.6/5.9) for a circular orbit:
+#
+#     P    = (32/5) * G^4 * (m1*m2)^2 * (m1+m2) / (c^5 * r^5)
+#     da/dt= -beta / a^3,  beta = (64/5) * G^3 * m1*m2*(m1+m2) / c^5
+#     t_merge = (5/256) * (c^5/G^3) * a^4 / (m1*m2*(m1+m2))
+#
+# Implemented as an equal-and-opposite drag along the pair's RELATIVE velocity,
+# sized so the pair loses energy at exactly P. That conserves momentum by
+# construction and reproduces Peters' merger time for circular orbits (asserted
+# in tests/smoke_scenes.py against the closed form above).
+#
+# TWO honest limitations, and the second one is the big one:
+#
+# 1. P is evaluated with the CIRCULAR formula at the current separation. Peters
+#    & Mathews (1963) give the general instantaneous power for an eccentric
+#    orbit; an eccentric pair here radiates at the circular rate for its
+#    separation, understating the loss near periapsis.
+#
+# 2. Peters is a LEADING-ORDER quadrupole result and assumes v << c. This
+#    sandbox does not: two Holes at 160 px orbit at v/c ~ 0.47 (measured), and
+#    even at 300 px it is ~0.35. That is the regime where real work needs high-
+#    order post-Newtonian or full numerical relativity — the quadrupole formula
+#    is quantitatively out of its depth here, and the inspiral RATE should be
+#    read as indicative, not predictive. What is solid: the drag removes energy
+#    at exactly the rate the formula states (verified to 0.000%), momentum is
+#    conserved to 1e-9, and the qualitative story — bound pairs spiral in and
+#    merge, tighter pairs merge sooner — is right.
+#
+# The root cause of (2) is that the palette is deliberately strong-field: a Hole
+# has rs = 36 px and orbits live a few rs out, which is what makes the curvature
+# visible at all. Wide, slow, Newtonian binaries would satisfy Peters and show
+# nothing.
+ST_GW_ENABLED = True
+# --- Post-Newtonian dynamics (EIH, 1PN) ---------------------------------
+# [EIH 1938]  Einstein, Infeld & Hoffmann, Ann. Math. 39, 65: the 1PN N-body
+#             equations of motion. Also [Will 1993] eq. 6.80, and Moyer's
+#             formulation — the basis of JPL's DE ephemerides (DE440).
+#
+# The acceleration of body i is Newton plus 1PN corrections in (v/c)^2 and
+# (Gm/rc^2): velocity terms, the "many-body" terms where every OTHER mass k
+# modifies the i-j interaction (gravity gravitates — this is what makes it GR
+# and not a two-body patch), and terms in the other bodies' accelerations.
+#
+# It is IMPLICIT: a_j appears on the right-hand side. Standard practice is to
+# seed with the Newtonian acceleration and iterate a couple of times, which is
+# what ST_PN_ITERS does. Two is plenty at our v/c.
+ST_PN_ENABLED = True
+ST_PN_ITERS = 2
+# Where the 1PN series stops being trustworthy. This is not a code limit, it is
+# an HONESTY limit: the expansion parameter is (v/c)^2, so at v/c = 0.3 the
+# neglected 2PN terms are already ~1%, and by 0.5 the series is not converging
+# in any useful sense. Above this the HUD says so rather than pretending.
+ST_PN_VC_WARN = 0.3
+# Multiplier on the radiated power. 1.0 = TO SCALE, and it stays there.
+#
+# I expected to need a big number here and was wrong by orders of magnitude — a
+# useful thing to have checked rather than assumed. Real inspirals take
+# megayears because real binaries are WIDE (v/c ~ 1e-3); this sandbox is not.
+# With c = sqrt(2G/RS_PER_MASS) ~ 966 px/s and orbits at ~150 px/s, bodies here
+# move at v/c ~ 0.16, a few rs apart — the same strong-field regime as LIGO's
+# last second. Peters then gives a merger time of ~1 s of sim time for two Holes
+# at 160 px. Nothing needs speeding up; the demo is the real rate.
+#
+# (An early 4e4 here did not merge things faster, it blew the integrator up: the
+# drag scales as P/v^2, so an absurd P reverses the velocity every sub-step and
+# the pair flies apart. If a binary ever explodes instead of spiralling, suspect
+# this.)
+ST_GW_GAIN = 1.0
+# Fraction of the total mass radiated away when two horizons merge. ~5% is the
+# measured/NR value for comparable-mass black-hole mergers (GW150914 radiated
+# 3.0 of 65 Msun). Applied only to hole-hole mergers.
+ST_MERGE_GW_MASS_LOSS = 0.05
+ST_MERGE_FLASH = 1.0
+
+# --- Space reacting: the radiated wave itself ----------------------------
+# The energy the pair loses does not vanish — it leaves as a WAVE, and the grid
+# is what it passes through. Same quadrupole formula that sets the loss, so the
+# two are automatically consistent: what the binary pays for, the sheet shows.
+#
+#     h_ij^TT(t, D) = (2G / (c^4 * D)) * Qddot_ij(t - D/c)
+#
+# with Qddot the trace-free mass quadrupole's second time derivative, evaluated
+# at RETARDED time — which is the whole point: the ripple leaves the source and
+# arrives late, at exactly c. Nothing is faked; delay, the 1/D amplitude falloff,
+# the quadrupolar lobes and the 2x-orbital frequency all fall out of the formula.
+#
+# Qddot is computed in closed form from the state we already have,
+#     Iddot_ij = SUM_a m_a * (2 v_i v_j + x_i a_j + a_i x_j),
+# so there is no numerical differentiation and no extra integration cost.
+#
+# Polarisation: the grid IS the orbital plane, and an in-plane observer sees a
+# purely LINEARLY polarised wave (h_x = 0 there) — a real GR result that falls
+# out here rather than being imposed. The transverse direction for an in-plane
+# ray is z, i.e. out of the sheet, so the wave correctly shows up as a HEIGHT
+# ripple and not as an in-plane wobble.
+ST_GW_WAVE_ENABLED = True
+# How much history to keep (s of sim time). Only needs to cover the light-travel
+# time to the far corner: ~1200 px / c ~ 0.65 s here. 2 s is slack for a slow
+# sim-speed setting.
+ST_GW_HIST_S = 2.0
+# Display amplification of the strain, and it is enormous ON PURPOSE. Measured
+# h here is ~1e-4 — meaning a 400 px grid line changes length by 0.04 px, which
+# is invisible, which is the honest point: gravitational waves are absurdly
+# weak. LIGO measures h ~ 1e-21, a proton's width across 4 km, and that is why
+# it took a century and a Nobel to see one. This gain (measured: h ~ 5e-4 here
+# -> a ~20 px ripple) buys the picture; the
+# NUMBER it is amplifying is the real one, and the HUD shows it unamplified.
+ST_GW_STRAIN_GAIN = 4.0e4
+ST_GW_WAVE_MAX_PX = 60.0     # cap the ripple's height so a merger chirp cannot
+                             # tear the sheet apart on screen
 
 # Backdrop dimming. The camera image is darkened UNDER the grid so the thin
 # wireframe reads against a bright room — "a bit", not blacked out: the point

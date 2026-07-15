@@ -30,24 +30,28 @@ from config import (BH_DEFAULT_POS_FACTOR, BH_DISK_BRIGHTNESS,
                     ST_CAM_YAW_RATE_GAIN, ST_CAPTURE_FLASH_DECAY,
                     ST_CURV_REACH_PX, ST_DEFAULT_KIND, ST_DEPTH_GAIN,
                     ST_FOCAL_PX, ST_FRAME_DT, ST_GRAB_PAD_PX, ST_GRID_COLS,
-                    ST_GRID_MARGIN, ST_GRID_ROWS, ST_LATTICE_COLS,
-                    ST_LATTICE_DEPTH_PX, ST_LATTICE_GAIN, ST_LATTICE_LAYERS,
-                    ST_LATTICE_MARGIN, ST_LATTICE_ROWS, ST_LATTICE_SAMPLES,
+                    ST_GRID_MARGIN, ST_GRID_ROWS, ST_GW_ENABLED, ST_GW_GAIN,
+                    ST_GW_HIST_S, ST_GW_STRAIN_GAIN, ST_GW_WAVE_ENABLED,
+                    ST_GW_WAVE_MAX_PX, ST_LATTICE_COLS, ST_LATTICE_DEPTH_PX,
+                    ST_LATTICE_GAIN, ST_LATTICE_LAYERS, ST_LATTICE_MARGIN,
+                    ST_LATTICE_ROWS, ST_LATTICE_SAMPLES,
                     ST_LATTICE_VERT_STRIDE, ST_LATTICE_VERTICALS,
                     ST_LINE_SAMPLES, ST_LT_TWIST_GAIN, ST_LT_TWIST_MAX_RAD,
-                    ST_MASS_TYPES, ST_MAX_MASSES, ST_MAX_ORBITERS,
-                    ST_MAX_SUBSTEPS, ST_ORB_G, ST_ORB_MIN_SPAWN_RS,
+                    ST_MASS_SPAWN_VFRAC, ST_MASS_TYPES, ST_MAX_MASSES,
+                    ST_MAX_ORBITERS, ST_MAX_SUBSTEPS, ST_MERGE_FLASH,
+                    ST_MERGE_GW_MASS_LOSS, ST_ORB_G, ST_ORB_MIN_SPAWN_RS,
                     ST_ORB_SPAWN_VFRAC, ST_ORB_TRAIL_LEN, ST_ORBITER_KIND,
-                    ST_ORBITER_RGB, ST_PHYS_DT, ST_PITCH_DEFAULT_RAD,
-                    ST_PITCH_TOP_RAD, ST_PRUNE_MARGIN, ST_RS_PER_MASS,
-                    ST_SPIN_MAX, ST_SPIN_VIS_SCALE, ST_TIME_SCALES,
-                    ST_VIEW_3D_DEFAULT, ST_YAW_DEFAULT_RAD, ST_ZOOM_DEADZONE,
-                    ST_ZOOM_MAX, ST_ZOOM_MIN, WAVE_AMP, WAVE_DECAY_TAU_S,
-                    WAVE_DEFAULT_KIND, WAVE_DISPLAY_GAIN,
-                    WAVE_DISPLAY_MAX_ALPHA, WAVE_FRAME_DT, WAVE_GRAB_PAD_PX,
-                    WAVE_GRID_PX, WAVE_MAX_DEBT_S, WAVE_MAX_SOURCES,
-                    WAVE_MAX_SUBSTEPS, WAVE_PHYS_DT, WAVE_RAMP_S,
-                    WAVE_SOURCE_TYPES, WAVE_SPEED_PX_S, WAVE_TIME_SCALES)
+                    ST_ORBITER_MASS, ST_ORBITER_RGB, ST_PHYS_DT,
+                    ST_PITCH_DEFAULT_RAD, ST_PITCH_TOP_RAD, ST_PN_ENABLED,
+                    ST_PN_ITERS, ST_PRUNE_MARGIN, ST_RS_PER_MASS, ST_SPIN_MAX,
+                    ST_SPIN_VIS_SCALE, ST_TIME_SCALES, ST_VIEW_3D_DEFAULT,
+                    ST_YAW_DEFAULT_RAD, ST_ZOOM_DEADZONE, ST_ZOOM_MAX,
+                    ST_ZOOM_MIN, WAVE_AMP, WAVE_DECAY_TAU_S, WAVE_DEFAULT_KIND,
+                    WAVE_DISPLAY_GAIN, WAVE_DISPLAY_MAX_ALPHA, WAVE_FRAME_DT,
+                    WAVE_GRAB_PAD_PX, WAVE_GRID_PX, WAVE_MAX_DEBT_S,
+                    WAVE_MAX_SOURCES, WAVE_MAX_SUBSTEPS, WAVE_PHYS_DT,
+                    WAVE_RAMP_S, WAVE_SOURCE_TYPES, WAVE_SPEED_PX_S,
+                    WAVE_TIME_SCALES)
 from detection.gestures import hand_id, pinch_info, pinch_infos, pinch_state
 from ui.button import Button
 
@@ -2439,7 +2443,7 @@ class Charges:
 
 class _Mass:
     __slots__ = ("id", "x", "y", "m", "rs", "kind", "flash", "spin", "phase",
-                 "r_body")
+                 "r_body", "vx", "vy", "ax", "ay")
 
     def __init__(self, mid, x, y, m, rs, kind, spin=0.0, r_body=None):
         self.id = mid
@@ -2455,6 +2459,11 @@ class _Mass:
         # The body's SURFACE radius (px). A black hole has no surface, so its
         # r_body IS its horizon and the funnel runs all the way down.
         self.r_body = max(rs, rs if r_body is None else r_body)
+        # Masses move now: every object gravitates (see the config note).
+        self.vx = 0.0
+        self.vy = 0.0
+        self.ax = 0.0
+        self.ay = 0.0
 
     @property
     def m_geom(self):
@@ -2500,9 +2509,15 @@ class _Mass:
 
 
 class _Orbiter:
-    __slots__ = ("id", "x", "y", "vx", "vy", "ax", "ay")
+    """A light body. Not a massless test particle any more: it has a real (tiny)
+    mass and pulls back on everything, because every object interacts. Its rs is
+    a fraction of a pixel, so it has no visible well and still reads as a test
+    particle."""
 
-    def __init__(self, oid, x, y, vx, vy):
+    __slots__ = ("id", "x", "y", "vx", "vy", "ax", "ay", "m", "rs", "spin",
+                 "r_body")
+
+    def __init__(self, oid, x, y, vx, vy, m=ST_ORBITER_MASS):
         self.id = oid
         self.x = x
         self.y = y
@@ -2510,6 +2525,18 @@ class _Orbiter:
         self.vy = vy
         self.ax = 0.0
         self.ay = 0.0
+        self.m = m
+        self.rs = ST_RS_PER_MASS * m
+        self.r_body = self.rs
+        self.spin = 0.0
+
+    @property
+    def m_geom(self):
+        return self.rs * 0.5
+
+    @property
+    def r_horizon(self):
+        return self.rs
 
 
 def _clamp(v, lo, hi):
@@ -2665,6 +2692,11 @@ class Spacetime:
         self._kind = ST_DEFAULT_KIND
         self._scale_idx = ST_TIME_SCALES.index(1.0)
         self._time_acc = 0.0
+        # Sim clock + quadrupole history: the wave needs RETARDED values, so the
+        # system has to remember what it was doing a light-crossing ago.
+        self._sim_t = 0.0
+        self._quad = None
+        self._quad_hist = deque()
 
         # Camera. The two-hand gesture drives the *_t targets; the values the
         # renderer sees ease toward them (ST_CAM_SMOOTH) so a bare hand's
@@ -2828,6 +2860,8 @@ class Spacetime:
     def clear(self):
         self.masses.clear()
         self.orbiters.clear()
+        self._quad = None
+        self._quad_hist.clear()
         self._grab_mass = None
         self._grab_hand = None
         self._pending = None
@@ -2840,14 +2874,23 @@ class Spacetime:
                   min(spec.get("spin", 0.0), ST_SPIN_MAX),
                   rs * spec.get("r_over_rs", 1.0))
         self._next_id += 1
+        # Everything gravitates, so a body dropped at rest just falls in. Give
+        # it a near-circular orbit about whatever is already on screen — the
+        # velocity is solved from the REAL field, so it is a genuine orbit, not
+        # a fitted number. The first body placed has nothing to orbit.
+        if self.masses:
+            vx, vy = self._orbit_velocity(m, x, y, ST_MASS_SPAWN_VFRAC)
+            m.vx, m.vy = vx, vy
         self.masses.append(m)
         if len(self.masses) > ST_MAX_MASSES:
             self.masses.pop(0)
         return m
 
-    def _nearest_mass(self, x, y):
+    def _nearest_mass(self, x, y, exclude=None):
         best, best_d = None, None
         for m in self.masses:
+            if m is exclude:
+                continue
             d = math.hypot(m.x - x, m.y - y)
             if best_d is None or d < best_d:
                 best, best_d = m, d
@@ -2875,28 +2918,51 @@ class Spacetime:
             s = r_min / r
             dx, dy, r = dx * s, dy * s, r_min
             x, y = host.x + dx, host.y + dy
-        # Counter-clockwise tangent (prograde when the host spins +z).
-        tx, ty = -dy / r, dx / r
-        # Solve the circular speed from the ACTUAL field rather than a closed
-        # form: with Kerr the force depends on the orbit's direction (through
-        # the spin sign) and hence on the speed we are solving for, so iterate
-        # a few times. This also picks up every other mass's pull for free,
-        # which the old single-host formula ignored.
-        v = 0.0
-        for _ in range(4):
-            ax, ay = self._accel(x, y, tx * v, ty * v)
-            a_inward = -(ax * dx + ay * dy) / r
-            if a_inward <= 0.0:
-                break
-            v = math.sqrt(a_inward * r)
-        v *= ST_ORB_SPAWN_VFRAC
-        o = _Orbiter(self._next_id, x, y, tx * v, ty * v)
-        o.ax, o.ay = self._accel(o.x, o.y, o.vx, o.vy)
+        o = _Orbiter(self._next_id, x, y, 0.0, 0.0)
+        o.vx, o.vy = self._orbit_velocity(o, x, y, ST_ORB_SPAWN_VFRAC)
         self._next_id += 1
         self.orbiters.append(o)
         if len(self.orbiters) > ST_MAX_ORBITERS:
             self.orbiters.pop(0)
         return o
+
+    def _orbit_velocity(self, body, x, y, vfrac):
+        """Tangential velocity for a near-circular orbit at (x, y), solved from
+        the actual field rather than a closed form.
+
+        Iterates because the Kerr force depends on the orbit's direction (via
+        the spin sign) and hence on the speed being solved for; it also picks up
+        every other body's pull for free. `vfrac` < 1 makes the launch point the
+        apoapsis, giving an ellipse of eccentricity ~1 - vfrac^2.
+        """
+        host = self._nearest_mass(x, y, exclude=body)
+        if host is None:
+            return 0.0, 0.0
+        dx, dy = x - host.x, y - host.y
+        r = math.hypot(dx, dy)
+        if r < 1e-6:
+            return 0.0, 0.0
+        tx, ty = -dy / r, dx / r
+        v = 0.0
+        for _ in range(4):
+            probe = _Orbiter(-1, x, y, tx * v, ty * v, m=body.m)
+            ax = ay = 0.0
+            for other in self.bodies():
+                if other is body:
+                    continue
+                ddx, ddy = other.x - x, other.y - y
+                rr = math.hypot(ddx, ddy)
+                if rr < 1e-6:
+                    continue
+                f = self._pair_force(probe, other, rr)
+                ax += f * ddx / (rr * probe.m)
+                ay += f * ddy / (rr * probe.m)
+            a_inward = -(ax * dx + ay * dy) / r
+            if a_inward <= 0.0:
+                return 0.0, 0.0
+            v = math.sqrt(a_inward * r)
+        v *= vfrac
+        return tx * v + host.vx, ty * v + host.vy
 
     def _preset_precession(self):
         """One press gets the money shot: a lone star and an eccentric orbit
@@ -3082,6 +3148,196 @@ class Spacetime:
 
     # ---- physics -------------------------------------------------------
 
+    # ---- n-body: every object interacts ---------------------------------
+
+    def bodies(self):
+        """Every gravitating object. Masses and orbiters differ only in scale."""
+        return self.masses + self.orbiters
+
+    def _pair_force(self, bi, bj, r):
+        """Attractive FORCE magnitude between two bodies at separation ``r``.
+
+        A force, not an acceleration, and evaluated in the PAIR's geometry
+        rather than one body's — that is what makes it symmetric, so
+        ``F_ij = -F_ji`` and momentum is conserved exactly. Getting this wrong
+        is easy and expensive: feeding each body the OTHER's ``rs`` (the obvious
+        first cut) silently breaks Newton's third law, because the pseudo-
+        potential's pole sits at the source's horizon and the two poles differ.
+        Total momentum then drifts, which showed up here as a ~10% walk.
+
+        The pair's gravitational radius is ``rs_i + rs_j`` — exact, since rs is
+        linear in mass, so this is the ``rs`` of the total mass M = m_i + m_j,
+        which is the scale a two-body system actually has. In the test-mass
+        limit (m_j -> 0) it collapses to the single-body Kerr/PW force around
+        m_i, so the orbiters' physics is unchanged.
+
+        Spin comes from the heavier body (the lighter one's frame dragging on
+        its host is real but utterly negligible), signed by their relative
+        orbital direction — which is what keeps the ISCO directional.
+        """
+        m_g = (bi.rs + bj.rs) * 0.5          # r_g of the pair's total mass
+        newton = ST_ORB_G * bi.m * bj.m / max(r, 1e-3) ** 2
+        if m_g < 1e-4:
+            return newton
+        heavy, light = (bi, bj) if bi.m >= bj.m else (bj, bi)
+        a_signed = 0.0
+        spin = getattr(heavy, "spin", 0.0)
+        if spin > 0.0:
+            dx, dy = light.x - heavy.x, light.y - heavy.y
+            vx, vy = light.vx - heavy.vx, light.vy - heavy.vy
+            lz = dx * vy - dy * vx
+            l_ref = 0.15 * r * math.sqrt(ST_ORB_G * heavy.m / max(r, 1e-3))
+            if l_ref > 1e-9:
+                a_signed = min(spin, ST_SPIN_MAX) * math.tanh(lz / l_ref)
+        f = _kerr_force_factor(r / m_g, a_signed)
+        return (ST_ORB_G * bi.m * bj.m / (m_g * m_g)) * f
+
+    def _gw_drag(self, bi, bj, r):
+        """Gravitational-wave radiation reaction for one pair [Peters 1964].
+
+        The pair radiates at ``P = (32/5) G^4 (m1 m2)^2 (m1+m2) / (c^5 r^5)``,
+        so an equal-and-opposite drag along the RELATIVE velocity, sized to
+        remove exactly that power, both conserves momentum and reproduces
+        Peters' merger time (asserted in tests). This is why binaries here
+        actually spiral in and merge instead of orbiting forever.
+        """
+        if not ST_GW_ENABLED:
+            return
+        vrx, vry = bi.vx - bj.vx, bi.vy - bj.vy
+        v2 = vrx * vrx + vry * vry
+        if v2 < 1e-9:
+            return
+        m_tot = bi.m + bj.m
+        p = (32.0 / 5.0) * ST_ORB_G ** 4 * (bi.m * bj.m) ** 2 * m_tot \
+            / (_C_SCREEN ** 5 * max(r, 1e-3) ** 5)
+        p *= ST_GW_GAIN
+        k = p / v2
+        bi.ax -= k * vrx / bi.m
+        bi.ay -= k * vry / bi.m
+        bj.ax += k * vrx / bj.m
+        bj.ay += k * vry / bj.m
+
+    def _newtonian_accel(self, bodies):
+        """Plain Newtonian acceleration for every body — the 1PN seed."""
+        acc = [[0.0, 0.0] for _ in bodies]
+        n = len(bodies)
+        for i in range(n):
+            for j in range(n):
+                if i == j:
+                    continue
+                dx = bodies[j].x - bodies[i].x
+                dy = bodies[j].y - bodies[i].y
+                r = math.hypot(dx, dy)
+                if r < 1e-6:
+                    continue
+                f = ST_ORB_G * bodies[j].m / (r * r * r)
+                acc[i][0] += f * dx
+                acc[i][1] += f * dy
+        return acc
+
+    def _eih_accel(self, bodies, a_prev):
+        """One EIH (1PN) pass, given the previous estimate of every body's
+        acceleration — [EIH 1938], [Will 1993] eq. 6.80; the form JPL's DE
+        ephemerides use.
+
+        a_i = SUM_j!=i  G*m_j*(x_j - x_i)/r_ij^3 * [ 1
+                 - (4G/c^2) SUM_k!=i m_k/r_ik        <- every other mass
+                 - ( G/c^2) SUM_k!=j m_k/r_jk           modifies THIS pair:
+                                                        gravity gravitates
+                 + (v_i.v_i)/c^2 + 2(v_j.v_j)/c^2 - 4(v_i.v_j)/c^2
+                 - (3/2c^2) [ ((x_i - x_j).v_j)/r_ij ]^2
+                 + (1/2c^2) (x_j - x_i).a_j ]
+            + (1/c^2) SUM_j!=i G*m_j/r_ij^3 * [(x_i - x_j).(4v_i - 3v_j)]
+                                            * (v_i - v_j)
+            + (7/2c^2) SUM_j!=i G*m_j*a_j/r_ij
+
+        The middle block is what makes this general relativity rather than a
+        two-body correction: the i-j interaction depends on where every OTHER
+        body is. Nonlinearity, in the one place it is cheap enough to keep.
+        """
+        c2 = _C_SCREEN * _C_SCREEN
+        n = len(bodies)
+        acc = [[0.0, 0.0] for _ in bodies]
+        for i in range(n):
+            bi = bodies[i]
+            axi = ayi = 0.0
+            for j in range(n):
+                if i == j:
+                    continue
+                bj = bodies[j]
+                dxji = bj.x - bi.x          # x_j - x_i
+                dyji = bj.y - bi.y
+                r = math.hypot(dxji, dyji)
+                if r < 1e-6:
+                    continue
+                # Potentials at i (from all k != i) and at j (from all k != j).
+                sum_i = sum_j = 0.0
+                for k in range(n):
+                    bk = bodies[k]
+                    if k != i:
+                        rik = math.hypot(bk.x - bi.x, bk.y - bi.y)
+                        if rik > 1e-6:
+                            sum_i += ST_ORB_G * bk.m / rik
+                    if k != j:
+                        rjk = math.hypot(bk.x - bj.x, bk.y - bj.y)
+                        if rjk > 1e-6:
+                            sum_j += ST_ORB_G * bk.m / rjk
+                vi2 = bi.vx * bi.vx + bi.vy * bi.vy
+                vj2 = bj.vx * bj.vx + bj.vy * bj.vy
+                vij = bi.vx * bj.vx + bi.vy * bj.vy
+                # (x_i - x_j).v_j / r
+                nvj = (-dxji * bj.vx - dyji * bj.vy) / r
+                bracket = (1.0
+                           - 4.0 * sum_i / c2
+                           - sum_j / c2
+                           + vi2 / c2
+                           + 2.0 * vj2 / c2
+                           - 4.0 * vij / c2
+                           - 1.5 * (nvj * nvj) / c2
+                           + 0.5 * (dxji * a_prev[j][0]
+                                    + dyji * a_prev[j][1]) / c2)
+                pref = ST_ORB_G * bj.m / (r * r * r)
+                axi += pref * dxji * bracket
+                ayi += pref * dyji * bracket
+                # Velocity-coupling term.
+                dot = (-dxji) * (4.0 * bi.vx - 3.0 * bj.vx) \
+                      + (-dyji) * (4.0 * bi.vy - 3.0 * bj.vy)
+                axi += pref * dot * (bi.vx - bj.vx) / c2
+                ayi += pref * dot * (bi.vy - bj.vy) / c2
+                # Other bodies' accelerations.
+                k7 = 3.5 * ST_ORB_G * bj.m / (r * c2)
+                axi += k7 * a_prev[j][0]
+                ayi += k7 * a_prev[j][1]
+            acc[i][0] = axi
+            acc[i][1] = ayi
+        return acc
+
+    def _accelerate(self):
+        """Post-Newtonian (EIH 1PN) N-body acceleration + 2.5PN-order GW
+        radiation reaction. Every body interacts with every other."""
+        bodies = self.bodies()
+        for b in bodies:
+            b.ax = 0.0
+            b.ay = 0.0
+        if not bodies:
+            return
+        acc = self._newtonian_accel(bodies)
+        if ST_PN_ENABLED:
+            # EIH is implicit in a_j: seed with Newton and iterate.
+            for _ in range(ST_PN_ITERS):
+                acc = self._eih_accel(bodies, acc)
+        for b, a in zip(bodies, acc):
+            b.ax, b.ay = a[0], a[1]
+        # Dissipation is a separate, higher (2.5PN) order: EIH above is purely
+        # conservative and would orbit forever.
+        n = len(bodies)
+        for i in range(n):
+            for j in range(i + 1, n):
+                r = math.hypot(bodies[i].x - bodies[j].x,
+                               bodies[i].y - bodies[j].y)
+                if r > 1e-6:
+                    self._gw_drag(bodies[i], bodies[j], r)
+
     def _accel(self, x, y, vx=0.0, vy=0.0):
         """Pseudo-Newtonian Kerr acceleration at (x, y) for a particle moving
         at (vx, vy).
@@ -3137,15 +3393,23 @@ class Spacetime:
         through a tanh that saturates: except for a near-radial plunge the sign
         is already pinned, so the term is effectively constant across a step.
         """
-        for o in self.orbiters:
-            o.x += o.vx * dt + 0.5 * o.ax * dt * dt
-            o.y += o.vy * dt + 0.5 * o.ay * dt * dt
-            vhx = o.vx + 0.5 * o.ax * dt
-            vhy = o.vy + 0.5 * o.ay * dt
-            nax, nay = self._accel(o.x, o.y, vhx, vhy)
-            o.vx += 0.5 * (o.ax + nax) * dt
-            o.vy += 0.5 * (o.ay + nay) * dt
-            o.ax, o.ay = nax, nay
+        bodies = self.bodies()
+        # Drift + kick with the CURRENT acceleration, then re-derive the whole
+        # pairwise field once and kick again. Held bodies are pinned by the
+        # hand, so they are moved but never integrated.
+        old = [(b.ax, b.ay) for b in bodies]
+        for b in bodies:
+            if b is self._grab_mass:
+                continue
+            b.x += b.vx * dt + 0.5 * b.ax * dt * dt
+            b.y += b.vy * dt + 0.5 * b.ay * dt * dt
+        self._accelerate()
+        for b, (oax, oay) in zip(bodies, old):
+            if b is self._grab_mass:
+                b.vx = b.vy = 0.0
+                continue
+            b.vx += 0.5 * (oax + b.ax) * dt
+            b.vy += 0.5 * (oay + b.ay) * dt
 
     def _capture(self):
         """Swallow anything that crosses a HORIZON — the visible end of a
@@ -3158,15 +3422,85 @@ class Spacetime:
         """
         kept = []
         for o in self.orbiters:
-            eaten = False
+            eaten = None
             for m in self.masses:
-                if math.hypot(o.x - m.x, o.y - m.y) <= m.r_horizon:
-                    m.flash = 1.0
-                    eaten = True
+                if math.hypot(o.x - m.x, o.y - m.y) <= max(m.r_horizon,
+                                                           m.r_body):
+                    eaten = m
                     break
-            if not eaten:
+            if eaten is None:
                 kept.append(o)
+            else:
+                # Accretion: the swallowed body's mass and momentum join the
+                # host. Nothing is thrown away — an orbiter has mass now.
+                self._absorb(eaten, o)
         self.orbiters = kept
+
+    def _absorb(self, host, other):
+        """Fold `other` into `host`, conserving mass and momentum."""
+        m_tot = host.m + other.m
+        if m_tot <= 0.0:
+            return
+        host.vx = (host.m * host.vx + other.m * other.vx) / m_tot
+        host.vy = (host.m * host.vy + other.m * other.vy) / m_tot
+        host.m = m_tot
+        self._resize(host)
+        host.flash = ST_MERGE_FLASH
+
+    def _resize(self, m):
+        """Re-derive a body's geometry after its mass changes. rs is fixed per
+        unit mass, and the surface keeps the body's own compactness."""
+        ratio = ST_MASS_TYPES[m.kind].get("r_over_rs", 1.0)
+        m.rs = ST_RS_PER_MASS * m.m
+        m.r_body = max(m.rs, m.rs * ratio)
+
+    def _merge_masses(self):
+        """Merge bodies whose horizons touch — the end of an inspiral.
+
+        Conserves momentum exactly and mass up to the GW loss: a comparable-mass
+        black-hole merger radiates ~5% of the total as gravitational waves
+        (GW150914: 3.0 of 65 Msun), so the remnant really is lighter than the
+        sum. Spin is combined mass-weighted and capped at the Thorne limit —
+        an approximation; the real remnant spin comes from the orbital angular
+        momentum too and needs NR fits to get right.
+        """
+        merged = True
+        while merged and len(self.masses) > 1:
+            merged = False
+            for i in range(len(self.masses)):
+                for j in range(i + 1, len(self.masses)):
+                    a, b = self.masses[i], self.masses[j]
+                    touch = max(a.r_horizon, a.r_body) + max(b.r_horizon,
+                                                             b.r_body)
+                    if math.hypot(a.x - b.x, a.y - b.y) > touch:
+                        continue
+                    keep, gone = (a, b) if a.m >= b.m else (b, a)
+                    m_tot = keep.m + gone.m
+                    both_holes = (ST_MASS_TYPES[keep.kind]["compact"]
+                                  and ST_MASS_TYPES[gone.kind]["compact"])
+                    px = keep.m * keep.vx + gone.m * gone.vx
+                    py = keep.m * keep.vy + gone.m * gone.vy
+                    keep.x = (keep.m * keep.x + gone.m * gone.x) / m_tot
+                    keep.y = (keep.m * keep.y + gone.m * gone.y) / m_tot
+                    keep.spin = min(
+                        (keep.m * keep.spin + gone.m * gone.spin) / m_tot,
+                        ST_SPIN_MAX)
+                    if both_holes:
+                        m_tot *= (1.0 - ST_MERGE_GW_MASS_LOSS)
+                    # A hole eats anything: the remnant has no surface.
+                    if ST_MASS_TYPES[gone.kind]["compact"]:
+                        keep.kind = gone.kind
+                    keep.m = m_tot
+                    keep.vx, keep.vy = px / m_tot, py / m_tot
+                    self._resize(keep)
+                    keep.flash = ST_MERGE_FLASH
+                    if self._grab_mass is gone:
+                        self._grab_mass = keep
+                    self.masses.remove(gone)
+                    merged = True
+                    break
+                if merged:
+                    break
 
     def _prune(self):
         cx, cy = self.w * 0.5, self.h * 0.5
@@ -3189,6 +3523,8 @@ class Spacetime:
         # chunks — never a sub-step derived from the frame remainder (see the
         # WAVE_PHYS_DT note in config: that mismatch pumps energy).
         self._time_acc += self.time_scale * ST_FRAME_DT
+        if self.bodies() and self._time_acc >= ST_PHYS_DT:
+            self._accelerate()
         steps = 0
         while self._time_acc >= ST_PHYS_DT and steps < ST_MAX_SUBSTEPS:
             self._time_acc -= ST_PHYS_DT
@@ -3196,6 +3532,9 @@ class Spacetime:
             steps += 1
         if steps == ST_MAX_SUBSTEPS:
             self._time_acc = 0.0
+        self._sim_t += sim_dt
+        self._record_quadrupole(self._sim_t)
+        self._merge_masses()
         self._capture()
         self._prune()
         for m in self.masses:
@@ -3214,7 +3553,94 @@ class Spacetime:
         z = 0.0
         for m in self.masses:
             z += _embed_depth(math.hypot(x - m.x, y - m.y), m.rs, m.r_body)
-        return z
+        # ...and the radiated wave rides on top: the static well is what the
+        # masses ARE, the ripple is what they DID.
+        return z + self._wave_height(x, y)
+
+    # ---- the radiated wave (mirrored in web/src/overlay/scene.ts) --------
+
+    def _record_quadrupole(self, t):
+        """Sample the system's trace-free mass quadrupole, second derivative.
+
+        Closed form from the state we already have — no numerical
+        differentiation::
+
+            Iddot_ij = SUM_a m_a * (2 v_i v_j + x_i a_j + a_i x_j)
+
+        Taken about the CENTRE OF MASS and in the COM frame: a uniformly moving
+        system does not radiate, and using the raw frame would smuggle the whole
+        scene's drift into the wave.
+        """
+        bs = self.bodies()
+        if not bs:
+            self._quad = None
+            return
+        mt = sum(b.m for b in bs)
+        if mt <= 0.0:
+            self._quad = None
+            return
+        cx = sum(b.m * b.x for b in bs) / mt
+        cy = sum(b.m * b.y for b in bs) / mt
+        cvx = sum(b.m * b.vx for b in bs) / mt
+        cvy = sum(b.m * b.vy for b in bs) / mt
+        ixx = iyy = ixy = 0.0
+        for b in bs:
+            x, y = b.x - cx, b.y - cy
+            vx, vy = b.vx - cvx, b.vy - cvy
+            ixx += b.m * (2.0 * vx * vx + 2.0 * x * b.ax)
+            iyy += b.m * (2.0 * vy * vy + 2.0 * y * b.ay)
+            ixy += b.m * (2.0 * vx * vy + x * b.ay + y * b.ax)
+        self._quad = (ixx, iyy, ixy, cx, cy)
+        self._quad_hist.append((t, ixx, iyy, ixy, cx, cy))
+        cutoff = t - ST_GW_HIST_S
+        while self._quad_hist and self._quad_hist[0][0] < cutoff:
+            self._quad_hist.popleft()
+
+    def _quad_at(self, t_ret):
+        """Linear-interpolated quadrupole history at a retarded time."""
+        h = self._quad_hist
+        if not h or t_ret < h[0][0] or t_ret > h[-1][0]:
+            return None
+        lo, hi = 0, len(h) - 1
+        while hi - lo > 1:
+            mid = (lo + hi) // 2
+            if h[mid][0] <= t_ret:
+                lo = mid
+            else:
+                hi = mid
+        t0, a0, b0, c0, _, _ = h[lo]
+        t1, a1, b1, c1, _, _ = h[hi]
+        f = 0.0 if t1 <= t0 else (t_ret - t0) / (t1 - t0)
+        return (a0 + (a1 - a0) * f, b0 + (b1 - b0) * f, c0 + (c1 - c0) * f)
+
+    def gw_strain(self, x, y):
+        """h_+ of the radiated wave at a plane point — the RAW strain, no gain.
+
+        ``h_+ = (G / (c^4 D)) * (Qddot_zz - Qddot_e2e2)`` at retarded time,
+        where e2 is the in-plane transverse direction. h_x is identically zero
+        for an in-plane ray (linear polarisation) so it is not computed.
+        """
+        if not ST_GW_WAVE_ENABLED or self._quad is None:
+            return 0.0
+        _ixx, _iyy, _ixy, cx, cy = self._quad
+        dx, dy = x - cx, y - cy
+        d = math.hypot(dx, dy)
+        if d < 1.0:
+            return 0.0
+        q = self._quad_at(self._sim_t - d / _C_SCREEN)
+        if q is None:
+            return 0.0                      # the wave has not arrived yet
+        ixx, iyy, ixy = q
+        tr = ixx + iyy
+        qxx, qyy, qzz, qxy = ixx - tr / 3.0, iyy - tr / 3.0, -tr / 3.0, ixy
+        s, c = dy / d, dx / d               # sin/cos of the ray's angle
+        q_e2e2 = s * s * qxx - 2.0 * s * c * qxy + c * c * qyy
+        return (ST_ORB_G / (_C_SCREEN ** 4 * d)) * (qzz - q_e2e2)
+
+    def _wave_height(self, x, y):
+        """The strain rendered as a height ripple (display gain applied)."""
+        h = self.gw_strain(x, y) * ST_GW_STRAIN_GAIN
+        return _clamp(h, -ST_GW_WAVE_MAX_PX, ST_GW_WAVE_MAX_PX)
 
     def _drag_frame(self, x, y):
         """Lense-Thirring frame dragging: swirl a plane point around every
@@ -3364,6 +3790,19 @@ class Spacetime:
             # The browser accumulates orbiter trails itself (as Orbitals does),
             # so the payload stays a handful of points per frame.
             "trail_len": ST_ORB_TRAIL_LEN,
+            # The radiated wave. Only the NEWEST quadrupole sample goes over the
+            # wire; the browser accumulates the history itself (same trick as
+            # the trails) and does its own retarded lookup, so the payload stays
+            # a handful of numbers instead of a ring buffer per frame.
+            "sim_t": round(self._sim_t, 4),
+            "quad": (None if self._quad is None else
+                     [round(self._quad[0], 3), round(self._quad[1], 3),
+                      round(self._quad[2], 3)]),
+            "com": (None if self._quad is None else
+                    [round(self._quad[3], 1), round(self._quad[4], 1)]),
+            "gw_gain": ST_GW_STRAIN_GAIN,
+            "gw_max": ST_GW_WAVE_MAX_PX,
+            "gw_hist_s": ST_GW_HIST_S,
             # Where a release would drop the next object (None unless armed).
             "ghost": (None if self._pending is None else
                       {"x": round(self._pending["x"], 1),
