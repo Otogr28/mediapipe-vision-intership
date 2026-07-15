@@ -9,7 +9,10 @@ import numpy as np
 from config import (BH_DEFAULT_POS_FACTOR, BH_DISK_BRIGHTNESS,
                     BH_DISK_INNER_FACTOR, BH_DISK_OUTER_FACTOR,
                     BH_DISK_ROTATION_SPEED, BH_DISK_TILT_RAD,
-                    BH_EINSTEIN_RADIUS_PX, BH_GRAB_RADIUS, ORB_BODY_TYPES,
+                    BH_EINSTEIN_RADIUS_PX, BH_GRAB_RADIUS, CHG_DEFAULT_KIND,
+                    CHG_EQUIPOT_STEP, CHG_GRAB_PAD_PX, CHG_GRID_PX, CHG_K,
+                    CHG_LINE_MAX_STEPS, CHG_LINE_STEP_PX, CHG_LINES_PER_Q,
+                    CHG_MAX, CHG_SOFTEN_PX, CHG_TYPES, ORB_BODY_TYPES,
                     ORB_COLLISION_SLOP, ORB_DEFAULT_KIND, ORB_FLASH_DECAY,
                     ORB_FRAG_COUNT, ORB_FRAG_LR_FRACTION, ORB_FRAG_MIN_MASS,
                     ORB_FRAG_SPEED, ORB_FRAG_VESC_FACTOR, ORB_FRAME_DT, ORB_G,
@@ -2041,6 +2044,307 @@ class Waves:
             cv2.circle(frame, (cx, cy), 12, col, 2 if hot else 1, cv2.LINE_AA)
             cv2.putText(frame, f"{s.freq:g} Hz", (cx + 16, cy - 10),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.45, col, 1, cv2.LINE_AA)
+
+
+# --- Charges experiment (electrostatic field) ---------------------------
+
+
+class _Charge:
+    __slots__ = ("id", "x", "y", "q", "kind")
+
+    def __init__(self, cid, x, y, q, kind):
+        self.id = cid
+        self.x = x
+        self.y = y
+        self.q = q       # charge (palette units; sign is the physics)
+        self.kind = kind
+
+
+class Charges:
+    """Electrostatic field sandbox: place point charges, watch the field.
+
+    Pinch empty space to drop a charge of the palette's selected sign and
+    magnitude (-2q .. +2q); pinch a charge to drag it. Two opposite charges
+    give the classic dipole, two like charges the saddle with its null
+    point, and a 2q charge sprouts twice the field lines of a q — which is
+    the textbook convention that line DENSITY encodes charge magnitude.
+
+    The charges are STATIC by design (see config's CHG_* note): they do not
+    accelerate each other, because an inverse-square attraction with no
+    orbital velocity would just slam a +/- pair together and turn this into
+    Orbitals-with-signs. The FIELD is the subject, so the charges stay where
+    the user puts them. There is therefore NO time integration here at all.
+
+    This class owns the charge LIST only. Everything visual is derived from
+    it by whichever sink renders: the browser colours the potential and its
+    equipotential contours with a single-pass analytic shader and traces the
+    field lines in JS; the cv2 window/stream fallback does both in numpy (in
+    :meth:`draw`, so web mode never pays for it).
+    """
+
+    def __init__(self, frame_width, frame_height):
+        self.w = frame_width
+        self.h = frame_height
+        self.charges = []
+        self._next_id = 0
+        self._kind = CHG_DEFAULT_KIND
+        # Grab (drag a charge) state, mirroring Waves / Orbitals.
+        self.grab_chg = None
+        self.grab_hand = None
+        self.grab_offset_x = 0.0
+        self.grab_offset_y = 0.0
+        # cv2-fallback grid, built lazily on the first draw().
+        self._grid_xy = None
+        self._build_palette()
+        self._apply_selection()
+
+    # ---- palette -------------------------------------------------------
+
+    def _build_palette(self):
+        margin = int(self.h * 0.12)
+        bw, bh, gap = 96, 46, 8
+        x0, y0 = margin, margin
+        self._type_btns = []
+        for i, (kind, spec) in enumerate(CHG_TYPES.items()):
+            btn = Button(
+                x=x0 + i * (bw + gap), y=y0, width=bw, height=bh,
+                label=spec["label"], on_click=(lambda k=kind: self._select(k)),
+                font_scale=0.6,
+            )
+            self._type_btns.append((f"chg.type.{kind}", kind, btn))
+        n = len(self._type_btns)
+        self._dipole_btn = Button(
+            x=x0 + n * (bw + gap), y=y0, width=bw, height=bh,
+            label="Dipole", on_click=self._preset_dipole, font_scale=0.55,
+        )
+        self._clear_btn = Button(
+            x=x0 + (n + 1) * (bw + gap), y=y0, width=bw, height=bh,
+            label="Clear", on_click=self.clear, font_scale=0.6,
+        )
+
+    @property
+    def palette(self):
+        """(id, Button) list the UIManager updates / draws / serializes."""
+        return ([(bid, btn) for bid, _kind, btn in self._type_btns]
+                + [("chg.preset.dipole", self._dipole_btn),
+                   ("chg.clear", self._clear_btn)])
+
+    def _select(self, kind):
+        self._kind = kind
+        self._apply_selection()
+
+    def _apply_selection(self):
+        for _bid, kind, btn in self._type_btns:
+            btn.selected = (kind == self._kind)
+
+    @property
+    def grabbed(self):
+        # Retires the onboarding hint while dragging a charge.
+        return self.grab_chg is not None
+
+    # ---- placement -----------------------------------------------------
+
+    def clear(self):
+        self.charges.clear()
+        self.grab_chg = None
+        self.grab_hand = None
+
+    def _place(self, x, y, kind=None):
+        kind = self._kind if kind is None else kind
+        c = _Charge(self._next_id, x, y, CHG_TYPES[kind]["q"], kind)
+        self._next_id += 1
+        self.charges.append(c)
+        # Hard cap (also the shader's uniform array size): oldest gives way.
+        if len(self.charges) > CHG_MAX:
+            self.charges.pop(0)
+        return c
+
+    def _preset_dipole(self):
+        """The canonical +/- pair — one press gets the textbook picture."""
+        self.clear()
+        cy = self.h * 0.5
+        self._place(self.w * 0.5 - 170, cy, "pos1")
+        self._place(self.w * 0.5 + 170, cy, "neg1")
+
+    def _charge_at(self, px, py):
+        best, best_d = None, None
+        for c in self.charges:
+            d = math.hypot(c.x - px, c.y - py)
+            if d <= CHG_GRAB_PAD_PX and (best_d is None or d < best_d):
+                best, best_d = c, d
+        return best
+
+    def update(self, hand_result, pose_landmarks):
+        # 1) Continue an in-progress drag (owner-latched: the pinch machine
+        #    outlives a brief tracking dropout; the drag ends on release).
+        if self.grab_chg is not None:
+            _, held, (mx, my) = pinch_state(self.grab_hand)
+            if held and self.grab_chg in self.charges:
+                self.grab_chg.x = mx + self.grab_offset_x
+                self.grab_chg.y = my + self.grab_offset_y
+            else:
+                self.grab_chg = None
+                self.grab_hand = None
+
+        # 2) A fresh pinch grabs the charge it landed on, or drops a new one.
+        if self.grab_chg is None and hand_result is not None:
+            for i in range(len(hand_result.hand_landmarks)):
+                hid = hand_id(hand_result, i)
+                pinching, _, (mx, my) = pinch_state(hid)
+                if not pinching:
+                    continue
+                hit = self._charge_at(mx, my)
+                if hit is not None:
+                    self.grab_chg = hit
+                    self.grab_hand = hid
+                    self.grab_offset_x = hit.x - mx
+                    self.grab_offset_y = hit.y - my
+                else:
+                    self._place(mx, my)
+                break
+
+        # No integration step: the field is analytic in the charges (see the
+        # class docstring). Nothing else to advance.
+
+    # ---- serialization --------------------------------------------------
+
+    def to_state(self):
+        return {
+            "type": "charges",
+            "k": CHG_K,
+            "soften": CHG_SOFTEN_PX,
+            "equipot_step": CHG_EQUIPOT_STEP,
+            "lines_per_q": CHG_LINES_PER_Q,
+            "kind": self._kind,
+            "count": len(self.charges),
+            "charges": [{
+                "id": c.id,
+                "x": round(c.x, 1),
+                "y": round(c.y, 1),
+                "q": c.q,
+                "grabbed": c is self.grab_chg,
+            } for c in self.charges],
+        }
+
+    # ---- field math (shared by the cv2 fallback; the browser ports this) -
+
+    def _potential_grid(self):
+        """V = k * sum(q_i / r_i) on a coarse grid (cv2 fallback only)."""
+        gw = max(2, self.w // CHG_GRID_PX)
+        gh = max(2, self.h // CHG_GRID_PX)
+        if self._grid_xy is None or self._grid_xy[0].shape != (gh, gw):
+            yy, xx = np.mgrid[0:gh, 0:gw].astype(np.float32)
+            self._grid_xy = (xx * CHG_GRID_PX, yy * CHG_GRID_PX)
+        xx, yy = self._grid_xy
+        v = np.zeros((gh, gw), np.float32)
+        s2 = CHG_SOFTEN_PX * CHG_SOFTEN_PX
+        for c in self.charges:
+            r = np.sqrt((xx - c.x) ** 2 + (yy - c.y) ** 2 + s2)
+            v += CHG_K * c.q / r
+        return v
+
+    def field_at(self, x, y):
+        """E = k * sum(q_i * r_hat_i / r_i^2) at one point (px units)."""
+        ex = ey = 0.0
+        s2 = CHG_SOFTEN_PX * CHG_SOFTEN_PX
+        for c in self.charges:
+            dx, dy = x - c.x, y - c.y
+            r2 = dx * dx + dy * dy + s2
+            inv = CHG_K * c.q / (r2 * math.sqrt(r2))
+            ex += inv * dx
+            ey += inv * dy
+        return ex, ey
+
+    def _field_lines(self):
+        """Streamlines from every positive charge, integrated along E-hat
+        (RK2) until they hit a negative charge or leave the frame. Positive
+        charges are the sources, so lines run + -> -, and a 2q charge starts
+        twice as many: line density IS the charge magnitude."""
+        lines = []
+        if not self.charges:
+            return lines
+        has_neg = any(c.q < 0 for c in self.charges)
+        # With no positive charge present, seed on the negatives and walk
+        # BACKWARDS along E so the picture isn't empty.
+        seeds = [c for c in self.charges if c.q > 0]
+        direction = 1.0
+        if not seeds:
+            seeds = [c for c in self.charges if c.q < 0]
+            direction = -1.0
+        for c in seeds:
+            n = max(3, int(round(CHG_LINES_PER_Q * abs(c.q))))
+            for i in range(n):
+                a = 2.0 * math.pi * i / n
+                x = c.x + math.cos(a) * CHG_SOFTEN_PX
+                y = c.y + math.sin(a) * CHG_SOFTEN_PX
+                pts = [(x, y)]
+                for _ in range(CHG_LINE_MAX_STEPS):
+                    ex, ey = self.field_at(x, y)
+                    m = math.hypot(ex, ey)
+                    if m < 1e-9:
+                        break
+                    # RK2 (midpoint) on the unit field direction.
+                    hx, hy = ex / m, ey / m
+                    mx = x + direction * hx * CHG_LINE_STEP_PX * 0.5
+                    my = y + direction * hy * CHG_LINE_STEP_PX * 0.5
+                    ex2, ey2 = self.field_at(mx, my)
+                    m2 = math.hypot(ex2, ey2)
+                    if m2 < 1e-9:
+                        break
+                    x += direction * (ex2 / m2) * CHG_LINE_STEP_PX
+                    y += direction * (ey2 / m2) * CHG_LINE_STEP_PX
+                    pts.append((x, y))
+                    if not (0 <= x < self.w and 0 <= y < self.h):
+                        break
+                    if has_neg and any(
+                            c2.q < 0 and math.hypot(x - c2.x, y - c2.y)
+                            < CHG_SOFTEN_PX * 1.2 for c2 in self.charges):
+                        break
+                if len(pts) > 1:
+                    lines.append(pts)
+        return lines
+
+    # ---- cv2 drawing (window / stream fallback) ------------------------
+
+    _POS_BGR = np.array([90, 90, 245], np.uint8)    # warm red  (+V)
+    _NEG_BGR = np.array([245, 150, 80], np.uint8)   # cool blue (-V)
+
+    def draw(self, frame):
+        if self.charges:
+            v = self._potential_grid()
+            # Diverging tint: red where V>0, blue where V<0, transparent at 0.
+            # tanh keeps a lone charge readable without the cores blowing out
+            # (same reasoning as the Waves tone curve).
+            t = np.tanh(v / (CHG_EQUIPOT_STEP * 3.0))
+            color = np.where((t > 0.0)[..., None], self._POS_BGR, self._NEG_BGR)
+            w = np.clip(np.abs(t) * 0.9, 0.0, 0.72).astype(np.float32)
+            # Equipotential bands: brighten where V is near a contour level.
+            band = np.abs(((v / CHG_EQUIPOT_STEP + 0.5) % 1.0) - 0.5)
+            w = np.maximum(w, (band < 0.06).astype(np.float32) * 0.5)
+            color = cv2.resize(color, (self.w, self.h), interpolation=cv2.INTER_LINEAR)
+            w = cv2.resize(w, (self.w, self.h), interpolation=cv2.INTER_LINEAR)
+            frame[:] = cv2.blendLinear(frame, color, 1.0 - w, w)
+
+            for pts in self._field_lines():
+                p = np.array(pts, np.int32).reshape(-1, 1, 2)
+                cv2.polylines(frame, [p], False, (225, 225, 225), 1, cv2.LINE_AA)
+
+        for c in self.charges:
+            cx, cy = int(c.x), int(c.y)
+            r = int(13 + 5 * (abs(c.q) - 1))
+            col = (90, 90, 245) if c.q > 0 else (245, 150, 80)
+            cv2.circle(frame, (cx, cy), r, col, -1, cv2.LINE_AA)
+            cv2.circle(frame, (cx, cy), r, (255, 255, 255),
+                       2 if c is self.grab_chg else 1, cv2.LINE_AA)
+            # +/- glyph.
+            cv2.line(frame, (cx - r // 2, cy), (cx + r // 2, cy),
+                     (255, 255, 255), 2, cv2.LINE_AA)
+            if c.q > 0:
+                cv2.line(frame, (cx, cy - r // 2), (cx, cy + r // 2),
+                         (255, 255, 255), 2, cv2.LINE_AA)
+            cv2.putText(frame, CHG_TYPES[c.kind]["label"], (cx + r + 6, cy - r),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.45, (235, 235, 235), 1,
+                        cv2.LINE_AA)
 
 
 # --- Vtuber / Puppet interactable ---------------------------------------

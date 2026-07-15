@@ -1,6 +1,7 @@
 import { lazy, Suspense, useEffect, useRef, useState } from "react";
 import { LensedVideo } from "./gl/LensedVideo";
 import { WavesLayer } from "./gl/WavesLayer";
+import { ChargesLayer } from "./gl/ChargesLayer";
 import { Buttons } from "./hud/Buttons";
 import { DebugHud } from "./hud/DebugHud";
 import { HintPanel } from "./hud/HintPanel";
@@ -81,6 +82,8 @@ export function App() {
   const hasBlackHole =
     state?.objects.some((o) => o.type === "black_hole") ?? false;
   const hasWaves = state?.objects.some((o) => o.type === "waves") ?? false;
+  const hasCharges =
+    state?.objects.some((o) => o.type === "charges") ?? false;
   const hasVtuber =
     state?.objects.some((o) => o.type === "vtuber") ?? false;
   // The backend's "Avatar" pinch button owns which model is shown (rides
@@ -104,6 +107,9 @@ export function App() {
         )}
         {hasWaves && (
           <WavesLayer pairRef={pairRef} frameW={frameW} frameH={frameH} />
+        )}
+        {hasCharges && (
+          <ChargesLayer pairRef={pairRef} frameW={frameW} frameH={frameH} />
         )}
         <OverlayCanvas pairRef={pairRef} frameW={frameW} frameH={frameH} />
         {hasVtuber && !skeletonView && (

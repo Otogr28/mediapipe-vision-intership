@@ -491,6 +491,58 @@ WAVE_GRID_PX = 8
 WAVE_DISPLAY_GAIN = 1.8
 WAVE_DISPLAY_MAX_ALPHA = 0.85
 
+# --- Charges experiment (electrostatic field) ---------------------------
+# Pinch empty space to drop a point charge of the palette's selected sign
+# and magnitude; pinch a charge to drag it and watch the field reorganise.
+#
+# The charges are STATIC — they do not accelerate each other. That is a
+# deliberate design choice, not a missing feature: with an inverse-square
+# attraction and no orbital velocity, a +/- pair would simply collide
+# instantly and the whole thing would collapse into Orbitals-with-signs.
+# Real electrostatics exhibits pin the charges precisely because the FIELD
+# is the subject, not the particles. Consequently this experiment has NO
+# time integration at all (no dt, no CFL, no sub-steps): the potential is
+# evaluated analytically, V = k * sum(q_i / r_i), per pixel by the shader.
+#
+# Python owns only the charge LIST (place / drag / palette). Everything
+# visual is derived from it by the renderer: the browser colours V + its
+# equipotential contours in a single-pass analytic shader
+# (web/src/gl/ChargesLayer.tsx) and traces the field lines in JS
+# (web/src/overlay/scene.ts), the same way it already accumulates Orbitals'
+# trails client-side. The cv2 window/stream fallback does both in numpy.
+CHG_MAX = 8                  # hard cap; also the shader's uniform array size
+                             # — keep web/src/gl/charges.frag.glsl in sync
+CHG_GRAB_PAD_PX = 46         # pinch-grab radius around a charge centre
+CHG_K = 90000.0              # Coulomb constant in screen units: V is in
+                             # "volts" of k*q/r with r in px and q in the
+                             # palette's units. Only sets the scale of the
+                             # equipotential spacing + colour ramp.
+# Palette presets: (charge, label). Sign is the physics; magnitude lets a
+# 2q charge visibly dominate its neighbour (twice the field lines).
+CHG_TYPES = {
+    "neg2": {"q": -2.0, "label": "-2q"},
+    "neg1": {"q": -1.0, "label": "-q"},
+    "pos1": {"q": 1.0, "label": "+q"},
+    "pos2": {"q": 2.0, "label": "+2q"},
+}
+CHG_DEFAULT_KIND = "pos1"
+# Softening (px) on r in the field/potential sums. Without it V and |E| blow
+# up at a charge's own centre (1/r and 1/r^2 singularities) and the shader
+# renders a saturated disk; this rounds the core off at roughly the marker's
+# own radius, where nothing is being taught anyway.
+CHG_SOFTEN_PX = 14.0
+# Field lines: how many leave a unit charge (a 2q charge gets twice as many,
+# which is exactly the textbook convention that line DENSITY encodes |q|).
+CHG_LINES_PER_Q = 12
+CHG_LINE_STEP_PX = 6.0       # streamline integration step (RK2)
+CHG_LINE_MAX_STEPS = 320     # give up after this many (bounds a stray line)
+# Equipotential contour spacing (in the same V units as CHG_K). The shader
+# draws a band every multiple of this.
+CHG_EQUIPOT_STEP = 900.0
+# cv2 fallback only: potential is evaluated on a grid this coarse (px/cell)
+# and upscaled, mirroring the Waves fallback's approach.
+CHG_GRID_PX = 8
+
 # Vtuber / Puppet interactable.
 # A friendly cosmic mascot puppeteered by the live landmarks: its paws ride
 # the tracked HANDS (always available), its mouth opens with the pinch, and

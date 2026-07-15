@@ -9,7 +9,7 @@ Run from the repo root (needs the repo venv for cv2/numpy):
     uv run python web/scripts/mock_backend.py [scene]
 
 Scenes: menu (default), sphere, sixseven, slingshot, blackhole, picker,
-orbitals, orbaim, waves, vtuber.
+orbitals, orbaim, waves, charges, vtuber.
 Then point the vite dev server at it:  npm run dev  (same port 8092).
 """
 
@@ -414,6 +414,40 @@ def scene_state(t):
             "type": "waves", "t": round(t, 3), "c": 340.0,
             "time_scale": 1.0, "kind": "mid", "count": len(sources),
             "sources": sources,
+        }]
+
+    elif SCENE == "charges":
+        base["session"]["state"] = "experiments"
+        base["session"]["experiment"] = "charges"
+        bw, bh, gap = 96, 46, 8
+        kinds = [("neg2", "-2q"), ("neg1", "-q"), ("pos1", "+q"),
+                 ("pos2", "+2q")]
+        for i, (k, lab) in enumerate(kinds):
+            b = btn(f"chg.type.{k}", lab, margin + i * (bw + gap), margin,
+                    bw, bh)
+            b["selected"] = (k == "pos1")
+            base["buttons"].append(b)
+        base["buttons"] += [
+            btn("chg.preset.dipole", "Dipole", margin + 4 * (bw + gap),
+                margin, bw, bh),
+            btn("chg.clear", "Clear", margin + 5 * (bw + gap), margin, bw, bh),
+            btn("reset", "Reset", W - 130 - margin, H - 50 - margin, 130, 50),
+        ]
+        # A dipole plus a roaming +2q, so field lines, the null point and the
+        # 2q line-density convention are all visible at once.
+        cx, cy = W / 2, H / 2
+        charges = [
+            {"id": 0, "x": cx - 240, "y": cy, "q": 1.0, "grabbed": False},
+            {"id": 1, "x": cx + 240, "y": cy, "q": -1.0, "grabbed": False},
+            {"id": 2,
+             "x": round(cx + 60 * math.cos(t * 0.5), 1),
+             "y": round(cy - 210 + 40 * math.sin(t * 0.5), 1),
+             "q": 2.0, "grabbed": int(t) % 4 == 0},
+        ]
+        base["objects"] = [{
+            "type": "charges", "k": 90000.0, "soften": 14.0,
+            "equipot_step": 900.0, "lines_per_q": 12, "kind": "pos1",
+            "count": len(charges), "charges": charges,
         }]
 
     elif SCENE == "vtuber":

@@ -118,6 +118,18 @@ export function interpolate(pair: SnapshotPair, now: number): AppState {
           }),
         };
       }
+      case "charges": {
+        if (po.type !== "charges") return o;
+        const prevChg = new Map(po.charges.map((c) => [c.id, c]));
+        return {
+          ...o,
+          charges: o.charges.map((c) => {
+            const pc = prevChg.get(c.id);
+            if (!pc) return c;
+            return { ...c, x: lerp(pc.x, c.x, t), y: lerp(pc.y, c.y, t) };
+          }),
+        };
+      }
       default:
         return o;
     }
