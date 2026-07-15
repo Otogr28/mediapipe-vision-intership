@@ -35,20 +35,19 @@ from config import (BH_DEFAULT_POS_FACTOR, BH_DISK_BRIGHTNESS,
                     ST_LATTICE_MARGIN, ST_LATTICE_ROWS, ST_LATTICE_SAMPLES,
                     ST_LATTICE_VERT_STRIDE, ST_LATTICE_VERTICALS,
                     ST_LINE_SAMPLES, ST_LT_TWIST_GAIN, ST_LT_TWIST_MAX_RAD,
-                    ST_MASS_TYPES, ST_MAX_DEPTH_PX, ST_MAX_MASSES,
-                    ST_MAX_ORBITERS, ST_MAX_SUBSTEPS, ST_ORB_G,
-                    ST_ORB_MIN_SPAWN_RS, ST_ORB_SPAWN_VFRAC, ST_ORB_TRAIL_LEN,
-                    ST_ORBITER_KIND, ST_ORBITER_RGB, ST_PHYS_DT,
-                    ST_PITCH_DEFAULT_RAD, ST_PITCH_MAX_RAD, ST_PITCH_MIN_RAD,
-                    ST_PRUNE_MARGIN, ST_RS_PER_MASS, ST_SPIN_MAX,
-                    ST_SPIN_VIS_SCALE, ST_TIME_SCALES, ST_VIEW_3D_DEFAULT,
-                    ST_YAW_DEFAULT_RAD, ST_ZOOM_DEADZONE, ST_ZOOM_MAX,
-                    ST_ZOOM_MIN, WAVE_AMP, WAVE_DECAY_TAU_S, WAVE_DEFAULT_KIND,
-                    WAVE_DISPLAY_GAIN, WAVE_DISPLAY_MAX_ALPHA, WAVE_FRAME_DT,
-                    WAVE_GRAB_PAD_PX, WAVE_GRID_PX, WAVE_MAX_DEBT_S,
-                    WAVE_MAX_SOURCES, WAVE_MAX_SUBSTEPS, WAVE_PHYS_DT,
-                    WAVE_RAMP_S, WAVE_SOURCE_TYPES, WAVE_SPEED_PX_S,
-                    WAVE_TIME_SCALES)
+                    ST_MASS_TYPES, ST_MAX_MASSES, ST_MAX_ORBITERS,
+                    ST_MAX_SUBSTEPS, ST_ORB_G, ST_ORB_MIN_SPAWN_RS,
+                    ST_ORB_SPAWN_VFRAC, ST_ORB_TRAIL_LEN, ST_ORBITER_KIND,
+                    ST_ORBITER_RGB, ST_PHYS_DT, ST_PITCH_DEFAULT_RAD,
+                    ST_PITCH_TOP_RAD, ST_PRUNE_MARGIN, ST_RS_PER_MASS,
+                    ST_SPIN_MAX, ST_SPIN_VIS_SCALE, ST_TIME_SCALES,
+                    ST_VIEW_3D_DEFAULT, ST_YAW_DEFAULT_RAD, ST_ZOOM_DEADZONE,
+                    ST_ZOOM_MAX, ST_ZOOM_MIN, WAVE_AMP, WAVE_DECAY_TAU_S,
+                    WAVE_DEFAULT_KIND, WAVE_DISPLAY_GAIN,
+                    WAVE_DISPLAY_MAX_ALPHA, WAVE_FRAME_DT, WAVE_GRAB_PAD_PX,
+                    WAVE_GRID_PX, WAVE_MAX_DEBT_S, WAVE_MAX_SOURCES,
+                    WAVE_MAX_SUBSTEPS, WAVE_PHYS_DT, WAVE_RAMP_S,
+                    WAVE_SOURCE_TYPES, WAVE_SPEED_PX_S, WAVE_TIME_SCALES)
 from detection.gestures import hand_id, pinch_info, pinch_infos, pinch_state
 from ui.button import Button
 
@@ -2439,9 +2438,10 @@ class Charges:
 
 
 class _Mass:
-    __slots__ = ("id", "x", "y", "m", "rs", "kind", "flash", "spin", "phase")
+    __slots__ = ("id", "x", "y", "m", "rs", "kind", "flash", "spin", "phase",
+                 "r_body")
 
-    def __init__(self, mid, x, y, m, rs, kind, spin=0.0):
+    def __init__(self, mid, x, y, m, rs, kind, spin=0.0, r_body=None):
         self.id = mid
         self.x = x
         self.y = y
@@ -2452,6 +2452,9 @@ class _Mass:
         self.flash = 0.0  # transient glow when it swallows an orbiter
         self.spin = spin  # dimensionless Kerr spin a* = Jc/(GM^2), [0, 1)
         self.phase = 0.0  # accumulated rotation angle (rad) — visual only
+        # The body's SURFACE radius (px). A black hole has no surface, so its
+        # r_body IS its horizon and the funnel runs all the way down.
+        self.r_body = max(rs, rs if r_body is None else r_body)
 
     @property
     def m_geom(self):
@@ -2569,26 +2572,56 @@ def _kerr_force_factor(x, a):
     return num / den
 
 
-def _flamm_depth(r, rs):
-    """Sheet depth (px, negative = down) of one mass at radius ``r``.
+def _embed_height(r, rs, r_body):
+    """Embedding height z(r) of one body's equatorial slice, increasing outward.
 
-    Flamm's paraboloid ``z(r) = 2*sqrt(rs*(r - rs))`` is the exact embedding of
-    the Schwarzschild equatorial slice. Taken literally it grows without bound
-    with ``r``, so we measure it DOWNWARD from ``ST_CURV_REACH_PX`` — the radius
-    where we declare space flat again. The well is then local (0 at the reach)
-    and finite (it bottoms out at the throat, ``r = rs``) instead of diverging
-    like a Newtonian 1/r funnel.
+    Two regimes, joined at the body's SURFACE — this pair is the whole physics
+    of why a star and a black hole look nothing alike:
 
-    Mirrored in ``web/src/overlay/scene.ts`` (``flammDepth``) — keep in sync.
+    * ``r >= r_body`` — OUTSIDE: Flamm's paraboloid ``z = 2*sqrt(rs*(r - rs))``
+      [Flamm 1916]. By Birkhoff's theorem this is identical for any body of the
+      same mass, so the far field cannot tell a star from a hole.
+    * ``r < r_body`` — INSIDE: the interior Schwarzschild solution embeds as a
+      SPHERICAL CAP of radius ``A = sqrt(R^3/rs)`` [Schwarzschild 1916b],
+      [MTW 1973 Box 23.2]. Smooth, shallow, and crucially with NO throat.
+
+    They meet with a common tangent at ``r = R`` (both slopes are
+    ``sqrt(rs/(R - rs))`` — asserted in tests/smoke_scenes.py), so the sheet has
+    no crease. A black hole has ``r_body = rs``: no surface, so the paraboloid
+    runs all the way to the horizon where ``dz/dr`` diverges and the sheet goes
+    vertical. That cliff is what a hole has and a star simply does not.
+
+    Mirrored in ``web/src/overlay/scene.ts`` (``embedHeight``) — keep in sync.
+    """
+    if rs <= 0.0:
+        return 0.0
+    r_body = max(r_body, rs)          # nothing can be smaller than its horizon
+    if r >= r_body:
+        return 2.0 * math.sqrt(rs * max(r - rs, 0.0))
+    # Interior spherical cap, hung off the surface value so the join is exact.
+    z_surf = 2.0 * math.sqrt(rs * max(r_body - rs, 0.0))
+    a = math.sqrt(r_body ** 3 / rs)
+    r = min(r, a)
+    cap_here = a * math.sqrt(max(1.0 - (r / a) ** 2, 0.0))
+    cap_surf = a * math.sqrt(max(1.0 - (r_body / a) ** 2, 0.0))
+    return z_surf - (cap_here - cap_surf)
+
+
+def _embed_depth(r, rs, r_body):
+    """Sheet depth (px, negative = down) of one body at radius ``r``.
+
+    :func:`_embed_height` grows without bound with ``r``, so it is measured
+    DOWNWARD from ``ST_CURV_REACH_PX`` — the radius where we declare space flat
+    again — making each well local (0 at the reach) and finite.
+
+    ``ST_DEPTH_GAIN`` is 1.0: z and r are both lengths in the same px, so this
+    is plotted exactly to scale, no vertical exaggeration.
     """
     reach = ST_CURV_REACH_PX
     if rs <= 0.0 or r >= reach or rs >= reach:
         return 0.0
-    # Inside the horizon the embedding simply ends; clamp to the throat so the
-    # sheet has a flat floor rather than a NaN.
-    r = max(r, rs)
-    edge = 2.0 * math.sqrt(rs * (reach - rs))
-    here = 2.0 * math.sqrt(rs * (r - rs))
+    edge = _embed_height(reach, rs, r_body)
+    here = _embed_height(r, rs, r_body)
     return -ST_DEPTH_GAIN * (edge - here)
 
 
@@ -2654,6 +2687,8 @@ class Spacetime:
         # the new mode's default angle; any manual rotate cancels it.
         self.view_3d = ST_VIEW_3D_DEFAULT
         self._view_anim = False
+        # True while the camera is snapped to the exact top-down XY view.
+        self._at_top = False
 
         # Hands that are mid-rotate (or were, and have not released yet): they
         # must not place or grab anything until they re-pinch.
@@ -2692,14 +2727,44 @@ class Spacetime:
             on_click=self._toggle_view, font_scale=0.65,
         )
         self._view_btn.selected = ST_VIEW_3D_DEFAULT
-        self._preset_btn = Button(
+        # "Top" snaps to the exact XY plane seen from +z. The gesture can reach
+        # it (and now go past it), but an exhibit visitor should not have to
+        # earn a square-on view by holding a two-hand push — the one view people
+        # actually ask for gets a button. Pressing again returns to the
+        # three-quarter view.
+        self._top_btn = Button(
             x=x0 + (n + 1) * (bw + gap), y=y0, width=bw, height=bh,
+            label="Top", on_click=self._toggle_top, font_scale=0.65,
+        )
+        self._preset_btn = Button(
+            x=x0 + (n + 2) * (bw + gap), y=y0, width=bw, height=bh,
             label="Precess", on_click=self._preset_precession, font_scale=0.5,
         )
         self._clear_btn = Button(
-            x=x0 + (n + 2) * (bw + gap), y=y0, width=bw, height=bh,
+            x=x0 + (n + 3) * (bw + gap), y=y0, width=bw, height=bh,
             label="Clear", on_click=self.clear, font_scale=0.6,
         )
+
+    def _toggle_top(self):
+        """Snap the camera to the exact top-down XY view (+z looking down), or
+        back to the three-quarter view.
+
+        Snaps to the NEAREST equivalent of 90 deg rather than the literal value,
+        because pitch is unclamped and may have wound several turns — easing
+        from 810 deg down to 90 would spin the scene for seconds.
+        """
+        if self._at_top:
+            self._at_top = False
+            target = ST_PITCH_DEFAULT_RAD
+        else:
+            self._at_top = True
+            target = ST_PITCH_TOP_RAD
+        turns = round((self._pitch_t - target) / (2 * math.pi))
+        self._pitch_t = target + turns * 2 * math.pi
+        self._top_btn.selected = self._at_top
+        self._rot_base = (self._yaw_t, self._pitch_t, self._zoom_t)
+        self._rot_origin = None
+        self._view_anim = True
 
     def _toggle_view(self):
         """Switch between the 2D embedding sheet and the 3D volumetric lattice.
@@ -2715,8 +2780,12 @@ class Spacetime:
         # Ease to the new mode's home angle. The lattice reads best a little
         # flatter than the sheet: it is a box, and a steep angle collapses its
         # layers onto each other.
-        self._pitch_t = (math.radians(24.0) if self.view_3d
-                         else ST_PITCH_DEFAULT_RAD)
+        # Keep a square-on view square-on across a mode switch; otherwise ease
+        # to the mode's home angle (the lattice reads flatter — it is a box, and
+        # a steep angle collapses its layers onto each other).
+        if not self._at_top:
+            self._pitch_t = (math.radians(24.0) if self.view_3d
+                             else ST_PITCH_DEFAULT_RAD)
         self._rot_base = (self._yaw_t, self._pitch_t, self._zoom_t)
         self._rot_origin = None
         self._view_anim = True
@@ -2726,6 +2795,7 @@ class Spacetime:
         """(id, Button) list the UIManager updates / draws / serializes."""
         return ([(bid, btn) for bid, _kind, btn in self._type_btns]
                 + [("st.view", self._view_btn),
+                   ("st.top", self._top_btn),
                    ("st.preset.precess", self._preset_btn),
                    ("st.clear", self._clear_btn)])
 
@@ -2765,9 +2835,10 @@ class Spacetime:
     def _place_mass(self, x, y, kind=None):
         kind = self._kind if kind is None else kind
         spec = ST_MASS_TYPES[kind]
-        m = _Mass(self._next_id, x, y, spec["m"],
-                  ST_RS_PER_MASS * spec["m"], kind,
-                  min(spec.get("spin", 0.0), ST_SPIN_MAX))
+        rs = ST_RS_PER_MASS * spec["m"]
+        m = _Mass(self._next_id, x, y, spec["m"], rs, kind,
+                  min(spec.get("spin", 0.0), ST_SPIN_MAX),
+                  rs * spec.get("r_over_rs", 1.0))
         self._next_id += 1
         self.masses.append(m)
         if len(self.masses) > ST_MAX_MASSES:
@@ -2832,7 +2903,7 @@ class Spacetime:
         whose axis visibly walks around it (the Mercury effect)."""
         self.clear()
         cx, cy = self.w * 0.5, self.h * 0.5
-        self._place_mass(cx, cy, "star")
+        self._place_mass(cx, cy, "sun")
         self._place_orbiter(cx + 200, cy)
 
     def _mass_at(self, px, py):
@@ -2939,17 +3010,12 @@ class Spacetime:
             self._rot_base = (base_yaw, base_pitch, base_zoom)
 
         # Position: absolute offset from the grab origin. Up (negative dy)
-        # raises the elevation toward the top-down view.
+        # raises the elevation toward the top-down view — and keeps going: pitch
+        # is unclamped, so you can orbit over the top and under the sheet. No
+        # clamp folding is needed here any more precisely because nothing
+        # saturates.
         self._yaw_t = base_yaw + in_x * ST_CAM_YAW_POS_GAIN
-        self._pitch_t = _clamp(base_pitch - in_y * ST_CAM_PITCH_POS_GAIN,
-                               ST_PITCH_MIN_RAD, ST_PITCH_MAX_RAD)
-        # Pitch saturates, so fold the clamp back into the base — otherwise the
-        # rate term keeps integrating past the limit and the view sticks there
-        # for a while after the user pulls back.
-        self._rot_base = (self._rot_base[0],
-                          _clamp(self._rot_base[1], ST_PITCH_MIN_RAD,
-                                 ST_PITCH_MAX_RAD),
-                          self._rot_base[2])
+        self._pitch_t = base_pitch - in_y * ST_CAM_PITCH_POS_GAIN
 
         # Zoom: position control off the opening span, with a deadzone so the
         # hands' natural drift while yawing does not smuggle in a zoom.
@@ -2958,8 +3024,12 @@ class Spacetime:
             ratio -= math.copysign(ST_ZOOM_DEADZONE, ratio - 1.0)
             self._zoom_t = _clamp(base_zoom * ratio, ST_ZOOM_MIN, ST_ZOOM_MAX)
 
-        # Any manual camera work drops the snap-to-view animation.
+        # Any manual camera work drops the snap-to-view animation, and
+        # un-latches Top: the view is no longer square-on once you move it.
         self._view_anim = False
+        if self._at_top:
+            self._at_top = False
+            self._top_btn.selected = False
         self.rotating = True
 
     def _ease_camera(self):
@@ -3135,17 +3205,16 @@ class Spacetime:
     # ---- geometry (mirrored in web/src/overlay/scene.ts) ----------------
 
     def _depth(self, x, y):
-        """Sheet depth at a plane point: the summed wells of every mass, soft-
-        clamped by ST_MAX_DEPTH_PX (see the config note — the embedding is
-        vertical at the throat, so a to-scale funnel renders as a tangle).
+        """Sheet depth at a plane point: the summed wells of every body, to
+        scale (no exaggeration, no ceiling — see the config note).
 
-        DISPLAY only: :meth:`_accel` never calls this, so the compression
-        cannot leak into the orbits.
+        DISPLAY only: :meth:`_accel` never calls this, so nothing here can leak
+        into the orbits.
         """
         z = 0.0
         for m in self.masses:
-            z += _flamm_depth(math.hypot(x - m.x, y - m.y), m.rs)
-        return -ST_MAX_DEPTH_PX * math.tanh(-z / ST_MAX_DEPTH_PX)
+            z += _embed_depth(math.hypot(x - m.x, y - m.y), m.rs, m.r_body)
+        return z
 
     def _drag_frame(self, x, y):
         """Lense-Thirring frame dragging: swirl a plane point around every
@@ -3246,8 +3315,7 @@ class Spacetime:
             "rotating": self.rotating,
             "reach": ST_CURV_REACH_PX,
             "depth_gain": ST_DEPTH_GAIN,
-            "max_depth": ST_MAX_DEPTH_PX,
-            "grid": [ST_GRID_COLS, ST_GRID_ROWS, ST_LINE_SAMPLES,
+                        "grid": [ST_GRID_COLS, ST_GRID_ROWS, ST_LINE_SAMPLES,
                      ST_GRID_MARGIN],
             # 3D volumetric lattice mode.
             "view_3d": self.view_3d,
@@ -3284,6 +3352,7 @@ class Spacetime:
                 "spin": round(m.spin, 3),
                 "phase": round(m.phase, 3),
                 "r_horizon": round(m.r_horizon, 2),
+                "r_body": round(m.r_body, 2),
                 "r_ergo": round(m.r_ergo, 2),
             } for m in self.masses],
             "orbiters": [{
@@ -3345,7 +3414,7 @@ class Spacetime:
             sx, sy, _d = self._project(
                 m.x, m.y, 0.0 if self.view_3d else self._depth(m.x, m.y))
             rgb = ST_MASS_TYPES[m.kind]["rgb"]
-            rad = max(6, int(m.r_horizon))
+            rad = max(3, int(m.r_body))
             cv2.circle(frame, (int(sx), int(sy)), rad,
                        (rgb[2], rgb[1], rgb[0]), -1, cv2.LINE_AA)
             cv2.circle(frame, (int(sx), int(sy)), rad, (210, 210, 220), 1,

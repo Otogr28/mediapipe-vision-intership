@@ -2051,3 +2051,48 @@ including Spacetime in BOTH view modes. Run it before any scene change:
 
 Verified 9/9 locally AND on the Jetson's Python 3.10 (dry-run: scp'd the fix in,
 ran, restored, THEN pushed — verify on the target before shipping, not after).
+
+### 2026-07-15 (round 3) — the physics was wrong, and the camera had a needless cap
+
+Two user-reported problems, both real, both mine.
+
+**1. Every star was secretly a black hole.** I treated masses as POINT masses, so
+each got a full Flamm funnel down to its own rs. Real bodies have a SURFACE:
+outside it Flamm's paraboloid, inside it the interior Schwarzschild solution,
+which embeds as a SPHERICAL CAP of radius A = sqrt(R^3/rs) — a smooth bowl with
+NO throat — joining the paraboloid with a common tangent at R
+([Schwarzschild 1916b], [MTW 1973 Box 23.2]; verified numerically: both slopes
+= sqrt(rs/(R-rs)) to 6 dp). A hole has no surface, so its funnel runs to the
+horizon where dz/dr diverges and the sheet goes VERTICAL. That cliff — not
+depth — is what "black holes deform space much more" means. Worth being precise:
+Flamm depth ~ sqrt(M), so 4x mass is only 2x deeper, and by BIRKHOFF a 1 Msun
+star and a 1 Msun hole are geometrically IDENTICAL outside the star's surface.
+Compactness is the entire story.
+Also REMOVED the two things hiding it: ST_DEPTH_GAIN is now 1.0 (to scale) and
+the ST_MAX_DEPTH_PX tanh ceiling is gone. That ceiling was squashing a hole to
+189 px against a star's 82 px — a 2.3x difference standing in for bowl-vs-abyss.
+Its stated job (taming the "tangle" at the throat) was wrong-headed: the tangle
+is a vertical cliff rendered correctly, and now only holes have one.
+Palette is the canonical trio from the user's reference figure: Sun (R/rs = 20,
+STAGED — real is 2.4e5, at which the sheet is flat and true and useless),
+Neutron star (R/rs = 2.9, REAL), Hole (R/rs = 1). Measured depths 69 / 126 /
+247 px = 1 : 1.8 : 3.6, matching the figure's ordering.
+
+**2. The pitch cap was pointless.** User wants to orbit freely — 180 deg, under
+the sheet, anywhere. Pitch is now UNCLAMPED and accumulates like yaw (do NOT
+wrap it: the easing and state/interp.ts lerp both rely on continuity). The
+projection has no singularity at 90 or anywhere else; crossing over the top just
+shows the well's underside. Added a "Top" button that snaps to the exact XY
+view, because an exhibit visitor should not have to earn the one view everyone
+asks for by holding a two-hand push. It snaps to the NEAREST 90 deg + 2*pi*n, or
+a wound-up camera would spin for seconds getting there.
+
+### Verified
+- Tangency: interior slope == exterior slope == sqrt(rs/(R-rs)) to 6 dp for both
+  Sun and Neutron. No crease in the sheet.
+- Throat: slope at the body's own surface = 0.23 (Sun, cap) / 0.73 (Neutron,
+  cap) / 157 (Hole, cliff).
+- Mukhopadhyay still collapses to PW at a=0 (<1e-12), so the 47 deg/lap
+  precession is untouched by all of this.
+- tests/smoke_scenes.py now ASSERTS the tangency, the depth ordering
+  (hole > 3x sun), the PW limit, and that no pitch clamp has crept back. 9/9.
