@@ -1656,3 +1656,192 @@ healthy the whole time (`WantRunning:true`, service enabled+active).
   shell that has no tty, pipe the sudo password to `sudo -S -p ''` instead
   (password is in gitignored SECRETS.local.md, line 5).
 - The whole thing is uncommitted along with the prior update's changes.
+
+## Update - 2026-07-15 01:05 - [Claude (Opus 4.8)] — Waves: fixed the divergence + visibility
+
+User report: waves too faint, and "with 5 sources, after a while the screen
+saturates". Both fixed; the second was a real bug, not a tuning issue.
+
+### THE BUG: the field diverged to ~1e32 in 5 s (even with ONE source)
+The leapfrog update `u_next = (2-d)u - (1-d)u_prev + s^2*lap` assumes a
+**CONSTANT dt** — `u_prev` lives at `t - dt`. Both renderers were deriving the
+sub-step from the frame's LEFTOVER time (numpy: `dt = min(dt_max, remainder)`,
+shader: `dt = advance/n`), so the last step of every frame used a different dt,
+the time levels mismatched, and it pumped energy every frame. Measured: max|u|
+0.05 → 1706 (1 s) → 4e32 (5 s), then NaN. More sources just start from a higher
+amplitude, which is why 5 made it obvious. (Side effect: the NaN/inf field also
+made the numpy path ~40% SLOWER — denormal math.)
+
+**Fix:** both paths now bank time and step in whole `WAVE_PHYS_DT` (1/240 s)
+chunks, leaving the sub-chunk remainder banked — exactly the fixed-timestep
+discipline `Orbitals` already uses with `ORB_PHYS_DT`. Never derive a sub-step
+from a frame remainder in a leapfrog. Verified stable: 1/5/6 sources, 60–180 s,
+max|u| 0.52/1.19/1.15, all finite, no drift.
+
+### Visibility + readability (measurement-driven)
+- Display alpha is now `MAX_ALPHA * tanh(|u| * GAIN)` (`WAVE_DISPLAY_*`,
+  mirrored in `waves_render.frag.glsl`) instead of a linear ramp. The field's
+  amplitude scales with source count (max|u| ~0.5 at one, ~1.2 at six), so a
+  ramp bright enough for one whites out at six; tanh is steep near zero and
+  saturates. One curve serves both ends.
+- `WAVE_DECAY_TAU_S` 1.6 → 0.9 s. The decay LENGTH is c*tau; at 1.6 s that's
+  544 px against a 1280 px frame, so sources washed the whole screen. Swept it:
+  at 2 sources, 1.6 → 0.8 s cuts far-field rms 54% while costing the
+  interference zone only 15% (contrast 1.2x → 2.2x). 0.9 s keeps reach for
+  interference while the far field stays calm.
+- **REJECTED — don't redo:** an absorbing "beach" border (sponge layer). It's
+  what real ripple tanks use, but measured only ~16% far-field change here,
+  because with this damping reflections already return at ~10%. The screen fill
+  was direct radiation, not reflections. Reverted; kept the simpler code.
+
+### Verified
+Headless (no camera): numpy field bounded 60–180 s at 1/5/6 sources; cv2
+fallback 7.6–7.9 ms/frame at 720p; `npm run build` (tsc) clean; isort clean;
+web shots via the mock at 2 and 5 sources — 5 sources at 30 s no longer whites
+out and the background reads through, 2 sources shows textbook two-slit fringes.
+`web/scripts/mock_backend.py waves` gained a `MOCK_WAVE_N=<1..5>` env knob to
+reproduce the 5-source case headless.
+
+## Update - 2026-07-15 01:40 - [Claude (Opus 4.8)] — Waves: one source rendered as TWO (vertical mirror) — FIXED
+
+User report: "cada que pongo un origen se mirrorea" — placing ONE source showed
+two wave centres. Real bug, WebGL path only.
+
+### Cause: mixed y-origin conventions in the field shader
+`waves_step.frag` indexed the field with `ivec2(v_uv * u_sim)`, but a fragment
+WRITES to the texel at `gl_FragCoord`. The shared `fullscreen.vert` makes v_uv
+**top-left origin** while `gl_FragCoord.y` is **bottom-origin**, so every step
+read row 0 and wrote row simH-1 — flipping the field each step and injecting
+each source at its MIRRORED row. One source therefore radiated from (x, y) and
+(x, H-y). It also doubled the field's energy, which fed the earlier
+"everything is washed out" impression.
+
+**Fix (3 places, must stay in agreement):**
+1. `waves_step.frag`: index by `gl_FragCoord.xy` (the texel being written) —
+   read and write the same cell. It no longer reads v_uv at all.
+2. `WavesLayer.tsx`: source y is converted frame(y-down) -> texel(y-up):
+   `simH - s.y / GRID_PX`.
+3. `waves_render.frag`: samples `vec2(v_uv.x, 1.0 - v_uv.y)` since v_uv is
+   top-origin and the texture is now bottom-origin.
+
+The numpy/cv2 fallback never had this (its array rows are y-down throughout);
+verified by measurement: energy near the source row is 5.6x the mirror row.
+
+### Verified (headless, mock)
+Single source at an asymmetric (460, 400): ONE wave centre, exactly on the
+marker, clean circular rings (was: a second centre at y~320, the mirror).
+2 sources: two clean centres + real interference. 5 sources at 30 s: five
+centres on their markers, no phantoms, background still readable.
+NOTE: the "textbook two-slit fringes" in the previous update's 2-source shot
+were partly an artifact of the phantom sources — the current pattern is the
+physically correct one.
+
+### Deployed
+`deploy/hall-app/deploy.sh` + `systemctl --user restart hallkiosk` on yahboom.
+
+### Lesson for any future ping-pong / FDTD shader here
+`fullscreen.vert`'s v_uv is TOP-LEFT origin (it exists to match OpenCV pixel
+coords for the black hole). Framebuffer writes are BOTTOM-origin. Never mix the
+two in a read-modify-write pass — index by gl_FragCoord and convert inputs.
+
+## Update - 2026-07-15 02:20 - [Claude (Opus 4.8)] — new experiment: Charges (electrostatics)
+
+User picked this from a shortlist (I had flagged it as the one most at risk of
+feeling like an Orbitals re-skin — so the work went into making it not that).
+
+### Three decisions that keep it distinct from Orbitals
+1. **Charges are STATIC** — they do not accelerate each other. Deliberate: an
+   inverse-square attraction with no orbital velocity just slams a +/- pair
+   together, which IS Orbitals. Real exhibits pin the charges because the FIELD
+   is the subject. The user drags them and the field re-solves.
+2. **The field is the star**, not the particles: field LINES + EQUIPOTENTIAL
+   bands, vs Orbitals' glowing bodies + trails. Completely different visual.
+3. **No time integration at all** — V = k*sum(q/r) is analytic, evaluated per
+   pixel in ONE stateless shader pass (no ping-pong, no dt, no CFL). Cheapest
+   experiment on the GPU, and structurally immune to the dt-divergence and
+   framebuffer-orientation bugs that bit Waves.
+
+### Shape
+- `Charges` in `ui/interactables.py` owns only the charge list (place / drag /
+  palette / Dipole preset / Clear). `CHG_*` in `config.py`. Picker button
+  `exp.charges` in `ui/manager.py`. Gesture is identical to Waves (pinch empty
+  = place, pinch a charge = drag), so muscle memory carries.
+- State: `"charges"` object (k, soften, equipot_step, lines_per_q, charges[]) —
+  ~8 charges, tiny. `types.ts` + `interp.ts` mirror it.
+- Render: `web/src/gl/charges.frag.glsl` + `ChargesLayer.tsx` (diverging V tint
+  + equipotential bands, fwidth-antialiased so bands stay ~1px). Field LINES are
+  traced in JS in `overlay/scene.ts` (RK2 streamlines, + -> -), **memoised on a
+  charge-position signature** — tracing is ~1M ops/frame worst case (8 x 2q) and
+  the lines only change when a charge moves, so a static scene costs nothing.
+  cv2 fallback does both in numpy (~12 ms/frame at 720p).
+
+### Verified (headless, no camera)
+Physics: inverse-square ratio |E(100)|/|E(200)| = **3.91** — and that is not
+error, it's exactly what the 14 px softening predicts ((40196/10196)^1.5*0.5 =
+3.914). Dipole midpoint E points + -> -. Two like charges give an **exact** null
+point (0.00e+00 vs 2.12e+01 off-centre). Line density: q -> 12 lines, 2q -> 24.
+Contract/palette/cap/clear all asserted. `npm run build` (tsc) + isort clean.
+Web shot via the new `mock_backend.py charges` scene. **Deployed + verified
+on-device** (Jetson py3.10 + vendor opencv): dipole E=(6.2, 0.0), 12 lines,
+state count=2, no import errors.
+
+## Update - 2026-07-15 03:55 - [Claude (Opus 4.8)] — kiosk lockdown: no notifications + always on top
+
+User: "hace q no aparezca notificacion de ningun tipo, q siempre el hallmediapipe
+este encima de todo".
+
+### New: `deploy/hall-app/kiosk-lockdown.sh` (run once, `sudo`, idempotent)
+Silences every popup source that was actually LIVE on the board (I checked
+rather than guessed):
+- GNOME banners `show-banners=true` -> false. NOTE: the per-plugin
+  `org.gnome.settings-daemon.plugins.*.active` keys were REMOVED in GNOME 42
+  (they read `n/a` here), so the global `show-banners` is the only lever —
+  don't waste time trying to disable gsd-housekeeping/print-notifications
+  individually.
+- **apport was `enabled=1`** -> 0 + service disabled (crash dialogs could cover
+  the exhibit).
+- update-notifier `no-show-notifications` -> true; update-notifier +
+  gnome-software autostart masked via `~/.config/autostart` Hidden=true.
+- **`idle-dim` was true** -> false (the screen was dimming itself on idle).
+  idle-delay 0 / lock disabled were already fine.
+- Strict `/etc/firefox/policies/policies.json`: blocks Notifications/Location
+  permission prompts, WhatsNew/onboarding/recommendation messaging, Pocket,
+  download prompts. (Kept the existing keys, added to them.)
+- Installs `wmctrl` (available in the standard jammy arm64 repo; 1 package).
+
+### Always on top — in `hallkiosk` (it owns the browser lifecycle)
+`--kiosk` is fullscreen but NOT above. Now the browser window gets
+`_NET_WM_STATE_ABOVE` + fullscreen, with a 3 s loop that re-asserts it and
+re-activates ONLY when something else holds focus (so it can't flicker/fight).
+Session is **X11** (`WaylandEnable=false` in /etc/gdm3/custom.conf) so wmctrl
+works; on Wayland it's a silent no-op and the kiosk still runs fullscreen.
+
+### Verified on-device (not just "the script ran")
+`_NET_WM_STATE = FULLSCREEN, ABOVE, FOCUSED` on the real window; launched
+gnome-calculator as an intruder and read `_NET_CLIENT_LIST_STACKING` — firefox
+stayed TOPMOST and kept focus. That test also surfaced a **stale
+`update-manager` window already open** on the desktop (very likely part of what
+the user was seeing) — killed it; only the kiosk + GNOME's own `gjs` layer
+remain.
+
+### ⚠ DEPLOY-PATH GOTCHA (cost me a wrong assumption; fix or remember)
+`hallkiosk.service` runs `~/HalLMediaPipe/deploy/hall-app/hallkiosk` (the git
+checkout copy), but `deploy/hall-app/deploy.sh` only `scp`s the launcher to the
+REPO ROOT `~/HalLMediaPipe/hallkiosk` (which is what `~/.local/bin/hallkiosk`
+symlinks to). So a launcher change deployed via deploy.sh takes effect for a
+MANUAL `hallkiosk` run but NOT for the systemd service. I scp'd to both paths
+for now. Proper fix: either point the unit at the root copy, or have deploy.sh
+also write deploy/hall-app/ — or just commit+push (see below), which is the
+intended path.
+
+### ⚠⚠ EVERYTHING THIS SESSION IS UNCOMMITTED — and `hall-update.sh` will WIPE it
+The Jetson's `~/HalLMediaPipe` IS a git checkout and `hall-update.timer` fires
+`hall-update.sh` every 60 s, which does `git fetch origin main` and, **when
+origin/main has a new commit**, `git reset --hard origin/main`. It has not
+fired only because nothing has been pushed. The moment ANYONE pushes to main,
+the checkout hard-resets and every rsync'd uncommitted change on the device
+(GPU-hand ROI tracking, Waves + its two fixes, Charges, the hallkiosk
+always-on-top) is ERASED, reverting the exhibit to c8e65a1. The rsync deploys
+used all session are a dev shortcut; the intended flow is commit+push -> the
+device pulls within 60 s (web/dist is committed, so no build runs on-device).
+**Recommend committing + pushing the session's work.**

@@ -99,6 +99,53 @@ else
 fi
 BROWSER_PID=$!
 
+# --- keep the exhibit on top ------------------------------------------------
+# --kiosk is fullscreen but NOT always-on-top: anything that grabs the stack
+# (a stray dialog, an app launched over SSH, a notification the lockdown
+# missed) would sit over the exhibit until someone noticed. Setting the
+# _NET_WM_STATE_ABOVE property makes the window manager keep it above; the
+# property is sticky, so the loop is only a safety net for a window that gets
+# recreated, and it re-activates ONLY when something else took focus (so it
+# never fights the browser or flickers).
+#
+# Needs wmctrl (deploy/hall-app/kiosk-lockdown.sh installs it) and an X11
+# session — GDM here has WaylandEnable=false. On Wayland this is a silent
+# no-op and the kiosk still runs fullscreen; nothing breaks.
+keep_on_top() {
+  command -v wmctrl >/dev/null 2>&1 || {
+    echo "hallkiosk: wmctrl not installed — skipping always-on-top" \
+         "(run deploy/hall-app/kiosk-lockdown.sh)" >&2
+    return
+  }
+  local first=1
+  while sleep 3; do
+    kill -0 "$BROWSER_PID" 2>/dev/null || return
+    # Browser windows, by WM class (Firefox spawns helper processes, so
+    # matching the class is more reliable than matching the launcher's pid).
+    local wids
+    wids="$(wmctrl -l -x 2>/dev/null \
+            | awk 'tolower($3) ~ /firefox|chromium|chrome/ {print $1}')"
+    [ -n "$wids" ] || continue
+    local active
+    active="$(xprop -root _NET_ACTIVE_WINDOW 2>/dev/null \
+              | grep -o '0x[0-9a-f]*' | head -1)"
+    local w norm is_active=0
+    for w in $wids; do
+      wmctrl -i -r "$w" -b add,above,fullscreen 2>/dev/null
+      # xprop prints 0x5000003, wmctrl 0x05000003 — compare as numbers.
+      norm="$(printf '0x%x' "$w" 2>/dev/null)"
+      [ "$norm" = "$active" ] && is_active=1
+    done
+    if [ "$is_active" -eq 0 ] || [ "$first" -eq 1 ]; then
+      wmctrl -i -a "$(echo "$wids" | head -1)" 2>/dev/null
+      first=0
+    fi
+  done
+}
+keep_on_top &
+ON_TOP_PID=$!
+trap 'kill "$BACKEND_PID" "${BROWSER_PID:-}" "${ON_TOP_PID:-}" 2>/dev/null; pkill -f "python3 -u src/main\.py" 2>/dev/null || true' EXIT INT TERM
+
 # Live only as long as BOTH halves live: if either the backend (e.g. the
 # camera-stall self-exit in main.py) or the browser dies, exit non-zero so
 # systemd (Restart=always) brings the whole pair back in seconds.

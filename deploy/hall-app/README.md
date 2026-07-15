@@ -104,6 +104,36 @@ API and running the models via TensorRT or `onnxruntime-gpu` (both already on
 the device) — that's the "make it extra-compatible" follow-up, tracked
 separately.
 
+## Exhibit lockdown (no notifications, always on top)
+
+`kiosk-lockdown.sh` prepares the desktop for unattended exhibit duty. Run it
+ONCE on the Jetson (re-run after an OS upgrade re-enables something):
+
+```bash
+sudo deploy/hall-app/kiosk-lockdown.sh
+```
+
+It silences every popup source found live on this board — GNOME notification
+banners (`show-banners false`; note the per-plugin `gsd-*.active` keys were
+REMOVED in GNOME 42, so this global lever is the only way), apport crash
+dialogs, update-notifier / gnome-software nags (autostart masked), screen
+dimming (`idle-dim`) — writes a strict `/etc/firefox/policies/policies.json`
+(blocks notification/location permission prompts, update + onboarding pages),
+and installs `wmctrl`.
+
+The always-on-top half lives in `hallkiosk`: once the browser window appears it
+gets `_NET_WM_STATE_ABOVE` + fullscreen, and a background loop re-asserts it
+(and re-focuses only when something else stole focus). Needs X11 — GDM here has
+`WaylandEnable=false`. On Wayland it degrades to a silent no-op.
+
+Verify:
+
+```bash
+DISPLAY=:0 xprop -id "$(wmctrl -l -x | awk '/firefox/{print $1}')" _NET_WM_STATE
+#   -> _NET_WM_STATE_FULLSCREEN, _NET_WM_STATE_ABOVE, _NET_WM_STATE_FOCUSED
+DISPLAY=:0 xprop -root _NET_CLIENT_LIST_STACKING   # firefox must be LAST (topmost)
+```
+
 ## Notes
 
 - Deploys to `~/HalLMediaPipe` on the Jetson; launcher symlinked into
