@@ -507,9 +507,45 @@ function fieldAt(
 const LINE_STEP_PX = 6;
 const LINE_MAX_STEPS = 320;
 
-function fieldLines(o: ChargesObject, w: number, h: number): Vec2[][] {
-  const lines: Vec2[][] = [];
-  if (!o.charges.length) return lines;
+// Flowing arrowheads. They ride the SAME traced polylines (the geometry is
+// untouched) and just march along them, so they show which way the field
+// points: out of + charges, into - ones.
+//
+// Arc length is exactly `index * LINE_STEP_PX` because the tracer steps a
+// fixed distance, so an arrow's vertex index is an O(1) divide — no search.
+const ARROW_SPACING_PX = 46; // arc length between arrows on one line
+const ARROW_SPEED_PX_S = 34; // how fast they crawl along it
+const ARROW_LEN_PX = 9;
+/**
+ * |E| that maps to a full-strength arrow. Arrow size/alpha come from the
+ * LOCAL |E|, which is what makes cancellation visible for free: at a null
+ * point between like charges |E| is exactly 0, so the arrows there shrink to
+ * nothing on their own — no special case. Far field (weak) fades too, which
+ * keeps the picture clean. ~3 puts a unit charge's arrows at full strength
+ * about 150 px out.
+ */
+const ARROW_E_REF = 3.0;
+
+/** One traced field line: the polyline plus |E| sampled at each vertex. */
+interface FieldLine {
+  pts: Vec2[];
+  /** |E| at each vertex, parallel to `pts` — drives arrow size/alpha. */
+  e: number[];
+}
+
+interface FieldLines {
+  lines: FieldLine[];
+  /**
+   * +1 when the polylines were traced ALONG E (seeded on + charges, the
+   * normal case), -1 when traced against it (negatives-only fallback). The
+   * arrows point this way, so they always fly along the real field.
+   */
+  dir: number;
+}
+
+function fieldLines(o: ChargesObject, w: number, h: number): FieldLines {
+  const lines: FieldLine[] = [];
+  if (!o.charges.length) return { lines, dir: 1 };
   const hasNeg = o.charges.some((c) => c.q < 0);
   // Lines run + -> -, so seed on the positives. With no positive charge in
   // the scene, seed the negatives and walk backwards along E instead of
@@ -529,9 +565,11 @@ function fieldLines(o: ChargesObject, w: number, h: number): Vec2[][] {
       let x = c.x + Math.cos(a) * o.soften;
       let y = c.y + Math.sin(a) * o.soften;
       const pts: Vec2[] = [[x, y]];
+      const e: number[] = [];
       for (let s = 0; s < LINE_MAX_STEPS; s++) {
         const [ex, ey] = fieldAt(o, x, y);
         const m = Math.hypot(ex, ey);
+        e.push(m); // |E| at THIS vertex — free, we already computed it
         if (m < 1e-9) break;
         // RK2 (midpoint) on the unit field direction.
         const mx = x + (dir * (ex / m) * LINE_STEP_PX) / 2;
@@ -553,10 +591,60 @@ function fieldLines(o: ChargesObject, w: number, h: number): Vec2[][] {
           break;
         }
       }
-      if (pts.length > 1) lines.push(pts);
+      // `e` lags `pts` by the final vertex (the loop breaks before sampling
+      // it); repeat the last value so the two stay index-aligned.
+      while (e.length < pts.length) e.push(e[e.length - 1] ?? 0);
+      if (pts.length > 1) lines.push({ pts, e });
     }
   }
-  return lines;
+  return { lines, dir };
+}
+
+/**
+ * Draw the arrowheads riding one line at the current phase. Arc length is
+ * `index * LINE_STEP_PX`, so the vertex under an arrow is a divide, not a
+ * search — this stays cheap even with a couple of hundred lines.
+ */
+function drawFlowArrows(
+  ctx: CanvasRenderingContext2D,
+  line: FieldLine,
+  dir: number,
+  phase: number,
+) {
+  const { pts, e } = line;
+  const len = (pts.length - 1) * LINE_STEP_PX;
+  for (let s = phase; s < len; s += ARROW_SPACING_PX) {
+    const idx = s / LINE_STEP_PX;
+    const i = Math.floor(idx);
+    if (i < 0 || i + 1 >= pts.length) continue;
+    const f = idx - i;
+    const [x0, y0] = pts[i];
+    const [x1, y1] = pts[i + 1];
+    const px = x0 + (x1 - x0) * f;
+    const py = y0 + (y1 - y0) * f;
+    // Tangent, flipped to the true field direction for negative-seeded lines.
+    let tx = (x1 - x0) * dir;
+    let ty = (y1 - y0) * dir;
+    const tm = Math.hypot(tx, ty);
+    if (tm < 1e-6) continue;
+    tx /= tm;
+    ty /= tm;
+    // Strength from the LOCAL |E|: arrows vanish where the field cancels.
+    const strength = Math.tanh((e[i] ?? 0) / ARROW_E_REF);
+    if (strength < 0.04) continue;
+    const L = ARROW_LEN_PX * (0.45 + 0.55 * strength);
+    const W = L * 0.52;
+    const nx = -ty;
+    const ny = tx;
+    ctx.globalAlpha = strength;
+    ctx.beginPath();
+    ctx.moveTo(px + tx * L * 0.5, py + ty * L * 0.5); // tip
+    ctx.lineTo(px - tx * L * 0.5 + nx * W * 0.5, py - ty * L * 0.5 + ny * W * 0.5);
+    ctx.lineTo(px - tx * L * 0.5 - nx * W * 0.5, py - ty * L * 0.5 - ny * W * 0.5);
+    ctx.closePath();
+    ctx.fill();
+  }
+  ctx.globalAlpha = 1;
 }
 
 // Tracing is O(lines x steps x charges) — up to ~1M ops/frame with eight 2q
@@ -564,10 +652,10 @@ function fieldLines(o: ChargesObject, w: number, h: number): Vec2[][] {
 // when a charge MOVES, and the common case is a static scene the user is
 // looking at, so memoise on a signature of the charge list: dragging retraces,
 // standing still is free.
-let linesCache: Vec2[][] = [];
+let linesCache: FieldLines = { lines: [], dir: 1 };
 let linesKey = "";
 
-function cachedFieldLines(o: ChargesObject, w: number, h: number): Vec2[][] {
+function cachedFieldLines(o: ChargesObject, w: number, h: number): FieldLines {
   const key = o.charges
     .map((c) => `${c.id}:${c.x.toFixed(1)}:${c.y.toFixed(1)}:${c.q}`)
     .join("|");
@@ -578,18 +666,30 @@ function cachedFieldLines(o: ChargesObject, w: number, h: number): Vec2[][] {
   return linesCache;
 }
 
-function drawCharges(ctx: CanvasRenderingContext2D, o: ChargesObject) {
+function drawCharges(
+  ctx: CanvasRenderingContext2D,
+  o: ChargesObject,
+  now: number,
+) {
   const w = ctx.canvas.width;
   const h = ctx.canvas.height;
+  const { lines, dir } = cachedFieldLines(o, w, h);
 
-  ctx.strokeStyle = "rgba(255,255,255,0.62)";
+  // The arrows march on a frontend-local clock: the flow is pure decoration
+  // (the physics is static), so the backend has nothing to say about it.
+  const phase = ((now / 1000) * ARROW_SPEED_PX_S) % ARROW_SPACING_PX;
+
+  ctx.strokeStyle = "rgba(255,255,255,0.42)";
   ctx.lineWidth = 1.25;
-  for (const pts of cachedFieldLines(o, w, h)) {
+  for (const { pts } of lines) {
     ctx.beginPath();
     ctx.moveTo(pts[0][0], pts[0][1]);
     for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i][0], pts[i][1]);
     ctx.stroke();
   }
+
+  ctx.fillStyle = "rgba(255,255,255,0.95)";
+  for (const line of lines) drawFlowArrows(ctx, line, dir, phase);
 
   for (const c of o.charges) {
     const r = 13 + 5 * (Math.abs(c.q) - 1);
@@ -678,7 +778,7 @@ export function drawScene(
         drawWaves(ctx, obj, _now);
         break;
       case "charges":
-        drawCharges(ctx, obj);
+        drawCharges(ctx, obj, _now);
         break;
       case "vtuber":
         drawPuppet(ctx, state, _now);

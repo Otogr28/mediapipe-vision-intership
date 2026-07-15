@@ -21,6 +21,13 @@
   trick as the Orbitals trails; the backend ships only ~8 charges. cv2
   window/stream fallback does both in numpy. Code: `Charges` in
   `ui/interactables.py`, `CHG_*` in `config.py`.
+  - *2026-07-15:* the lines are ANIMATED — arrowheads march along the same
+    traced polylines (geometry untouched), out of + charges and into - ones.
+    Each arrow's size/opacity comes from the LOCAL |E|, so cancellation shows
+    for free: at the null point between like charges |E| is exactly 0 and the
+    arrows there vanish on their own, no special case. The flow is pure
+    decoration so it runs on the renderer's own clock — no state contract
+    change. Both renderers do it (`CHG_ARROW_*`).
 
 - [x] **Waves — interactive ripple tank** — SHIPPED 2026-07-14. Experiments →
   "Waves". Pinch on empty water drops an oscillating point source (palette

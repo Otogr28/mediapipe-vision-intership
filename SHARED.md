@@ -1845,3 +1845,41 @@ always-on-top) is ERASED, reverting the exhibit to c8e65a1. The rsync deploys
 used all session are a dev shortcut; the intended flow is commit+push -> the
 device pulls within 60 s (web/dist is committed, so no build runs on-device).
 **Recommend committing + pushing the session's work.**
+
+## Update - 2026-07-15 12:20 - [Claude (Opus 4.8)] — Charges: animated flow arrows
+
+User: "me gustaria q las lineas fueran animadas como flechitas saliendo o
+entrando, conservando la misma logica de las lineas, y obvio en algunos lados
+se cancelan".
+
+- Arrowheads now march along the SAME traced polylines — the tracing logic is
+  untouched, as asked. Direction follows the field (out of +, into -); the
+  negatives-only fallback traces against E, so `_field_lines` now also returns
+  `dir` and the arrows flip with it.
+- **Cancellation is emergent, not special-cased:** each arrow's size + opacity
+  is `tanh(|E|_local / CHG_ARROW_E_REF)`. At the null point between like
+  charges |E| is exactly 0 (measured 0.00e+00), so those arrows shrink to
+  nothing by themselves; the far field fades too, which keeps the picture
+  clean. |E| per vertex is recorded during tracing — free, the tracer already
+  computed it — and cached with the lines.
+- O(1) arrow placement: the tracer steps a FIXED CHG_LINE_STEP_PX, so arc
+  length is exactly `index * step` and the vertex under an arrow is a divide,
+  not a search. Cost stays ~2x the stroke, and the line memo is unchanged.
+- The flow runs on the RENDERER's own clock (browser `performance.now()`, cv2
+  `time.monotonic()`): it is pure decoration over a static field, so nothing
+  was added to the state contract. Python stays authoritative for logic only.
+- Also fixed a wart in my own earlier Charges code: the cv2 fallback's
+  equipotential bands used a hard threshold at grid resolution and rendered as
+  chunky slabs. Now normalised by the local gradient (the numpy equivalent of
+  the shader's fwidth), so a band stays ~1 cell wide — the dipole's V=0
+  bisector is a crisp line instead of a slab. Fallback also got faster:
+  12.4 -> 7.3 ms/frame at 720p.
+
+### Verified
+Animation proven by DIFFING two frames, not by eyeballing: web shots 0.7 s
+apart show 13.3% of pixels changed in the box around the mock's STATIC +q — a
+charge that cannot move, so only the arrow flow can account for it. cv2 same
+test, isolated to `Charges.draw` (drawing the whole UI contaminated it at 51%
+— the intro/hint overlays animate too): 0.87% changed over 0.7 s vs 0.128%
+with no time gap, confirming the tint is static and only the arrows move.
+Line density still encodes |q| (q -> 12 lines, 2q -> 24); dipole E unchanged.

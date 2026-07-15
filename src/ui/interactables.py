@@ -9,18 +9,20 @@ import numpy as np
 from config import (BH_DEFAULT_POS_FACTOR, BH_DISK_BRIGHTNESS,
                     BH_DISK_INNER_FACTOR, BH_DISK_OUTER_FACTOR,
                     BH_DISK_ROTATION_SPEED, BH_DISK_TILT_RAD,
-                    BH_EINSTEIN_RADIUS_PX, BH_GRAB_RADIUS, CHG_DEFAULT_KIND,
-                    CHG_EQUIPOT_STEP, CHG_GRAB_PAD_PX, CHG_GRID_PX, CHG_K,
-                    CHG_LINE_MAX_STEPS, CHG_LINE_STEP_PX, CHG_LINES_PER_Q,
-                    CHG_MAX, CHG_SOFTEN_PX, CHG_TYPES, ORB_BODY_TYPES,
-                    ORB_COLLISION_SLOP, ORB_DEFAULT_KIND, ORB_FLASH_DECAY,
-                    ORB_FRAG_COUNT, ORB_FRAG_LR_FRACTION, ORB_FRAG_MIN_MASS,
-                    ORB_FRAG_SPEED, ORB_FRAG_VESC_FACTOR, ORB_FRAME_DT, ORB_G,
-                    ORB_GRAB_PAD_PX, ORB_LAUNCH_GAIN, ORB_MAX_BODIES,
-                    ORB_MAX_PULL_PX, ORB_MAX_SUBSTEPS, ORB_PHYS_DT,
-                    ORB_PREDICT_SAMPLE, ORB_PREDICT_TIME_S, ORB_PRUNE_MARGIN,
-                    ORB_RESTITUTION, ORB_SOFTENING_PX, ORB_TIME_SCALES,
-                    ORB_TRAIL_LEN, PUPPET_IDLE_BOB_S, SIXSEVEN_FLASH_FRAMES,
+                    BH_EINSTEIN_RADIUS_PX, BH_GRAB_RADIUS, CHG_ARROW_E_REF,
+                    CHG_ARROW_LEN_PX, CHG_ARROW_SPACING_PX,
+                    CHG_ARROW_SPEED_PX_S, CHG_DEFAULT_KIND, CHG_EQUIPOT_STEP,
+                    CHG_GRAB_PAD_PX, CHG_GRID_PX, CHG_K, CHG_LINE_MAX_STEPS,
+                    CHG_LINE_STEP_PX, CHG_LINES_PER_Q, CHG_MAX, CHG_SOFTEN_PX,
+                    CHG_TYPES, ORB_BODY_TYPES, ORB_COLLISION_SLOP,
+                    ORB_DEFAULT_KIND, ORB_FLASH_DECAY, ORB_FRAG_COUNT,
+                    ORB_FRAG_LR_FRACTION, ORB_FRAG_MIN_MASS, ORB_FRAG_SPEED,
+                    ORB_FRAG_VESC_FACTOR, ORB_FRAME_DT, ORB_G, ORB_GRAB_PAD_PX,
+                    ORB_LAUNCH_GAIN, ORB_MAX_BODIES, ORB_MAX_PULL_PX,
+                    ORB_MAX_SUBSTEPS, ORB_PHYS_DT, ORB_PREDICT_SAMPLE,
+                    ORB_PREDICT_TIME_S, ORB_PRUNE_MARGIN, ORB_RESTITUTION,
+                    ORB_SOFTENING_PX, ORB_TIME_SCALES, ORB_TRAIL_LEN,
+                    PUPPET_IDLE_BOB_S, SIXSEVEN_FLASH_FRAMES,
                     SIXSEVEN_HYSTERESIS, SIXSEVEN_MIN_VISIBILITY, WAVE_AMP,
                     WAVE_DECAY_TAU_S, WAVE_DEFAULT_KIND, WAVE_DISPLAY_GAIN,
                     WAVE_DISPLAY_MAX_ALPHA, WAVE_FRAME_DT, WAVE_GRAB_PAD_PX,
@@ -2259,10 +2261,17 @@ class Charges:
         """Streamlines from every positive charge, integrated along E-hat
         (RK2) until they hit a negative charge or leave the frame. Positive
         charges are the sources, so lines run + -> -, and a 2q charge starts
-        twice as many: line density IS the charge magnitude."""
+        twice as many: line density IS the charge magnitude.
+
+        Returns ``(lines, dir)`` where each line is ``(pts, e_mags)`` — |E|
+        sampled at every vertex (free: the tracer already computed it) so the
+        flow arrows can size themselves by the LOCAL field. ``dir`` is +1 when
+        the polylines run along E and -1 for the negatives-only fallback, so
+        the arrows always fly the way the field actually points.
+        """
         lines = []
         if not self.charges:
-            return lines
+            return lines, 1
         has_neg = any(c.q < 0 for c in self.charges)
         # With no positive charge present, seed on the negatives and walk
         # BACKWARDS along E so the picture isn't empty.
@@ -2278,9 +2287,11 @@ class Charges:
                 x = c.x + math.cos(a) * CHG_SOFTEN_PX
                 y = c.y + math.sin(a) * CHG_SOFTEN_PX
                 pts = [(x, y)]
+                emags = []
                 for _ in range(CHG_LINE_MAX_STEPS):
                     ex, ey = self.field_at(x, y)
                     m = math.hypot(ex, ey)
+                    emags.append(m)
                     if m < 1e-9:
                         break
                     # RK2 (midpoint) on the unit field direction.
@@ -2300,11 +2311,54 @@ class Charges:
                             c2.q < 0 and math.hypot(x - c2.x, y - c2.y)
                             < CHG_SOFTEN_PX * 1.2 for c2 in self.charges):
                         break
+                # `emags` lags `pts` by the final vertex; repeat the last so
+                # the two stay index-aligned.
+                while len(emags) < len(pts):
+                    emags.append(emags[-1] if emags else 0.0)
                 if len(pts) > 1:
-                    lines.append(pts)
-        return lines
+                    lines.append((pts, emags))
+        return lines, direction
 
     # ---- cv2 drawing (window / stream fallback) ------------------------
+
+    def _draw_flow_arrows(self, frame, pts, emags, direction, phase):
+        """Arrowheads riding one line at the current phase. Arc length is
+        exactly ``index * CHG_LINE_STEP_PX`` (fixed tracer step), so the vertex
+        under an arrow is a divide, not a search."""
+        total = (len(pts) - 1) * CHG_LINE_STEP_PX
+        s = phase
+        while s < total:
+            idx = s / CHG_LINE_STEP_PX
+            i = int(idx)
+            s += CHG_ARROW_SPACING_PX
+            if i < 0 or i + 1 >= len(pts):
+                continue
+            f = idx - i
+            x0, y0 = pts[i]
+            x1, y1 = pts[i + 1]
+            px = x0 + (x1 - x0) * f
+            py = y0 + (y1 - y0) * f
+            tx = (x1 - x0) * direction
+            ty = (y1 - y0) * direction
+            tm = math.hypot(tx, ty)
+            if tm < 1e-6:
+                continue
+            tx /= tm
+            ty /= tm
+            strength = math.tanh((emags[i] if i < len(emags) else 0.0)
+                                 / CHG_ARROW_E_REF)
+            if strength < 0.04:
+                continue
+            L = CHG_ARROW_LEN_PX * (0.45 + 0.55 * strength)
+            wid = L * 0.52
+            nx, ny = -ty, tx
+            tri = np.array([
+                [px + tx * L * 0.5, py + ty * L * 0.5],
+                [px - tx * L * 0.5 + nx * wid * 0.5, py - ty * L * 0.5 + ny * wid * 0.5],
+                [px - tx * L * 0.5 - nx * wid * 0.5, py - ty * L * 0.5 - ny * wid * 0.5],
+            ], np.int32)
+            g = int(60 + 195 * strength)
+            cv2.fillConvexPoly(frame, tri, (g, g, g), cv2.LINE_AA)
 
     _POS_BGR = np.array([90, 90, 245], np.uint8)    # warm red  (+V)
     _NEG_BGR = np.array([245, 150, 80], np.uint8)   # cool blue (-V)
@@ -2319,15 +2373,29 @@ class Charges:
             color = np.where((t > 0.0)[..., None], self._POS_BGR, self._NEG_BGR)
             w = np.clip(np.abs(t) * 0.9, 0.0, 0.72).astype(np.float32)
             # Equipotential bands: brighten where V is near a contour level.
-            band = np.abs(((v / CHG_EQUIPOT_STEP + 0.5) % 1.0) - 0.5)
-            w = np.maximum(w, (band < 0.06).astype(np.float32) * 0.5)
+            # The width is normalised by the LOCAL gradient (the numpy
+            # equivalent of the shader's fwidth), so a band stays ~1 cell wide
+            # instead of pooling into a slab wherever the field goes flat.
+            lv = v / CHG_EQUIPOT_STEP
+            gy, gx = np.gradient(lv)
+            aa = np.maximum(np.hypot(gx, gy), 1e-5)
+            d = np.abs(((lv + 0.5) % 1.0) - 0.5)
+            band = np.clip(1.0 - d / (aa * 1.2), 0.0, 1.0).astype(np.float32)
+            w = np.maximum(w, band * 0.5)
             color = cv2.resize(color, (self.w, self.h), interpolation=cv2.INTER_LINEAR)
             w = cv2.resize(w, (self.w, self.h), interpolation=cv2.INTER_LINEAR)
             frame[:] = cv2.blendLinear(frame, color, 1.0 - w, w)
 
-            for pts in self._field_lines():
+            lines, direction = self._field_lines()
+            for pts, _emags in lines:
                 p = np.array(pts, np.int32).reshape(-1, 1, 2)
-                cv2.polylines(frame, [p], False, (225, 225, 225), 1, cv2.LINE_AA)
+                cv2.polylines(frame, [p], False, (170, 170, 170), 1, cv2.LINE_AA)
+            # Arrowheads marching along those same lines. The flow is pure
+            # decoration (the field is static), so it runs off a local clock
+            # rather than anything in the state.
+            phase = (time.monotonic() * CHG_ARROW_SPEED_PX_S) % CHG_ARROW_SPACING_PX
+            for pts, emags in lines:
+                self._draw_flow_arrows(frame, pts, emags, direction, phase)
 
         for c in self.charges:
             cx, cy = int(c.x), int(c.y)
