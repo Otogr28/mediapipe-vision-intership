@@ -57,6 +57,11 @@ const ORB_TRAIL_LEN = 64; // ORB_TRAIL_LEN
 // Spacetime orbiter id -> recent PLANE positions (the sheet depth is derived,
 // so storing (x, y) is enough to re-project a whole trail each frame).
 const stTrails = new Map<number, Vec2[]>();
+// Quadrupole history for the radiated wave: [t, Ixx, Iyy, Ixy]. The backend
+// sends one sample per frame and we keep the history here, exactly like the
+// trails — the retarded lookup only needs to reach back a light-crossing of the
+// frame (~0.65 s), so this is a handful of samples, not a ring buffer per frame.
+const quadHist: [number, number, number, number][] = [];
 let trailSeq = -1;
 
 /** Push one point per live id, capped, and drop ids that vanished. */
@@ -104,6 +109,62 @@ export function updateTrails(state: AppState) {
   );
   if (st) accumulate(stTrails, st.orbiters, st.trail_len);
   else if (stTrails.size) stTrails.clear();
+
+  if (st && st.quad) {
+    const last = quadHist[quadHist.length - 1];
+    if (!last || st.sim_t > last[0]) {
+      quadHist.push([st.sim_t, st.quad[0], st.quad[1], st.quad[2]]);
+      const cutoff = st.sim_t - st.gw_hist_s;
+      while (quadHist.length && quadHist[0][0] < cutoff) quadHist.shift();
+    }
+  } else if (!st && quadHist.length) {
+    quadHist.length = 0;
+  }
+}
+
+/** Linear-interpolated quadrupole at a retarded time; null = not arrived yet. */
+function quadAt(tRet: number): [number, number, number] | null {
+  const h = quadHist;
+  if (!h.length || tRet < h[0][0] || tRet > h[h.length - 1][0]) return null;
+  let lo = 0;
+  let hi = h.length - 1;
+  while (hi - lo > 1) {
+    const mid = (lo + hi) >> 1;
+    if (h[mid][0] <= tRet) lo = mid;
+    else hi = mid;
+  }
+  const [t0, a0, b0, c0] = h[lo];
+  const [t1, a1, b1, c1] = h[hi];
+  const f = t1 <= t0 ? 0 : (tRet - t0) / (t1 - t0);
+  return [a0 + (a1 - a0) * f, b0 + (b1 - b0) * f, c0 + (c1 - c0) * f];
+}
+
+/**
+ * The radiated wave's height ripple — port of `Spacetime._wave_height`.
+ * KEEP IN SYNC with ui/interactables.py.
+ *
+ * h_+ = (G/(c^4 D)) * (Qddot_zz - Qddot_e2e2) at RETARDED time t - D/c. The
+ * delay, the 1/D falloff and the quadrupolar lobes all come out of the formula;
+ * only the amplitude is scaled (h is ~1e-4 — real, and far too small to see).
+ */
+function waveHeight(o: SpacetimeObject, x: number, y: number): number {
+  if (!o.quad || !o.com) return 0;
+  const dx = x - o.com[0];
+  const dy = y - o.com[1];
+  const d = Math.hypot(dx, dy);
+  if (d < 1) return 0;
+  const q = quadAt(o.sim_t - d / o.c);
+  if (!q) return 0; // the wave has not reached here yet
+  const [ixx, iyy, ixy] = q;
+  const tr = ixx + iyy;
+  const qxx = ixx - tr / 3;
+  const qyy = iyy - tr / 3;
+  const qzz = -tr / 3;
+  const s = dy / d;
+  const c = dx / d;
+  const qe2 = s * s * qxx - 2 * s * c * ixy + c * c * qyy;
+  const h = ((o.g / (o.c ** 4 * d)) * (qzz - qe2)) * o.gw_gain;
+  return Math.max(-o.gw_max, Math.min(o.gw_max, h));
 }
 
 // ---- drawing helpers ----------------------------------------------------
@@ -821,7 +882,9 @@ function sheetDepth(o: SpacetimeObject, x: number, y: number) {
       o.depth_gain,
     );
   }
-  return z;
+  // ...and the radiated wave rides on top: the well is what the masses ARE,
+  // the ripple is what they DID.
+  return z + waveHeight(o, x, y);
 }
 
 /**

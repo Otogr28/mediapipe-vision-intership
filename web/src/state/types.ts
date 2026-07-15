@@ -294,6 +294,18 @@ export interface SpacetimeObject {
   orbiter_rgb: [number, number, number];
   /** client-accumulated trail length, in snapshots */
   trail_len: number;
+  /** sim clock (s) — the wave's time base */
+  sim_t: number;
+  /** trace-free mass quadrupole, 2nd derivative: [Ixx, Iyy, Ixy]. ONE sample
+   *  per frame; the browser accumulates the history and does its own retarded
+   *  lookup (same trick as the trails). null when there are no bodies. */
+  quad: [number, number, number] | null;
+  /** centre of mass (px) — the wave's origin */
+  com: [number, number] | null;
+  /** display amplification of the strain (h is ~1e-4: real, and invisible) */
+  gw_gain: number;
+  gw_max: number;
+  gw_hist_s: number;
   /** where a release would drop the next object; null unless armed */
   ghost: { x: number; y: number } | null;
 }
