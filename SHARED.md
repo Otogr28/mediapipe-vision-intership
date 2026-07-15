@@ -1946,3 +1946,83 @@ renderer + `drawBackdrop` in `web/src/overlay/scene.ts`, interp case in
 - Not yet run on the Jetson. Grid cost is ~3.5k projected points/frame in JS;
   expected fine, but the `?glscale` escape hatch does NOT apply (Canvas2D, not
   a GL layer) — if it bites, drop `ST_LINE_SAMPLES` or the grid counts.
+
+## 2026-07-15 (later) — Spacetime round 2: Kerr spin, 3D lattice, real camera
+
+Feedback was: the 3D control felt "crude/green", the top-down view was
+UNREACHABLE, no rotation on the bodies, and space should deform in 3D (user
+sent a volumetric-lattice reference) not just as a 2D sheet.
+
+### Camera: v1's incremental drag was structurally wrong, not just badly tuned
+Reproduced the top-view bug before touching it: the pitch clamp was NOT the
+cause (240 px of travel reaches 89 deg fine). The real cause is that 240 px of
+sustained two-pinch travel ENDS near the frame border — exactly where
+`manager.EDGE_MARGIN_FRAC` already documents the landmark model degrading. The
+pinch drops, the gesture dies half-way. Incremental also has no home: returning
+your hands never returned the view, which is the "crude" feel.
+Researched rather than guessed (user asked): Zhai & Milgram's 6-DOF taxonomy
+says isotonic->position and isometric->rate are the good pairings — a hand is
+ISOTONIC, so pure rate control (my first instinct) is a known-bad pairing.
+Casiez et al.'s RubberEdge fits exactly: position control inside a disc around
+the grab origin, rate control outside it (~20% better than position control
+when clutching is significant). Implemented as `Spacetime._rotate`. Pitch cap
+raised 89 -> 90 (the projection has no singularity there; the old cap was
+timidity). Zoom got a deadzone so yawing can't smuggle in a zoom.
+DO NOT "simplify" this back to an incremental drag.
+
+### 3D view = volumetric lattice (the reference), 2D = the old sheet
+Toggled by the `st.view` button. The lattice's radial map is Schwarzschild's
+ISOTROPIC coordinate relation (`_isotropic_radius`, horizon lands at rs/4), not
+an art-directed pull — space gets denser near a mass because distances there
+are stretched. This is the honest picture; the sheet is the famous one that
+quietly lies (people read "ball rolls downhill" = gravity explaining gravity).
+CAVEAT worth knowing: the honest map is TINY — it saturates at rs/2, ~18 px on
+a 720 px frame — so it needs `ST_LATTICE_GAIN` (7.0) to read at all, the same
+display-only bargain `ST_DEPTH_GAIN` already makes. First render without it was
+a uniform hairball; that was the fix.
+
+### Spin: full Kerr, and it cost nothing in regression
+PW is Schwarzschild-only, so the force is now Mukhopadhyay (2002)'s Kerr
+pseudo-Newtonian potential. Two properties made this an easy call:
+  * it collapses to PW at a = 0 to MACHINE PRECISION (measured 3e-16), so a
+    spinless scene is bit-identical to before — the 47 deg/lap precession is
+    unchanged (re-measured: 47/47/48/47/47).
+  * it is constructed to give the exact Kerr ISCO — measured 0.0% error at
+    every spin from -0.998 to +0.998.
+Spin is signed by the particle's own angular momentum (tanh-blended so a
+near-radial plunge doesn't chatter between branches), so the DIRECTIONAL ISCO
+falls out: 1.24 r_g prograde / 6.00 static / 8.99 retrograde.
+Velocity-Verlet now evaluates `a` at the HALF-STEP velocity — the force reads v,
+which makes textbook VV implicit. Fine here because v only enters a saturating
+tanh.
+Also: `r_horizon` shrinks rs -> rs/2 with spin while the equatorial ergosphere
+stays at rs, so the GAP between the two rings IS the spin, and closes by itself
+at a* = 0 — no special case. Capture now uses r_horizon, not rs.
+Frame dragging appears twice: in the physics (signed spin) and visually
+(`_drag_frame`, Lense-Thirring omega = 2GJ/(c^2 r^3), a tight 1/r^3 swirl).
+
+### Verified
+- Kerr(a=0) vs PW: 3.01e-16 worst relative error. Precession re-measured
+  unchanged at 47/47/48/47/47 deg/lap.
+- ISCO vs the exact Kerr formula: 0.0% at a = 0, +-0.3, +-0.5, 0.7, +-0.9,
+  +-0.998. (Two of my own test harnesses were buggy first — the ISCO search ran
+  BELOW the potential's pole, and the pole finder assumed one sign change when
+  sqrt(x)(x-2)+a has two. The model was right both times; check the harness
+  before the physics.)
+- Frame dragging is VISIBLE: same radius (120 px), same speed, only direction
+  differs — a*=0 gives +17.0 vs -17.0 laps (perfect mirror symmetry, as
+  Schwarzschild demands); a*=0.9 gives 14.6 laps prograde vs a PLUNGE in 0.15
+  laps retrograde (retrograde ISCO 157 px > the 120 px launch, so it must).
+- Camera: 200 px push held 3 s -> pitch 90 deg with hands never leaving the
+  safe region (top view now reachable); nudge-and-return lands back within
+  0.1 deg (v1 could not); no wind-up overshoot after a 10 s absurd push; zoom
+  deadzone ignores 5% span drift but still zooms at 80%.
+- `_place_mass` was dropping the preset's spin on the floor (every body came
+  out a* = 0) — caught only because the state test printed the ergosphere gap.
+
+### Open
+- Still not run on the Jetson. The lattice is ~5x the sheet's line work; if the
+  kiosk drags, drop ST_LATTICE_LAYERS / ST_LATTICE_SAMPLES or set
+  ST_LATTICE_VERTICALS = 0 (Canvas2D, so `?glscale` does NOT apply).
+- Light-cone / Penrose causal-structure experiment is now in IDEAS.md "Next up"
+  as a SIBLING experiment, with the EF-vs-Penrose call written up.

@@ -98,6 +98,36 @@
   Roche-limit breakup; a "sticky" (perfectly-inelastic) collision mode toggle
   for accretion demos alongside the default elastic bounce.
 
+- [ ] **Light cones & the singularity — a causal-structure experiment**
+  *(requested 2026-07-15; sibling to Spacetime, NOT a mode inside it)*
+  The other half of the black-hole story: Spacetime shows you the WELL, this
+  would show you the CAUSALITY — why you cannot come back out.
+  - The classic picture: a spacetime diagram (space horizontal, time vertical)
+    with a **light cone** at each event. Far away the cones stand upright and
+    you can move anywhere inside them; approaching the hole they TIP toward the
+    singularity; at the horizon the outgoing edge goes vertical; inside, the
+    whole cone points inward — every future path ends at r=0. "The singularity
+    stops being a place and becomes a *time*" is the line the exhibit should
+    land, and a tipping-cone diagram is the only way to actually show it.
+  - Interaction sketch: pinch to drop an observer/worldline and watch it get
+    dragged in; drag the horizon crossing back and forth; maybe a second pinch
+    for the infalling-vs-distant-observer split (the one sees a finite proper
+    time, the other sees them freeze and redshift forever — same event, two
+    stories, which is the whole point).
+  - Two candidate renderings, decide before building:
+    * **(r, t) diagram in Eddington-Finkelstein coords** — cones tip smoothly,
+      no coordinate singularity at the horizon (Schwarzschild's t coordinate
+      blows up there and would render as a fake wall). Simpler, honest, and
+      the tipping is the star.
+    * **Penrose / conformal diagram** — the full causal map (past/future null
+      infinity, both exteriors, the r=0 spacelike lines). Prettier and it's the
+      "typical graph" of the ask, but conformal compactification is abstract:
+      hard to read cold in a 30-second exhibit visit without a guide.
+    Leaning EF for the interactive part, with the Penrose diagram as a static
+    inset that highlights where you are — get both without teaching topology.
+  - Reuse: the same `_project` + camera + two-hand control as Spacetime; this
+    is a 2D diagram, so it may not need the 3D lattice at all.
+
 ## Backlog
 
 - [ ] **Orbitals — original design notes** *(kept for reference)*

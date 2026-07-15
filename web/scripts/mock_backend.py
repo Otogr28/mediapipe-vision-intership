@@ -464,9 +464,11 @@ def scene_state(t):
             b["selected"] = (k == "star")
             base["buttons"].append(b)
         base["buttons"] += [
-            btn("st.preset.precess", "Precess", margin + 4 * (bw + gap),
+            btn("st.view", "3D" if os.environ.get("HALL_MOCK_VIEW3D", "0") == "1" else "2D",
+                margin + 4 * (bw + gap), margin, bw, bh),
+            btn("st.preset.precess", "Precess", margin + 5 * (bw + gap),
                 margin, bw, bh),
-            btn("st.clear", "Clear", margin + 5 * (bw + gap), margin, bw, bh),
+            btn("st.clear", "Clear", margin + 6 * (bw + gap), margin, bw, bh),
             btn("speed.minus", "-", W - margin - 46 - 92 - 46, margin, 46, 46),
             btn("speed.plus", "+", W - margin - 46, margin, 46, 46),
             btn("reset", "Reset", W - 130 - margin, H - 50 - margin, 130, 50),
@@ -480,10 +482,16 @@ def scene_state(t):
         masses = [
             {"id": 0, "x": cx, "y": cy, "m": 1.0, "rs": 9.0,
              "rgb": [255, 226, 158], "compact": False, "kind": "star",
-             "flash": 0.0, "grabbed": False},
+             "flash": 0.0, "grabbed": False, "spin": 0.15,
+             "phase": round(t * 0.8 % 6.283, 3),
+             "r_horizon": 8.9, "r_ergo": 9.0},
+            # a* = 0.9: horizon shrinks to 0.63*rs while the ergosphere stays
+            # at rs -> a visible gap, and a strong 1/r^3 twist nearby.
             {"id": 1, "x": round(cx + 330, 1), "y": round(cy - 90, 1),
              "m": 4.0, "rs": 36.0, "rgb": [18, 16, 26], "compact": True,
-             "kind": "bh", "flash": 0.0, "grabbed": False},
+             "kind": "bh", "flash": 0.0, "grabbed": False, "spin": 0.9,
+             "phase": round(t * 2.4 % 6.283, 3),
+             "r_horizon": 25.85, "r_ergo": 36.0},
         ]
         a_axis, ecc = 200.0, 0.45
         theta = t * 0.9
@@ -506,6 +514,15 @@ def scene_state(t):
             "depth_gain": 1.25,
             "max_depth": 210.0,
             "grid": [30, 18, 72, 1.7],
+            "view_3d": os.environ.get("HALL_MOCK_VIEW3D", "0") == "1",
+            "lattice": [12, 8, 5, 44, 1.15, 300.0],
+            "lattice_verticals": True,
+            "lattice_gain": 7.0,
+            "vert_stride": 2,
+            "c": round((2 * 4.2e6 / 9.0) ** 0.5, 4),
+            "g": 4.2e6,
+            "lt_gain": 1.0,
+            "lt_max": 1.1,
             "dim": 0.45,
             "dim_rgb": [6, 8, 18],
             "kind": "star",

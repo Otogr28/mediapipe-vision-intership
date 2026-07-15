@@ -212,15 +212,24 @@ export interface SpacetimeMass {
   y: number;
   /** mass in palette units */
   m: number;
-  /** Schwarzschild radius (px) — the sheet's throat AND the PW potential pole */
+  /** Schwarzschild radius (px) — the sheet's throat AND the Kerr potential pole */
   rs: number;
   rgb: [number, number, number];
-  /** horizon-sized body: drawn as a black disk of radius rs */
+  /** horizon-sized body: drawn as a black disk of radius r_horizon */
   compact: boolean;
   kind: SpacetimeKind;
   /** transient glow (1→0) when it swallows an orbiter */
   flash: number;
   grabbed: boolean;
+  /** dimensionless Kerr spin a* = Jc/(GM²), [0, 0.998] */
+  spin: number;
+  /** accumulated rotation angle (rad) — drives the spin marker */
+  phase: number;
+  /** Kerr outer horizon r+ = M(1+√(1−a*²)) px: shrinks rs → rs/2 with spin */
+  r_horizon: number;
+  /** equatorial ergosphere r_E = 2M = rs px — spin-independent, so the GAP
+   *  between this and r_horizon is the spin made visible (zero at a* = 0) */
+  r_ergo: number;
 }
 
 export interface SpacetimeOrbiter {
@@ -256,6 +265,22 @@ export interface SpacetimeObject {
   max_depth: number;
   /** [cols, rows, samplesPerLine, extentAsFractionOfFrame] */
   grid: [number, number, number, number];
+  /** false = the 2D embedding sheet, true = the 3D volumetric lattice */
+  view_3d: boolean;
+  /** [cols, rows, layers, samplesPerLine, extentFrac, boxDepthPx] */
+  lattice: [number, number, number, number, number, number];
+  lattice_verticals: boolean;
+  /** display exaggeration of the radial pull (the lattice's ST_DEPTH_GAIN) */
+  lattice_gain: number;
+  /** draw a vertical strut only every Nth node */
+  vert_stride: number;
+  /** speed of light in screen px/s — derived, not tuned (rs = 2GM/c²) */
+  c: number;
+  /** gravitational constant in screen units */
+  g: number;
+  /** Lense–Thirring twist amplitude + cap (rad) */
+  lt_gain: number;
+  lt_max: number;
   /** backdrop dim alpha + colour — darkens the camera image under the grid */
   dim: number;
   dim_rgb: [number, number, number];

@@ -24,23 +24,30 @@ from config import (BH_DEFAULT_POS_FACTOR, BH_DISK_BRIGHTNESS,
                     ORB_SOFTENING_PX, ORB_TIME_SCALES, ORB_TRAIL_LEN,
                     PUPPET_IDLE_BOB_S, SIXSEVEN_FLASH_FRAMES,
                     SIXSEVEN_HYSTERESIS, SIXSEVEN_MIN_VISIBILITY,
-                    ST_BACKDROP_ALPHA, ST_BACKDROP_RGB, ST_CAM_SMOOTH,
-                    ST_CAPTURE_FLASH_DECAY, ST_CURV_REACH_PX, ST_DEFAULT_KIND,
-                    ST_DEPTH_GAIN, ST_FOCAL_PX, ST_FRAME_DT, ST_GRAB_PAD_PX,
-                    ST_GRID_COLS, ST_GRID_MARGIN, ST_GRID_ROWS,
-                    ST_LINE_SAMPLES, ST_MASS_TYPES, ST_MAX_DEPTH_PX,
-                    ST_MAX_MASSES, ST_MAX_ORBITERS, ST_MAX_SUBSTEPS, ST_ORB_G,
+                    ST_BACKDROP_ALPHA, ST_BACKDROP_RGB, ST_CAM_PITCH_POS_GAIN,
+                    ST_CAM_PITCH_RATE_GAIN, ST_CAM_POS_RADIUS_PX,
+                    ST_CAM_RATE_MAX_RAD_S, ST_CAM_SMOOTH, ST_CAM_YAW_POS_GAIN,
+                    ST_CAM_YAW_RATE_GAIN, ST_CAPTURE_FLASH_DECAY,
+                    ST_CURV_REACH_PX, ST_DEFAULT_KIND, ST_DEPTH_GAIN,
+                    ST_FOCAL_PX, ST_FRAME_DT, ST_GRAB_PAD_PX, ST_GRID_COLS,
+                    ST_GRID_MARGIN, ST_GRID_ROWS, ST_LATTICE_COLS,
+                    ST_LATTICE_DEPTH_PX, ST_LATTICE_LAYERS, ST_LATTICE_MARGIN,
+                    ST_LATTICE_ROWS, ST_LATTICE_SAMPLES, ST_LATTICE_VERTICALS,
+                    ST_LINE_SAMPLES, ST_LT_TWIST_GAIN, ST_LT_TWIST_MAX_RAD,
+                    ST_MASS_TYPES, ST_MAX_DEPTH_PX, ST_MAX_MASSES,
+                    ST_MAX_ORBITERS, ST_MAX_SUBSTEPS, ST_ORB_G,
                     ST_ORB_MIN_SPAWN_RS, ST_ORB_SPAWN_VFRAC, ST_ORB_TRAIL_LEN,
                     ST_ORBITER_KIND, ST_ORBITER_RGB, ST_PHYS_DT,
                     ST_PITCH_DEFAULT_RAD, ST_PITCH_MAX_RAD, ST_PITCH_MIN_RAD,
-                    ST_PRUNE_MARGIN, ST_ROT_PITCH_GAIN, ST_ROT_YAW_GAIN,
-                    ST_RS_PER_MASS, ST_TIME_SCALES, ST_YAW_DEFAULT_RAD,
-                    ST_ZOOM_MAX, ST_ZOOM_MIN, WAVE_AMP, WAVE_DECAY_TAU_S,
-                    WAVE_DEFAULT_KIND, WAVE_DISPLAY_GAIN,
-                    WAVE_DISPLAY_MAX_ALPHA, WAVE_FRAME_DT, WAVE_GRAB_PAD_PX,
-                    WAVE_GRID_PX, WAVE_MAX_DEBT_S, WAVE_MAX_SOURCES,
-                    WAVE_MAX_SUBSTEPS, WAVE_PHYS_DT, WAVE_RAMP_S,
-                    WAVE_SOURCE_TYPES, WAVE_SPEED_PX_S, WAVE_TIME_SCALES)
+                    ST_PRUNE_MARGIN, ST_RS_PER_MASS, ST_SPIN_MAX,
+                    ST_SPIN_VIS_SCALE, ST_TIME_SCALES, ST_VIEW_3D_DEFAULT,
+                    ST_YAW_DEFAULT_RAD, ST_ZOOM_DEADZONE, ST_ZOOM_MAX,
+                    ST_ZOOM_MIN, WAVE_AMP, WAVE_DECAY_TAU_S, WAVE_DEFAULT_KIND,
+                    WAVE_DISPLAY_GAIN, WAVE_DISPLAY_MAX_ALPHA, WAVE_FRAME_DT,
+                    WAVE_GRAB_PAD_PX, WAVE_GRID_PX, WAVE_MAX_DEBT_S,
+                    WAVE_MAX_SOURCES, WAVE_MAX_SUBSTEPS, WAVE_PHYS_DT,
+                    WAVE_RAMP_S, WAVE_SOURCE_TYPES, WAVE_SPEED_PX_S,
+                    WAVE_TIME_SCALES)
 from detection.gestures import hand_id, pinch_info, pinch_infos, pinch_state
 from ui.button import Button
 
@@ -2431,17 +2438,61 @@ class Charges:
 
 
 class _Mass:
-    __slots__ = ("id", "x", "y", "m", "rs", "kind", "flash")
+    __slots__ = ("id", "x", "y", "m", "rs", "kind", "flash", "spin", "phase")
 
-    def __init__(self, mid, x, y, m, rs, kind):
+    def __init__(self, mid, x, y, m, rs, kind, spin=0.0):
         self.id = mid
         self.x = x
         self.y = y
         self.m = m
         self.rs = rs      # Schwarzschild radius (px) — sets BOTH the sheet's
-                          # throat and the PW potential's pole
+                          # throat and the Kerr potential's pole
         self.kind = kind
         self.flash = 0.0  # transient glow when it swallows an orbiter
+        self.spin = spin  # dimensionless Kerr spin a* = Jc/(GM^2), [0, 1)
+        self.phase = 0.0  # accumulated rotation angle (rad) — visual only
+
+    @property
+    def m_geom(self):
+        """Geometric mass in px (r_g = GM/c^2). rs = 2*r_g by definition, so
+        this is just rs/2 — named because every Kerr formula is written in it."""
+        return self.rs * 0.5
+
+    @property
+    def r_horizon(self):
+        """Kerr outer horizon r+ = M(1 + sqrt(1 - a*^2)), in px.
+
+        Shrinks from rs (a*=0) to rs/2 (extremal) as the body spins up.
+        """
+        a = min(abs(self.spin), ST_SPIN_MAX)
+        return self.m_geom * (1.0 + math.sqrt(max(1.0 - a * a, 0.0)))
+
+    @property
+    def r_ergo(self):
+        """Ergosphere radius IN THE EQUATORIAL PLANE: r_E = 2M — i.e. exactly
+        rs, independent of spin.
+
+        That is why the pair reads: the ergosphere stays put at rs while the
+        horizon shrinks underneath it, so the gap between the two rings IS the
+        spin. At a* = 0 they coincide and the gap vanishes on its own.
+        """
+        return self.rs
+
+    @property
+    def omega_horizon(self):
+        """Horizon angular velocity Omega_H = a*c / (2*r+), rad/s in screen
+        units. The rate at which the hole drags everything at its horizon; the
+        marker's visual spin is a scaled-down copy (ST_SPIN_VIS_SCALE)."""
+        a = min(abs(self.spin), ST_SPIN_MAX)
+        if a <= 0.0 or self.r_horizon <= 0.0:
+            return 0.0
+        return a * _C_SCREEN * self.m_geom / (2.0 * self.r_horizon * self.m_geom)
+
+    @property
+    def spin_angular_momentum(self):
+        """J/(Mc) = a* * M in px — the length that appears in the
+        Lense-Thirring twist. (Full J = a* * G * M^2 / c.)"""
+        return min(abs(self.spin), ST_SPIN_MAX) * self.m_geom
 
 
 class _Orbiter:
@@ -2459,6 +2510,62 @@ class _Orbiter:
 
 def _clamp(v, lo, hi):
     return lo if v < lo else (hi if v > hi else v)
+
+
+# Speed of light in SCREEN units, forced by the two choices already made:
+# rs = ST_RS_PER_MASS * m and rs = 2GM/c^2 together give c = sqrt(2G/RS_PER_MASS).
+# It is derived, never tuned — inventing a separate `c` would silently
+# decouple the sheet's geometry from the orbits' dynamics.
+_C_SCREEN = math.sqrt(2.0 * ST_ORB_G / ST_RS_PER_MASS)
+
+
+def _isotropic_radius(r, rs):
+    """Areal radius -> Schwarzschild ISOTROPIC radius (px), both measured from
+    the same centre.
+
+    Inverting ``r = rbar * (1 + rs/(4*rbar))^2`` gives
+
+        rbar = ((r - rs/2) + sqrt((r - rs/2)^2 - rs^2/4)) / 2
+
+    which lands the horizon at ``rbar = rs/4`` — a genuine 4x radial squeeze
+    at the horizon, relaxing to a constant ``rs/2`` offset far away. Drawing a
+    uniform lattice at ``rbar`` is what compresses space toward a mass in the
+    3D view; it comes from the metric, not from taste.
+
+    Mirrored in ``web/src/overlay/scene.ts`` (``isotropicRadius``).
+    """
+    if rs <= 0.0:
+        return r
+    half = rs * 0.5
+    b = r - half
+    disc = b * b - half * half
+    if disc <= 0.0:
+        return rs * 0.25       # at or inside the horizon
+    return (b + math.sqrt(disc)) * 0.5
+
+
+def _kerr_force_factor(x, a):
+    """Mukhopadhyay (2002) pseudo-Newtonian Kerr force, in G = M = c = 1 units
+    with ``x = r / r_g``:
+
+        F(x) = (x^2 - 2a*sqrt(x) + a^2)^2 / (x^3 * (sqrt(x)*(x - 2) + a)^2)
+
+    Reproduces the correct Kerr ISCO over the whole spin range, and at ``a = 0``
+    collapses to ``1/(x - 2)^2`` — exactly Paczynski-Wiita. ``a`` is SIGNED by
+    the orbit's direction: positive = co-rotating (prograde), negative =
+    counter-rotating, which is what makes the ISCO directional.
+    """
+    if x <= 0.0:
+        return 0.0
+    sx = math.sqrt(x)
+    num = (x * x - 2.0 * a * sx + a * a) ** 2
+    den_inner = sx * (x - 2.0) + a
+    den = x ** 3 * den_inner * den_inner
+    if abs(den) < 1e-12:
+        # The pole: the particle is essentially at the horizon and capture will
+        # remove it this frame anyway. Return a large but finite pull.
+        return 1e6
+    return num / den
 
 
 def _flamm_depth(r, rs):
@@ -2534,8 +2641,18 @@ class Spacetime:
         self._yaw = self._yaw_t
         self._pitch = self._pitch_t
         self._zoom = self._zoom_t
-        self._rot_prev = None      # (midpoint, span) of the last rotate frame
+        # RubberEdge anchors: where the two-pinch grab started, and the angles
+        # it started from. None => no grab in progress.
+        self._rot_origin = None
+        self._rot_base = (self._yaw_t, self._pitch_t, self._zoom_t)
         self.rotating = False
+        self._last_t = time.monotonic()
+
+        # View mode: False = the 2D embedding sheet, True = the 3D volumetric
+        # lattice. `_view_anim` is on while the toggle is easing the camera to
+        # the new mode's default angle; any manual rotate cancels it.
+        self.view_3d = ST_VIEW_3D_DEFAULT
+        self._view_anim = False
 
         # Hands that are mid-rotate (or were, and have not released yet): they
         # must not place or grab anything until they re-pinch.
@@ -2568,20 +2685,47 @@ class Spacetime:
             )
             self._type_btns.append((f"st.type.{kind}", kind, btn))
         n = len(self._type_btns)
-        self._preset_btn = Button(
+        self._view_btn = Button(
             x=x0 + n * (bw + gap), y=y0, width=bw, height=bh,
+            label="3D" if ST_VIEW_3D_DEFAULT else "2D",
+            on_click=self._toggle_view, font_scale=0.65,
+        )
+        self._view_btn.selected = ST_VIEW_3D_DEFAULT
+        self._preset_btn = Button(
+            x=x0 + (n + 1) * (bw + gap), y=y0, width=bw, height=bh,
             label="Precess", on_click=self._preset_precession, font_scale=0.5,
         )
         self._clear_btn = Button(
-            x=x0 + (n + 1) * (bw + gap), y=y0, width=bw, height=bh,
+            x=x0 + (n + 2) * (bw + gap), y=y0, width=bw, height=bh,
             label="Clear", on_click=self.clear, font_scale=0.6,
         )
+
+    def _toggle_view(self):
+        """Switch between the 2D embedding sheet and the 3D volumetric lattice.
+
+        Also the reliable way to reach a straight-down view: the sheet mode
+        snaps back to the three-quarter angle it reads best at, and either mode
+        can then be nudged from there. Fixes the "top view was unreachable"
+        complaint from the input side as well as the control side.
+        """
+        self.view_3d = not self.view_3d
+        self._view_btn.selected = self.view_3d
+        self._view_btn.label = "3D" if self.view_3d else "2D"
+        # Ease to the new mode's home angle. The lattice reads best a little
+        # flatter than the sheet: it is a box, and a steep angle collapses its
+        # layers onto each other.
+        self._pitch_t = (math.radians(24.0) if self.view_3d
+                         else ST_PITCH_DEFAULT_RAD)
+        self._rot_base = (self._yaw_t, self._pitch_t, self._zoom_t)
+        self._rot_origin = None
+        self._view_anim = True
 
     @property
     def palette(self):
         """(id, Button) list the UIManager updates / draws / serializes."""
         return ([(bid, btn) for bid, _kind, btn in self._type_btns]
-                + [("st.preset.precess", self._preset_btn),
+                + [("st.view", self._view_btn),
+                   ("st.preset.precess", self._preset_btn),
                    ("st.clear", self._clear_btn)])
 
     def _select(self, kind):
@@ -2621,7 +2765,8 @@ class Spacetime:
         kind = self._kind if kind is None else kind
         spec = ST_MASS_TYPES[kind]
         m = _Mass(self._next_id, x, y, spec["m"],
-                  ST_RS_PER_MASS * spec["m"], kind)
+                  ST_RS_PER_MASS * spec["m"], kind,
+                  min(spec.get("spin", 0.0), ST_SPIN_MAX))
         self._next_id += 1
         self.masses.append(m)
         if len(self.masses) > ST_MAX_MASSES:
@@ -2651,18 +2796,30 @@ class Spacetime:
         r = math.hypot(dx, dy)
         if r < 1e-6:
             dx, dy, r = 1.0, 0.0, 1.0
-        # Keep the spawn just outside the ISCO (3*rs): a particle started
-        # inside it has no circular orbit to be a fraction of.
+        # Keep the spawn just outside the ISCO: a particle started inside it
+        # has no circular orbit to be a fraction of.
         r_min = ST_ORB_MIN_SPAWN_RS * host.rs
         if r < r_min:
             s = r_min / r
             dx, dy, r = dx * s, dy * s, r_min
             x, y = host.x + dx, host.y + dy
-        v_circ = math.sqrt(ST_ORB_G * host.m * r) / max(r - host.rs, 1e-3)
-        v = ST_ORB_SPAWN_VFRAC * v_circ
-        # Counter-clockwise tangent.
-        o = _Orbiter(self._next_id, x, y, -dy / r * v, dx / r * v)
-        o.ax, o.ay = self._accel(o.x, o.y)
+        # Counter-clockwise tangent (prograde when the host spins +z).
+        tx, ty = -dy / r, dx / r
+        # Solve the circular speed from the ACTUAL field rather than a closed
+        # form: with Kerr the force depends on the orbit's direction (through
+        # the spin sign) and hence on the speed we are solving for, so iterate
+        # a few times. This also picks up every other mass's pull for free,
+        # which the old single-host formula ignored.
+        v = 0.0
+        for _ in range(4):
+            ax, ay = self._accel(x, y, tx * v, ty * v)
+            a_inward = -(ax * dx + ay * dy) / r
+            if a_inward <= 0.0:
+                break
+            v = math.sqrt(a_inward * r)
+        v *= ST_ORB_SPAWN_VFRAC
+        o = _Orbiter(self._next_id, x, y, tx * v, ty * v)
+        o.ax, o.ay = self._accel(o.x, o.y, o.vx, o.vy)
         self._next_id += 1
         self.orbiters.append(o)
         if len(self.orbiters) > ST_MAX_ORBITERS:
@@ -2697,6 +2854,13 @@ class Spacetime:
     # ---- gesture -------------------------------------------------------
 
     def update(self, hand_result, pose_landmarks):
+        # Real elapsed time: the camera's RATE term integrates against it, and
+        # this loop is not fixed-rate (window mode free-runs; web mode is paced
+        # to STATE_FPS). Clamped so a stall cannot fling the view round.
+        now = time.monotonic()
+        dt = _clamp(now - self._last_t, 0.0, 0.1)
+        self._last_t = now
+
         # Held pinches, ordered by hand id so the two-hand pairing is stable
         # frame to frame (the dict order is not).
         held = sorted((hid, m.cursor) for hid, m in pinch_infos() if m.closed)
@@ -2711,34 +2875,90 @@ class Spacetime:
             self._grab_mass = None
             self._grab_hand = None
             self._consumed = {hid for hid, _ in held}
-            self._rotate(held)
+            self._rotate(held, dt)
         else:
-            self._rot_prev = None
+            # Releasing drops the anchor, so the next grab re-homes wherever
+            # the hands happen to be — that IS the clutch, and it is cheap now
+            # that a push-and-hold covers the long travel.
+            self._rot_origin = None
             self.rotating = False
             # A hand that took part in a rotate stays inert until it releases.
             self._consumed &= {hid for hid, _ in held}
             self._point(hand_result)
 
         self._ease_camera()
-        self._advance()
+        self._advance(dt)
 
-    def _rotate(self, held):
+    def _rotate(self, held, dt):
+        """Hybrid position/rate camera control (RubberEdge, Casiez et al.).
+
+        Inside a disc of ST_CAM_POS_RADIUS_PX around where the two-pinch
+        started, the hand offset maps ABSOLUTELY onto an angle offset: the
+        mapping has a home, so returning your hands returns the view, and the
+        isotonic hand is doing position control (the pairing Zhai & Milgram
+        found works). Past the disc, the EXCESS becomes angular velocity, so an
+        unbounded spin — or a top-down view — is a small push-and-hold near the
+        comfortable centre of the frame instead of a long drag into the corner
+        where hand tracking falls apart. See the config note for why v1's pure
+        incremental drag failed.
+        """
         (_, pa), (_, pb) = held[0], held[1]
         mid = ((pa[0] + pb[0]) * 0.5, (pa[1] + pb[1]) * 0.5)
         span = math.hypot(pb[0] - pa[0], pb[1] - pa[1])
-        if self._rot_prev is not None:
-            pmid, pspan = self._rot_prev
-            # Drag both hands sideways to spin the sheet; up/down to tilt
-            # between the three-quarter view and straight down.
-            self._yaw_t += (mid[0] - pmid[0]) * ST_ROT_YAW_GAIN
-            self._pitch_t = _clamp(
-                self._pitch_t - (mid[1] - pmid[1]) * ST_ROT_PITCH_GAIN,
-                ST_PITCH_MIN_RAD, ST_PITCH_MAX_RAD)
-            # Spreading the hands zooms, the familiar pinch-to-zoom.
-            if pspan > 1.0 and span > 1.0:
-                self._zoom_t = _clamp(self._zoom_t * (span / pspan),
-                                      ST_ZOOM_MIN, ST_ZOOM_MAX)
-        self._rot_prev = (mid, span)
+
+        if self._rot_origin is None:
+            # New grab: anchor the mapping here.
+            self._rot_origin = (mid, max(span, 1.0))
+            self._rot_base = (self._yaw_t, self._pitch_t, self._zoom_t)
+
+        (ox, oy), ospan = self._rot_origin
+        base_yaw, base_pitch, base_zoom = self._rot_base
+        dx, dy = mid[0] - ox, mid[1] - oy
+        dist = math.hypot(dx, dy)
+
+        # Split the offset into the part inside the disc (position control)
+        # and the excess outside it (rate control).
+        if dist > ST_CAM_POS_RADIUS_PX and dist > 1e-6:
+            k = ST_CAM_POS_RADIUS_PX / dist
+            in_x, in_y = dx * k, dy * k
+            ex_x, ex_y = dx - in_x, dy - in_y
+        else:
+            in_x, in_y = dx, dy
+            ex_x, ex_y = 0.0, 0.0
+
+        # Rate: integrate the excess into the base, so it accumulates and the
+        # position term keeps working relative to the drifting base.
+        if ex_x or ex_y:
+            yaw_rate = _clamp(ex_x * ST_CAM_YAW_RATE_GAIN,
+                              -ST_CAM_RATE_MAX_RAD_S, ST_CAM_RATE_MAX_RAD_S)
+            pitch_rate = _clamp(-ex_y * ST_CAM_PITCH_RATE_GAIN,
+                                -ST_CAM_RATE_MAX_RAD_S, ST_CAM_RATE_MAX_RAD_S)
+            base_yaw += yaw_rate * dt
+            base_pitch += pitch_rate * dt
+            self._rot_base = (base_yaw, base_pitch, base_zoom)
+
+        # Position: absolute offset from the grab origin. Up (negative dy)
+        # raises the elevation toward the top-down view.
+        self._yaw_t = base_yaw + in_x * ST_CAM_YAW_POS_GAIN
+        self._pitch_t = _clamp(base_pitch - in_y * ST_CAM_PITCH_POS_GAIN,
+                               ST_PITCH_MIN_RAD, ST_PITCH_MAX_RAD)
+        # Pitch saturates, so fold the clamp back into the base — otherwise the
+        # rate term keeps integrating past the limit and the view sticks there
+        # for a while after the user pulls back.
+        self._rot_base = (self._rot_base[0],
+                          _clamp(self._rot_base[1], ST_PITCH_MIN_RAD,
+                                 ST_PITCH_MAX_RAD),
+                          self._rot_base[2])
+
+        # Zoom: position control off the opening span, with a deadzone so the
+        # hands' natural drift while yawing does not smuggle in a zoom.
+        ratio = span / ospan
+        if abs(ratio - 1.0) > ST_ZOOM_DEADZONE:
+            ratio -= math.copysign(ST_ZOOM_DEADZONE, ratio - 1.0)
+            self._zoom_t = _clamp(base_zoom * ratio, ST_ZOOM_MIN, ST_ZOOM_MAX)
+
+        # Any manual camera work drops the snap-to-view animation.
+        self._view_anim = False
         self.rotating = True
 
     def _ease_camera(self):
@@ -2791,12 +3011,26 @@ class Spacetime:
 
     # ---- physics -------------------------------------------------------
 
-    def _accel(self, x, y):
-        """Paczynski-Wiita acceleration at (x, y): ``a = G*M/(r - rs)^2``.
+    def _accel(self, x, y, vx=0.0, vy=0.0):
+        """Pseudo-Newtonian Kerr acceleration at (x, y) for a particle moving
+        at (vx, vy).
 
-        The pole sits at the horizon rather than at the centre — that single
-        change is what buys precession and the ISCO. Capture removes anything
-        that reaches ``rs``, so the clamp below only guards the last sub-step.
+        Uses Mukhopadhyay (2002)'s force (:func:`_kerr_force_factor`), which
+        reproduces the correct Kerr ISCO and reduces EXACTLY to Paczynski-Wiita
+        at zero spin — so a spinless scene is unchanged from before spin
+        existed. The unit bridge: at ``a = 0`` the formula gives
+        ``F = M_g^2/(r - rs)^2``, and PW wants ``G*m/(r - rs)^2``, so the
+        prefactor is ``G*m / M_g^2``.
+
+        The spin fed to F is SIGNED by the particle's own orbital direction
+        about that mass (prograde positive), which is what makes the ISCO
+        directional. The sign comes from the specific angular momentum
+        ``L = dx*vy - dy*vx``, smoothed with a tanh so a near-radial orbit
+        (L ~ 0) eases through zero spin instead of chattering between the
+        prograde and retrograde branches on alternate frames.
+
+        Velocity is only read for that sign, so the ``vx = vy = 0`` default
+        (used by the aim preview) simply evaluates the non-spinning branch.
         """
         ax = ay = 0.0
         for m in self.masses:
@@ -2804,30 +3038,58 @@ class Spacetime:
             r = math.hypot(dx, dy)
             if r < 1e-6:
                 continue
-            a = ST_ORB_G * m.m / max(r - m.rs, 1e-3) ** 2
-            ax += a * dx / r
-            ay += a * dy / r
+            m_g = m.m_geom
+            if m_g <= 0.0:
+                continue
+            a_signed = 0.0
+            if m.spin > 0.0:
+                # L about this mass; +z spin is counter-clockwise on screen.
+                lz = (-dx) * vy - (-dy) * vx
+                l_ref = 0.15 * r * math.sqrt(ST_ORB_G * m.m / max(r, 1e-3))
+                if l_ref > 1e-9:
+                    a_signed = min(m.spin, ST_SPIN_MAX) * math.tanh(lz / l_ref)
+            f = _kerr_force_factor(r / m_g, a_signed)
+            acc = (ST_ORB_G * m.m / (m_g * m_g)) * f
+            ax += acc * dx / r
+            ay += acc * dy / r
         return ax, ay
 
     def _step(self, dt):
         """Velocity-Verlet: symplectic, so a bound orbit stays bound over a
-        long exhibit run instead of spiralling out the way RK4 would."""
+        long exhibit run instead of spiralling out the way RK4 would.
+
+        Textbook VV assumes ``a(x)``, but the Kerr force reads velocity (for
+        the prograde/retrograde spin sign), which makes the update implicit.
+        Rather than iterate, the new acceleration is evaluated at the HALF-STEP
+        velocity — the standard explicit variant for weakly velocity-dependent
+        forces. It is a good trade here because the velocity only enters
+        through a tanh that saturates: except for a near-radial plunge the sign
+        is already pinned, so the term is effectively constant across a step.
+        """
         for o in self.orbiters:
             o.x += o.vx * dt + 0.5 * o.ax * dt * dt
             o.y += o.vy * dt + 0.5 * o.ay * dt * dt
-            nax, nay = self._accel(o.x, o.y)
+            vhx = o.vx + 0.5 * o.ax * dt
+            vhy = o.vy + 0.5 * o.ay * dt
+            nax, nay = self._accel(o.x, o.y, vhx, vhy)
             o.vx += 0.5 * (o.ax + nax) * dt
             o.vy += 0.5 * (o.ay + nay) * dt
             o.ax, o.ay = nax, nay
 
     def _capture(self):
-        """Swallow anything that crosses a horizon — the visible end of a
-        plunge from inside the ISCO."""
+        """Swallow anything that crosses a HORIZON — the visible end of a
+        plunge from inside the ISCO.
+
+        The threshold is ``r_horizon``, not ``rs``: a spinning body's horizon
+        shrinks toward ``rs/2``, so a fast hole lets a prograde orbiter survive
+        closer in than a still one would. That is the same Kerr geometry the
+        force uses, read at its other end.
+        """
         kept = []
         for o in self.orbiters:
             eaten = False
             for m in self.masses:
-                if math.hypot(o.x - m.x, o.y - m.y) <= m.rs:
+                if math.hypot(o.x - m.x, o.y - m.y) <= m.r_horizon:
                     m.flash = 1.0
                     eaten = True
                     break
@@ -2841,7 +3103,17 @@ class Spacetime:
         self.orbiters = [o for o in self.orbiters
                          if abs(o.x - cx) <= ex and abs(o.y - cy) <= ey]
 
-    def _advance(self):
+    def _advance(self, dt=None):
+        # Spin the bodies. Visual only, and on the SIM clock (time_scale) so
+        # speeding the sim up spins them up too — they are part of the physics
+        # being watched, not decoration on the renderer's clock the way the
+        # Charges arrows are.
+        sim_dt = self.time_scale * (ST_FRAME_DT if dt is None else dt)
+        for m in self.masses:
+            if m.spin > 0.0:
+                m.phase = (m.phase
+                           + m.omega_horizon * ST_SPIN_VIS_SCALE * sim_dt) % (2 * math.pi)
+
         # Bank this frame's simulated time and step in whole ST_PHYS_DT
         # chunks — never a sub-step derived from the frame remainder (see the
         # WAVE_PHYS_DT note in config: that mismatch pumps energy).
@@ -2873,6 +3145,75 @@ class Spacetime:
         for m in self.masses:
             z += _flamm_depth(math.hypot(x - m.x, y - m.y), m.rs)
         return -ST_MAX_DEPTH_PX * math.tanh(-z / ST_MAX_DEPTH_PX)
+
+    def _drag_frame(self, x, y):
+        """Lense-Thirring frame dragging: swirl a plane point around every
+        spinning mass.
+
+        A rotating body does not just dent spacetime, it WINDS it: inertial
+        frames near it are dragged around at ``omega = 2GJ/(c^2 r^3)``, the
+        far-field form (exact to leading order). The 1/r^3 falloff is what
+        makes this read as a tight local swirl rather than another wide well —
+        and it is why the effect is invisible around a star and violent around
+        a fast hole.
+
+        Returns the twisted (x, y). Display only — the ORBITS get their frame
+        dragging from the Kerr force's signed spin, not from here.
+
+        Mirrored in ``web/src/overlay/scene.ts`` (``dragFrame``).
+        """
+        for m in self.masses:
+            if m.spin <= 0.0:
+                continue
+            dx, dy = x - m.x, y - m.y
+            r = math.hypot(dx, dy)
+            if r < 1e-6 or r >= ST_CURV_REACH_PX:
+                continue
+            r_eff = max(r, m.r_horizon)
+            # 2GJ/(c^2 r^3) with J/(Mc) = a*M: the px factors cancel to a
+            # dimensionless angle once scaled by the same G/c^2 the rest uses.
+            omega = (2.0 * ST_ORB_G * m.m * m.spin_angular_momentum
+                     / (_C_SCREEN ** 2 * r_eff ** 3))
+            twist = _clamp(omega * ST_LT_TWIST_GAIN,
+                           -ST_LT_TWIST_MAX_RAD, ST_LT_TWIST_MAX_RAD)
+            # Taper to zero at the reach so a mass's influence stays local and
+            # the lattice edges do not shear.
+            twist *= (1.0 - r / ST_CURV_REACH_PX) ** 2
+            if abs(twist) < 1e-5:
+                continue
+            c, s = math.cos(twist), math.sin(twist)
+            x, y = m.x + dx * c - dy * s, m.y + dx * s + dy * c
+        return x, y
+
+    def _lattice_offset(self, x, y, z):
+        """3D-view radial map: pull a lattice point toward each mass by the
+        isotropic-coordinate relation (:func:`_isotropic_radius`).
+
+        This is what makes the 3D mode a picture of SPACE being compressed
+        rather than a sheet sagging into a fake extra dimension: the grid gets
+        denser near a mass because distances there really are stretched. The
+        pull is applied in full 3D, so the layers above and below a mass bend
+        toward it too — the reference image's signature.
+        """
+        for m in self.masses:
+            dx, dy, dz = x - m.x, y - m.y, z
+            r = math.sqrt(dx * dx + dy * dy + dz * dz)
+            if r < 1e-6 or r >= ST_CURV_REACH_PX:
+                continue
+            rbar = _isotropic_radius(max(r, m.r_horizon), m.rs)
+            delta = (r - rbar) * ST_LATTICE_GAIN
+            # Taper: the raw map keeps a constant rs/2 offset out to infinity,
+            # which with several masses would just translate the whole lattice.
+            # Fading it out at the reach keeps each mass's distortion local,
+            # exactly as the sheet's well is truncated there.
+            delta *= (1.0 - r / ST_CURV_REACH_PX) ** 2
+            # Never pull a point through the centre (a big gain on a close
+            # point could): clamp so the lattice compresses onto the horizon
+            # rather than turning inside out.
+            delta = min(delta, r - m.r_horizon * 0.5)
+            k = (r - delta) / r
+            x, y, z = m.x + dx * k, m.y + dy * k, dz * k
+        return x, y, z
 
     def _project(self, x, y, z):
         """World (plane px + depth) -> (screen px, camera depth).
@@ -2907,6 +3248,19 @@ class Spacetime:
             "max_depth": ST_MAX_DEPTH_PX,
             "grid": [ST_GRID_COLS, ST_GRID_ROWS, ST_LINE_SAMPLES,
                      ST_GRID_MARGIN],
+            # 3D volumetric lattice mode.
+            "view_3d": self.view_3d,
+            "lattice": [ST_LATTICE_COLS, ST_LATTICE_ROWS, ST_LATTICE_LAYERS,
+                        ST_LATTICE_SAMPLES, ST_LATTICE_MARGIN,
+                        ST_LATTICE_DEPTH_PX],
+            "lattice_verticals": ST_LATTICE_VERTICALS,
+            "lattice_gain": ST_LATTICE_GAIN,
+            "vert_stride": ST_LATTICE_VERT_STRIDE,
+            # Frame-dragging constants the renderer needs to mirror the twist.
+            "c": round(_C_SCREEN, 4),
+            "g": ST_ORB_G,
+            "lt_gain": ST_LT_TWIST_GAIN,
+            "lt_max": ST_LT_TWIST_MAX_RAD,
             "dim": ST_BACKDROP_ALPHA,
             "dim_rgb": ST_BACKDROP_RGB,
             "kind": self._kind,
@@ -2923,6 +3277,13 @@ class Spacetime:
                 "kind": m.kind,
                 "flash": round(m.flash, 3),
                 "grabbed": m is self._grab_mass,
+                # Kerr geometry. `r_ergo` is fixed at rs while `r_horizon`
+                # shrinks with spin, so the GAP between the two rings is the
+                # spin made visible; at a* = 0 they coincide and it vanishes.
+                "spin": round(m.spin, 3),
+                "phase": round(m.phase, 3),
+                "r_horizon": round(m.r_horizon, 2),
+                "r_ergo": round(m.r_ergo, 2),
             } for m in self.masses],
             "orbiters": [{
                 "id": o.id,
@@ -2958,54 +3319,46 @@ class Spacetime:
         cv2.addWeighted(overlay, ST_BACKDROP_ALPHA,
                         frame, 1.0 - ST_BACKDROP_ALPHA, 0, frame)
 
-        cols, rows = ST_GRID_COLS, ST_GRID_ROWS
-        n = ST_LINE_SAMPLES
-        half_w = self.w * ST_GRID_MARGIN * 0.5
-        half_h = self.h * ST_GRID_MARGIN * 0.5
-        cx, cy = self.w * 0.5, self.h * 0.5
-        x0, x1 = cx - half_w, cx + half_w
-        y0, y1 = cy - half_h, cy + half_h
-
-        def polyline(pts):
+        def polyline(pts, col=(150, 120, 70)):
             if len(pts) < 2:
                 return
             arr = np.array(pts, dtype=np.int32).reshape((-1, 1, 2))
-            cv2.polylines(frame, [arr], False, (150, 120, 70), 1, cv2.LINE_AA)
+            cv2.polylines(frame, [arr], False, col, 1, cv2.LINE_AA)
 
-        # Lines of constant x, then of constant y.
-        for i in range(cols + 1):
-            x = x0 + (x1 - x0) * i / cols
-            pts = []
-            for j in range(n + 1):
-                y = y0 + (y1 - y0) * j / n
-                sx, sy, _d = self._project(x, y, self._depth(x, y))
-                pts.append((sx, sy))
-            polyline(pts)
-        for j in range(rows + 1):
-            y = y0 + (y1 - y0) * j / rows
-            pts = []
-            for i in range(n + 1):
-                x = x0 + (x1 - x0) * i / n
-                sx, sy, _d = self._project(x, y, self._depth(x, y))
-                pts.append((sx, sy))
-            polyline(pts)
+        if self.view_3d:
+            self._draw_lattice_cv2(polyline)
+        else:
+            self._draw_sheet_cv2(polyline)
 
-        # Orbiters ride the sheet.
+        # Orbiters ride the sheet (drawn at their plane position in 3D mode —
+        # they orbit in the equatorial plane, which is the lattice's mid-layer).
         for o in self.orbiters:
-            sx, sy, _d = self._project(o.x, o.y, self._depth(o.x, o.y))
+            sx, sy, _d = self._project(
+                o.x, o.y, 0.0 if self.view_3d else self._depth(o.x, o.y))
             cv2.circle(frame, (int(sx), int(sy)), 5,
                        (ST_ORBITER_RGB[2], ST_ORBITER_RGB[1],
                         ST_ORBITER_RGB[0]), -1, cv2.LINE_AA)
 
         # Masses sit at the bottom of their own throat.
         for m in self.masses:
-            sx, sy, _d = self._project(m.x, m.y, self._depth(m.x, m.y))
+            sx, sy, _d = self._project(
+                m.x, m.y, 0.0 if self.view_3d else self._depth(m.x, m.y))
             rgb = ST_MASS_TYPES[m.kind]["rgb"]
-            rad = max(6, int(m.rs))
+            rad = max(6, int(m.r_horizon))
             cv2.circle(frame, (int(sx), int(sy)), rad,
                        (rgb[2], rgb[1], rgb[0]), -1, cv2.LINE_AA)
             cv2.circle(frame, (int(sx), int(sy)), rad, (210, 210, 220), 1,
                        cv2.LINE_AA)
+            # Ergosphere: only separates from the horizon when the body spins.
+            if m.spin > 0.0 and m.r_ergo > m.r_horizon + 1.0:
+                cv2.circle(frame, (int(sx), int(sy)), int(m.r_ergo),
+                           (170, 140, 90), 1, cv2.LINE_AA)
+            # Spin marker: a spoke, so the rotation is legible on a plain disk.
+            if m.spin > 0.0:
+                ex = int(sx + math.cos(m.phase) * rad)
+                ey = int(sy + math.sin(m.phase) * rad)
+                cv2.line(frame, (int(sx), int(sy)), (ex, ey),
+                         (230, 230, 240), 1, cv2.LINE_AA)
             if m.flash > 0.0:
                 cv2.circle(frame, (int(sx), int(sy)),
                            int(rad + 26 * (1.0 - m.flash)), (255, 255, 255),
@@ -3013,9 +3366,69 @@ class Spacetime:
 
         if self._pending is not None:
             px, py = self._pending["x"], self._pending["y"]
-            sx, sy, _d = self._project(px, py, self._depth(px, py))
+            sx, sy, _d = self._project(
+                px, py, 0.0 if self.view_3d else self._depth(px, py))
             cv2.circle(frame, (int(sx), int(sy)), 10, (200, 200, 200), 1,
                        cv2.LINE_AA)
+
+    def _draw_sheet_cv2(self, polyline):
+        cols, rows = ST_GRID_COLS, ST_GRID_ROWS
+        n = ST_LINE_SAMPLES
+        cx, cy = self.w * 0.5, self.h * 0.5
+        hw, hh = self.w * ST_GRID_MARGIN * 0.5, self.h * ST_GRID_MARGIN * 0.5
+        x0, x1, y0, y1 = cx - hw, cx + hw, cy - hh, cy + hh
+
+        def pt(x, y):
+            tx, ty = self._drag_frame(x, y)
+            sx, sy, _d = self._project(tx, ty, self._depth(tx, ty))
+            return (sx, sy)
+
+        for i in range(cols + 1):
+            x = x0 + (x1 - x0) * i / cols
+            polyline([pt(x, y0 + (y1 - y0) * j / n) for j in range(n + 1)])
+        for j in range(rows + 1):
+            y = y0 + (y1 - y0) * j / rows
+            polyline([pt(x0 + (x1 - x0) * i / n, y) for i in range(n + 1)])
+
+    def _draw_lattice_cv2(self, polyline):
+        """The 3D view: stacked layers of grid, each pulled radially toward the
+        masses in full 3D (:meth:`_lattice_offset`)."""
+        cols, rows = ST_LATTICE_COLS, ST_LATTICE_ROWS
+        layers, n = ST_LATTICE_LAYERS, ST_LATTICE_SAMPLES
+        cx, cy = self.w * 0.5, self.h * 0.5
+        hw = self.w * ST_LATTICE_MARGIN * 0.5
+        hh = self.h * ST_LATTICE_MARGIN * 0.5
+        x0, x1, y0, y1 = cx - hw, cx + hw, cy - hh, cy + hh
+        zs = [ST_LATTICE_DEPTH_PX * (k / (layers - 1) - 0.5)
+              for k in range(layers)] if layers > 1 else [0.0]
+
+        def pt(x, y, z):
+            tx, ty = self._drag_frame(x, y)
+            wx, wy, wz = self._lattice_offset(tx, ty, z)
+            sx, sy, _d = self._project(wx, wy, wz)
+            return (sx, sy)
+
+        for z in zs:
+            # The equatorial layer (z ~ 0) is where the orbits live, so it is
+            # drawn brighter than the rest of the stack.
+            col = (190, 165, 105) if abs(z) < 1e-6 else (120, 95, 55)
+            for i in range(cols + 1):
+                x = x0 + (x1 - x0) * i / cols
+                polyline([pt(x, y0 + (y1 - y0) * j / n, z)
+                          for j in range(n + 1)], col)
+            for j in range(rows + 1):
+                y = y0 + (y1 - y0) * j / rows
+                polyline([pt(x0 + (x1 - x0) * i / n, y, z)
+                          for i in range(n + 1)], col)
+        if ST_LATTICE_VERTICALS and layers > 1:
+            zn = 10
+            st = ST_LATTICE_VERT_STRIDE
+            for i in range(0, cols + 1, st):
+                for j in range(0, rows + 1, st):
+                    x = x0 + (x1 - x0) * i / cols
+                    y = y0 + (y1 - y0) * j / rows
+                    polyline([pt(x, y, zs[0] + (zs[-1] - zs[0]) * k / zn)
+                              for k in range(zn + 1)], (95, 75, 45))
 
 
 class Puppet:

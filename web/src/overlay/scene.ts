@@ -794,6 +794,80 @@ function sheetDepth(o: SpacetimeObject, x: number, y: number) {
   return -o.max_depth * Math.tanh(-z / o.max_depth);
 }
 
+/**
+ * Areal radius -> Schwarzschild ISOTROPIC radius. Port of
+ * `_isotropic_radius` in ui/interactables.py — KEEP IN SYNC.
+ *
+ * Inverts r = rbar*(1 + rs/(4*rbar))², landing the horizon at rbar = rs/4.
+ * Drawing the lattice at rbar is what compresses space toward a mass in the
+ * 3D view — it comes from the metric, not from taste.
+ */
+function isotropicRadius(r: number, rs: number) {
+  if (rs <= 0) return r;
+  const half = rs * 0.5;
+  const b = r - half;
+  const disc = b * b - half * half;
+  if (disc <= 0) return rs * 0.25;
+  return (b + Math.sqrt(disc)) * 0.5;
+}
+
+/**
+ * Lense–Thirring frame dragging — port of `Spacetime._drag_frame`.
+ * A spinning mass winds space around itself at ω = 2GJ/(c²r³); the 1/r³
+ * falloff makes it a tight local swirl, invisible around a star and violent
+ * around a fast hole. Display only.
+ */
+function dragFrame(o: SpacetimeObject, x: number, y: number): [number, number] {
+  for (const m of o.masses) {
+    if (m.spin <= 0) continue;
+    const dx = x - m.x;
+    const dy = y - m.y;
+    const r = Math.hypot(dx, dy);
+    if (r < 1e-6 || r >= o.reach) continue;
+    const rEff = Math.max(r, m.r_horizon);
+    const j = m.spin * (m.rs * 0.5); // J/(Mc) = a* * M
+    let twist = (2 * o.g * m.m * j) / (o.c * o.c * rEff * rEff * rEff);
+    twist = Math.max(-o.lt_max, Math.min(o.lt_max, twist * o.lt_gain));
+    twist *= (1 - r / o.reach) ** 2;
+    if (Math.abs(twist) < 1e-5) continue;
+    const c = Math.cos(twist);
+    const s = Math.sin(twist);
+    x = m.x + dx * c - dy * s;
+    y = m.y + dx * s + dy * c;
+  }
+  return [x, y];
+}
+
+/**
+ * 3D-view radial map — port of `Spacetime._lattice_offset`. Pulls a lattice
+ * point toward each mass in full 3D by the isotropic relation, so the layers
+ * above and below a mass bend toward it too.
+ */
+function latticeOffset(
+  o: SpacetimeObject,
+  x: number,
+  y: number,
+  z: number,
+): [number, number, number] {
+  for (const m of o.masses) {
+    const dx = x - m.x;
+    const dy = y - m.y;
+    const dz = z;
+    const r = Math.sqrt(dx * dx + dy * dy + dz * dz);
+    if (r < 1e-6 || r >= o.reach) continue;
+    const rbar = isotropicRadius(Math.max(r, m.r_horizon), m.rs);
+    let delta = (r - rbar) * o.lattice_gain;
+    delta *= (1 - r / o.reach) ** 2;
+    // never pull a point through the centre
+    delta = Math.min(delta, r - m.r_horizon * 0.5);
+    const k = (r - delta) / r;
+    x = m.x + dx * k;
+    y = m.y + dy * k;
+    z = dz * k;
+  }
+  return [x, y, z];
+}
+
 /** World (plane px, depth) -> [screenX, screenY, cameraDepth]. */
 function project(
   o: SpacetimeObject,
@@ -846,28 +920,21 @@ function drawSpacetime(
   fw: number,
   fh: number,
 ) {
-  const [cols, rows, samples, extent] = o.grid;
   const cx = fw * 0.5;
   const cy = fh * 0.5;
-  const halfW = fw * extent * 0.5;
-  const halfH = fh * extent * 0.5;
-  const x0 = cx - halfW;
-  const x1 = cx + halfW;
-  const y0 = cy - halfH;
-  const y1 = cy + halfH;
 
   // One stroke per gridline (not per segment): ~40 draw calls a frame instead
   // of ~3000, which is what keeps this affordable on the Jetson kiosk. The
   // well reads from the GEOMETRY (the sag) plus the mass markers; the fog only
   // has to sell near-vs-far, so a per-line mean depth is enough.
-  const strokeLine = (pts: [number, number, number][]) => {
+  const strokeLine = (pts: [number, number, number][], alpha = 1) => {
     if (pts.length < 2) return;
     let meanD = 0;
     for (const p of pts) meanD += p[2];
     meanD /= pts.length;
     // Fog: +/- one frame-width of depth maps to the alpha range.
     const t = Math.max(0, Math.min(1, 0.5 - meanD / (fw * 1.6)));
-    ctx.strokeStyle = `rgba(${120 + 80 * t},${170 + 60 * t},255,${0.16 + 0.42 * t})`;
+    ctx.strokeStyle = `rgba(${120 + 80 * t},${170 + 60 * t},255,${(0.16 + 0.42 * t) * alpha})`;
     ctx.lineWidth = 1;
     ctx.beginPath();
     ctx.moveTo(pts[0][0], pts[0][1]);
@@ -875,24 +942,97 @@ function drawSpacetime(
     ctx.stroke();
   };
 
-  for (let i = 0; i <= cols; i++) {
-    const x = x0 + ((x1 - x0) * i) / cols;
-    const pts: [number, number, number][] = [];
-    for (let j = 0; j <= samples; j++) {
-      const y = y0 + ((y1 - y0) * j) / samples;
-      pts.push(project(o, x, y, sheetDepth(o, x, y), fw, fh));
+  if (o.view_3d) {
+    // --- 3D: a VOLUME of space, compressed radially toward each mass. No
+    // fake extra dimension and no "downhill" — the grid is simply denser where
+    // distances are stretched, which is what curvature actually does.
+    const [lc, lr, layers, ls, lext, ldepth] = o.lattice;
+    const hw = fw * lext * 0.5;
+    const hh = fh * lext * 0.5;
+    const lx0 = cx - hw;
+    const lx1 = cx + hw;
+    const ly0 = cy - hh;
+    const ly1 = cy + hh;
+    const zs: number[] = [];
+    for (let k = 0; k < layers; k++) {
+      zs.push(layers > 1 ? ldepth * (k / (layers - 1) - 0.5) : 0);
     }
-    strokeLine(pts);
-  }
-  for (let j = 0; j <= rows; j++) {
-    const y = y0 + ((y1 - y0) * j) / rows;
-    const pts: [number, number, number][] = [];
-    for (let i = 0; i <= samples; i++) {
-      const x = x0 + ((x1 - x0) * i) / samples;
-      pts.push(project(o, x, y, sheetDepth(o, x, y), fw, fh));
+    const pt = (x: number, y: number, z: number): [number, number, number] => {
+      const [tx, ty] = dragFrame(o, x, y);
+      const [wx, wy, wz] = latticeOffset(o, tx, ty, z);
+      return project(o, wx, wy, wz, fw, fh);
+    };
+    for (const z of zs) {
+      // The equatorial layer is where the orbits live — brighten it so the
+      // stack reads as a volume with a distinguished plane, not a mush.
+      const a = Math.abs(z) < 1e-6 ? 1.35 : 0.62;
+      for (let i = 0; i <= lc; i++) {
+        const x = lx0 + ((lx1 - lx0) * i) / lc;
+        const pts: [number, number, number][] = [];
+        for (let j = 0; j <= ls; j++) {
+          pts.push(pt(x, ly0 + ((ly1 - ly0) * j) / ls, z));
+        }
+        strokeLine(pts, a);
+      }
+      for (let j = 0; j <= lr; j++) {
+        const y = ly0 + ((ly1 - ly0) * j) / lr;
+        const pts: [number, number, number][] = [];
+        for (let i = 0; i <= ls; i++) {
+          pts.push(pt(lx0 + ((lx1 - lx0) * i) / ls, y, z));
+        }
+        strokeLine(pts, a);
+      }
     }
-    strokeLine(pts);
+    if (o.lattice_verticals && layers > 1) {
+      const zn = 10;
+      const vs = Math.max(1, o.vert_stride);
+      for (let i = 0; i <= lc; i += vs) {
+        for (let j = 0; j <= lr; j += vs) {
+          const x = lx0 + ((lx1 - lx0) * i) / lc;
+          const y = ly0 + ((ly1 - ly0) * j) / lr;
+          const pts: [number, number, number][] = [];
+          for (let k = 0; k <= zn; k++) {
+            pts.push(pt(x, y, zs[0] + ((zs[zs.length - 1] - zs[0]) * k) / zn));
+          }
+          strokeLine(pts, 0.3);
+        }
+      }
+    }
+  } else {
+    // --- 2D: the classic embedding sheet (one slice, bent into a dimension
+    // that is not really there).
+    const [cols, rows, samples, extent] = o.grid;
+    const hw = fw * extent * 0.5;
+    const hh = fh * extent * 0.5;
+    const x0 = cx - hw;
+    const x1 = cx + hw;
+    const y0 = cy - hh;
+    const y1 = cy + hh;
+    const pt = (x: number, y: number): [number, number, number] => {
+      const [tx, ty] = dragFrame(o, x, y);
+      return project(o, tx, ty, sheetDepth(o, tx, ty), fw, fh);
+    };
+    for (let i = 0; i <= cols; i++) {
+      const x = x0 + ((x1 - x0) * i) / cols;
+      const pts: [number, number, number][] = [];
+      for (let j = 0; j <= samples; j++) {
+        pts.push(pt(x, y0 + ((y1 - y0) * j) / samples));
+      }
+      strokeLine(pts);
+    }
+    for (let j = 0; j <= rows; j++) {
+      const y = y0 + ((y1 - y0) * j) / rows;
+      const pts: [number, number, number][] = [];
+      for (let i = 0; i <= samples; i++) {
+        pts.push(pt(x0 + ((x1 - x0) * i) / samples, y));
+      }
+      strokeLine(pts);
+    }
   }
+
+  // Orbiters live in the equatorial plane; in 3D that IS z = 0, in 2D it is
+  // the sheet's own surface.
+  const depthAt = (x: number, y: number) => (o.view_3d ? 0 : sheetDepth(o, x, y));
 
   // Orbiter trails — the precession evidence.
   const [tr, tg, tb] = o.orbiter_rgb;
@@ -904,7 +1044,7 @@ function drawSpacetime(
     ctx.beginPath();
     for (let i = 0; i < trail.length; i++) {
       const [wx, wy] = trail[i];
-      const [sx, sy] = project(o, wx, wy, sheetDepth(o, wx, wy), fw, fh);
+      const [sx, sy] = project(o, wx, wy, depthAt(wx, wy), fw, fh);
       if (i === 0) ctx.moveTo(sx, sy);
       else ctx.lineTo(sx, sy);
     }
@@ -917,14 +1057,7 @@ function drawSpacetime(
   const markers: Marker[] = [];
 
   for (const orb of o.orbiters) {
-    const [sx, sy, d] = project(
-      o,
-      orb.x,
-      orb.y,
-      sheetDepth(o, orb.x, orb.y),
-      fw,
-      fh,
-    );
+    const [sx, sy, d] = project(o, orb.x, orb.y, depthAt(orb.x, orb.y), fw, fh);
     const rad = Math.max(2.5, 5 * depthScale(o, d));
     markers.push({
       d,
@@ -938,13 +1071,15 @@ function drawSpacetime(
   }
 
   for (const m of o.masses) {
-    const [sx, sy, d] = project(o, m.x, m.y, sheetDepth(o, m.x, m.y), fw, fh);
+    const [sx, sy, d] = project(o, m.x, m.y, depthAt(m.x, m.y), fw, fh);
     const sc = depthScale(o, d);
-    // A compact body IS its horizon, so it is drawn at rs; a star only gets a
-    // marker, floored so it stays visible when the camera pulls back.
+    // A compact body IS its horizon, so it is drawn at r_horizon — which
+    // SHRINKS as it spins. A star only gets a marker, floored so it stays
+    // visible when the camera pulls back.
     const rad = m.compact
-      ? Math.max(4, m.rs * sc)
-      : Math.max(7, m.rs * sc * 0.9);
+      ? Math.max(4, m.r_horizon * sc)
+      : Math.max(7, m.r_horizon * sc * 0.9);
+    const ergo = m.r_ergo * sc;
     const [r, g, b] = m.rgb;
     markers.push({
       d,
@@ -958,6 +1093,18 @@ function drawSpacetime(
           ctx.arc(sx, sy, rad * 3, 0, Math.PI * 2);
           ctx.fill();
         }
+        // Ergosphere. It sits at rs regardless of spin while the horizon
+        // shrinks under it, so this ring only separates from the body when it
+        // spins — the gap IS the spin, and at a* = 0 it closes by itself.
+        if (m.spin > 0 && ergo > rad + 1.5) {
+          ctx.strokeStyle = `rgba(150,190,255,${0.16 + 0.3 * m.spin})`;
+          ctx.lineWidth = 1;
+          ctx.setLineDash([3, 4]);
+          ctx.beginPath();
+          ctx.arc(sx, sy, ergo, 0, Math.PI * 2);
+          ctx.stroke();
+          ctx.setLineDash([]);
+        }
         ctx.fillStyle = `rgb(${r},${g},${b})`;
         ctx.beginPath();
         ctx.arc(sx, sy, rad, 0, Math.PI * 2);
@@ -969,6 +1116,23 @@ function drawSpacetime(
             : "rgba(255,255,255,0.6)";
         ctx.lineWidth = m.grabbed ? 2.5 : 1;
         ctx.stroke();
+        // Spin marker: two spokes, so rotation is legible on a plain disk
+        // (one spoke on a symmetric disk reads ambiguously at speed).
+        if (m.spin > 0) {
+          ctx.strokeStyle = m.compact
+            ? "rgba(200,215,255,0.9)"
+            : "rgba(90,60,20,0.9)";
+          ctx.lineWidth = 1.5;
+          ctx.beginPath();
+          for (const k of [0, Math.PI]) {
+            ctx.moveTo(sx, sy);
+            ctx.lineTo(
+              sx + Math.cos(m.phase + k) * rad * 0.85,
+              sy + Math.sin(m.phase + k) * rad * 0.85,
+            );
+          }
+          ctx.stroke();
+        }
         if (m.flash > 0) {
           ctx.strokeStyle = `rgba(255,255,255,${m.flash})`;
           ctx.lineWidth = 2;
@@ -989,7 +1153,7 @@ function drawSpacetime(
       o,
       o.ghost.x,
       o.ghost.y,
-      sheetDepth(o, o.ghost.x, o.ghost.y),
+      depthAt(o.ghost.x, o.ghost.y),
       fw,
       fh,
     );
