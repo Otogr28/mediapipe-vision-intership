@@ -165,7 +165,7 @@ constant and fix the other:
 | Waves | `WAVE_MAX_SOURCES`, display tone curve | `web/src/gl/waves_step.frag.glsl`, `waves_render.frag.glsl` |
 | Charges | `CHG_MAX`, arrow constants | `web/src/gl/charges.frag.glsl`, `web/src/overlay/scene.ts` |
 | Black hole | `rendering/shaders/black_hole.frag` | `web/src/gl/blackhole.frag.glsl` |
-| Spacetime | `_flamm_depth`, `Spacetime._project`, `_depth`'s tanh clamp | `web/src/overlay/scene.ts` (`flammDepth` / `project` / `sheetDepth`) |
+| Spacetime | `_flamm_depth`, `_isotropic_radius`, `_project`, `_depth`, `_drag_frame`, `_lattice_offset` | `web/src/overlay/scene.ts` (`flammDepth` / `isotropicRadius` / `project` / `sheetDepth` / `dragFrame` / `latticeOffset`) |
 
 Two physics lessons already paid for, recorded in `config.py` and worth not re-learning:
 the leapfrog integrators (`WAVE_PHYS_DT`, `ORB_PHYS_DT`, `ST_PHYS_DT`) **must** step in
@@ -187,6 +187,17 @@ gesture supersedes a one-finger pan. That is why it places on RELEASE rather tha
 pinch edge — a mass must not appear just because the user was reaching for the second
 pinch — and why hands that took part in a rotate stay inert until they re-pinch. Reuse
 that pattern rather than inventing a new one if another scene needs two hands.
+
+**Camera control is hybrid position/rate, and the reason is structural** — don't "simplify"
+it back to an incremental drag (that was v1, and it was rightly called crude). A hand is an
+*isotonic* input with a **bounded** usable workspace: `manager.EDGE_MARGIN_FRAC` documents
+that the landmark model degrades near the frame border, so any gesture needing long travel
+dies half-way. Incremental drag also has no home — returning your hands doesn't return the
+view, so nothing is aimable. Per Zhai & Milgram, isotonic→position is the good pairing but
+can't cover unbounded rotation without clutching; Casiez et al.'s RubberEdge resolves it by
+blending position control (inside a disc around the grab origin) into rate control (outside
+it). So: precise and homed near the centre, push-and-hold to spin forever. Same shape
+should be reused for any future free-hand camera.
 
 ### Modularity preference
 

@@ -583,12 +583,31 @@ CHG_GRID_PX = 8
 # nonlinear, so two wells do not superpose. It is the standard visual
 # approximation and is exact for the single-mass case.
 #
-# THE ORBITS use the Paczynski-Wiita pseudo-Newtonian potential,
-# a = -G*M/(r - rs)^2, the standard cheap stand-in for Schwarzschild geodesics:
-# it reproduces the two things Newtonian gravity cannot show — perihelion
-# PRECESSION (the ellipse rotates; this is the Mercury effect) and an ISCO at
-# r = 3*rs, inside which no circular orbit exists and the particle spirals in.
-# That is what makes this experiment "relativistic" rather than a sagging mesh.
+# THE ORBITS use a pseudo-Newtonian stand-in for the geodesics. For a
+# non-spinning body that is Paczynski-Wiita, a = -G*M/(r - rs)^2 — moving the
+# pole from the centre to the HORIZON is the whole trick, and it buys the two
+# things Newtonian gravity cannot show: perihelion PRECESSION (the ellipse
+# rotates; the Mercury effect) and an ISCO at r = 3*rs, inside which no
+# circular orbit exists and the particle spirals in and is swallowed.
+#
+# Since the bodies SPIN (see ST_MASS_TYPES' `spin`), the force is Mukhopadhyay
+# (2002)'s Kerr generalisation, in units G = M = c = 1 with x = r/r_g:
+#
+#     F(x) = (x^2 - 2*a*sqrt(x) + a^2)^2 / ( x^3 * (sqrt(x)*(x - 2) + a)^2 )
+#
+# chosen over hand-rolling something because it is CONSTRUCTED to give the
+# exact Kerr ISCO (measured here: 0.0% error at every spin from -0.998 to
+# +0.998), and because at a = 0 it collapses to 1/(x-2)^2 — i.e. to
+# Paczynski-Wiita, to machine precision. So spin is a strict generalisation: a
+# non-spinning scene behaves exactly as it did before spin existed, and the
+# measured 47 deg/lap precession is untouched.
+#
+# The headline consequence, and the reason spin is worth the complexity: the
+# ISCO becomes DIRECTIONAL. Co-rotating with an extremal hole you can hold an
+# orbit down to 1.24 r_g; counter-rotating you cannot get closer than 8.99;
+# without spin it is 6.00 either way. Space is being dragged, and which way you
+# swim in it changes where you can survive. `a` in F() is signed by the orbit's
+# own direction, so this falls out rather than being special-cased.
 #
 # Python owns the mass/orbiter lists, the camera angles and the integration;
 # both renderers derive the picture. The projection + depth math is mirrored in
@@ -614,18 +633,94 @@ ST_DEPTH_GAIN = 1.25
 # Display only; the ORBIT physics reads the unclamped geometry.
 ST_MAX_DEPTH_PX = 210.0
 
-# Mass presets: (m, label, rgb). `compact` marks a horizon-sized body drawn as
-# a black disk — same mass scale, but its rs is where the sheet's throat is, so
-# it is the one preset where the horizon is visibly bigger than the marker.
+# Mass presets: (m, label, rgb, spin). `compact` marks a horizon-sized body
+# drawn as a black disk — same mass scale, but its rs is where the sheet's
+# throat is, so it is the one preset where the horizon is visibly bigger than
+# the marker.
+#
+# `spin` is the DIMENSIONLESS Kerr spin a* = Jc/(GM^2), in [0, 1). Astrophysics
+# picks the numbers: real stars are slow rotators in these units (the Sun is
+# a* ~ 2e-6 — utterly invisible, so "Star" gets a token spin purely so the
+# marker turns), while accreting black holes are commonly measured near
+# extremal. 0.998 is the Thorne limit — radiation capture stops accretion
+# spinning a hole past it, so a* = 1 is not physical and is not offered.
 ST_MASS_TYPES = {
-    "star":  {"m": 1.0, "label": "Star", "rgb": [255, 226, 158], "compact": False},
-    "giant": {"m": 2.4, "label": "Giant", "rgb": [255, 168, 104], "compact": False},
-    "bh":    {"m": 4.0, "label": "Hole", "rgb": [18, 16, 26], "compact": True},
+    "star":  {"m": 1.0, "label": "Star", "rgb": [255, 226, 158],
+              "compact": False, "spin": 0.15},
+    "giant": {"m": 2.4, "label": "Giant", "rgb": [255, 168, 104],
+              "compact": False, "spin": 0.3},
+    "bh":    {"m": 4.0, "label": "Hole", "rgb": [18, 16, 26],
+              "compact": True, "spin": 0.9},
 }
 ST_DEFAULT_KIND = "star"
+ST_SPIN_MAX = 0.998          # Thorne limit
+# Visual rotation rate of a marker, as a fraction of the body's own horizon
+# angular velocity Omega_H = a*c^3 / (2GM(1 + sqrt(1 - a*^2))). Scaled down
+# because Omega_H at a* = 0.9 is genuinely thousands of rad/s in screen units
+# — accurate and completely unwatchable. The RATIO between bodies is preserved,
+# so a fast hole still visibly outspins a slow star. Display only.
+ST_SPIN_VIS_SCALE = 4.0e-4
+# Frame dragging (Lense-Thirring). A spinning mass drags spacetime around with
+# it at omega = 2GJ/(c^2 r^3) — the far-field form, exact to leading order.
+# This twists the grid azimuthally near a spinning body, which is the whole
+# "black holes deform space so much" point: they do not just dent it, they
+# WIND it. The 1/r^3 falloff makes it a tight local swirl, unlike the well.
+ST_LT_TWIST_GAIN = 1.0       # multiplier on the twist's visual amplitude
+ST_LT_TWIST_MAX_RAD = 1.1    # cap, so the grid cannot wind into a solid disk
 # The "Orbiter" palette entry places a test particle instead of a mass.
 ST_ORBITER_KIND = "orbiter"
 ST_ORBITER_RGB = [140, 235, 255]
+
+# --- View mode: 2D sheet vs 3D volumetric lattice ------------------------
+# Two honestly different pictures of the same geometry, toggled by a button:
+#
+#   SHEET (2D)   — the classic embedding diagram: ONE 2D slice of space, bent
+#                  into a third dimension that is not really there. It is the
+#                  famous image, and it is also the one that quietly lies:
+#                  people read the ball as "rolling downhill", i.e. gravity
+#                  explained by gravity.
+#   LATTICE (3D)  — a volume of space, compressed radially toward each mass.
+#                  No fake extra dimension, no downhill: the grid itself is
+#                  denser near the mass, which is what curvature actually does
+#                  to distances. This is the picture the reference shows.
+#
+# The lattice's radial map is Schwarzschild's ISOTROPIC coordinate relation,
+# not an art-directed pull. Areal radius r relates to isotropic radius rbar by
+# r = rbar * (1 + rs/(4*rbar))^2, which inverts to
+#     rbar = ((r - rs/2) + sqrt((r - rs/2)^2 - rs^2/4)) / 2,   r >= rs
+# and puts the horizon at rbar = rs/4 — a real 4x compression at the horizon,
+# tapering with distance. Drawing a uniform lattice at rbar instead of r gives
+# exactly the pinch in the reference, from the metric rather than by eye.
+# (Superposed over several masses, with the same caveat as the sheet: GR is
+# nonlinear, so this is exact for one mass and an approximation for many.)
+ST_VIEW_3D_DEFAULT = False   # open on the sheet; the button switches
+# Lattice resolution. Much coarser than the sheet's grid ON PURPOSE: this is
+# ST_LATTICE_LAYERS stacked grids plus verticals, so cost scales with the
+# layer count and the Jetson kiosk pays it in Canvas2D.
+ST_LATTICE_LAYERS = 5
+ST_LATTICE_COLS = 12
+ST_LATTICE_ROWS = 8
+ST_LATTICE_SAMPLES = 44
+ST_LATTICE_DEPTH_PX = 300.0  # vertical extent of the lattice box (px). Kept
+                             # well under the reach: layers further out than
+                             # ST_CURV_REACH_PX from a mass feel nothing and
+                             # just add flat clutter.
+ST_LATTICE_MARGIN = 1.15     # slightly larger than the frame, so a mass placed
+                             # anywhere the user can reach is INSIDE the volume.
+                             # The box edges therefore sit just off-screen — the
+                             # reference is a standalone model that can show its
+                             # own corners; an AR overlay reads better as "space
+                             # fills the view".
+ST_LATTICE_VERTICALS = True  # the box's vertical struts; off = layers only
+ST_LATTICE_VERT_STRIDE = 2   # ...but only every Nth node, or 100+ struts turn
+                             # the volume into a hairball
+# Display exaggeration of the radial pull, the lattice's answer to
+# ST_DEPTH_GAIN. Needed because the isotropic map is HONEST and therefore tiny:
+# the offset saturates at rs/2, which is ~18 px for the Hole preset against a
+# 720 px frame — a real effect nobody would ever see. The MAP is the metric's;
+# only its amplitude is turned up, and (as with the sheet) the orbits never
+# read any of it.
+ST_LATTICE_GAIN = 7.0
 
 # Grid: how many lines each way, and how finely each line is sampled. The
 # sample count is what makes a line CURVE through the well, so it is much
@@ -640,22 +735,60 @@ ST_LINE_SAMPLES = 72
 # frame through a full spin; cols/rows are scaled with it to hold cell density.
 ST_GRID_MARGIN = 1.7
 
-# Camera. `pitch` is elevation above the sheet: 90 deg looks straight down
-# (flat map, no visible depth), 0 deg is edge-on. ~34 deg is the classic
-# rubber-sheet three-quarter view.
+# Camera — a TURNTABLE (yaw about the sheet's normal + elevation), not an
+# arcball. The sheet has a real "up", so preserving it is what keeps the view
+# legible; arcball's unrestricted spin would let a visitor tumble the scene to
+# an unreadable angle with no way back. Blender defaults to turntable for the
+# same reason.
+#
+# `pitch` is elevation above the sheet: 90 deg is straight down, 0 is edge-on.
 ST_YAW_DEFAULT_RAD = 0.0
-ST_PITCH_DEFAULT_RAD = math.radians(34.0)
-ST_PITCH_MIN_RAD = math.radians(8.0)    # below this the sheet is a line
-ST_PITCH_MAX_RAD = math.radians(89.0)   # 90 exactly kills the depth cue
+ST_PITCH_DEFAULT_RAD = math.radians(34.0)   # classic three-quarter view
+ST_PITCH_MIN_RAD = math.radians(6.0)        # below this the sheet is a line
+# 90 deg exactly is fine and reachable — the projection has no singularity
+# there (it degenerates to a plain top-down map, which is the point). The old
+# 89 deg cap was pointless timidity.
+ST_PITCH_MAX_RAD = math.radians(90.0)
 ST_FOCAL_PX = 1700.0         # perspective focal length; larger = flatter
 ST_ZOOM_MIN, ST_ZOOM_MAX = 0.55, 2.4
-# Two-hand rotate gains, per pixel of two-hand MIDPOINT travel. Deliberately
-# gentle: the pinch cursor is already One-Euro smoothed, but a hand-held
-# gesture has no detent, so a high gain makes the scene impossible to aim.
-ST_ROT_YAW_GAIN = 0.0060     # rad per px of horizontal midpoint travel
-ST_ROT_PITCH_GAIN = 0.0040   # rad per px of vertical midpoint travel
-# Camera easing (0..1 per frame): the angles the renderer sees chase the
-# gesture's targets. Kills the residual tremor a bare hand cannot avoid.
+
+# --- Two-hand camera control: hybrid position/rate (RubberEdge-style) -----
+#
+# v1 was a plain INCREMENTAL drag (angle += midpoint delta * gain) and it was
+# rightly called crude. Two failures, both structural:
+#   1. Reaching a top-down view needed ~240 px of sustained upward travel with
+#      BOTH pinches held — which ends with the hands near the frame edge, the
+#      exact place `manager.EDGE_MARGIN_FRAC` documents the landmark model
+#      degrading. The pinch drops, the gesture dies half-way, top view is
+#      effectively unreachable.
+#   2. Incremental means the mapping has no home: returning your hands to where
+#      they started does NOT return the view, so nothing is aimable.
+#
+# The fix follows the HCI literature rather than taste. Zhai & Milgram's 6-DOF
+# taxonomy says the good pairings are isotonic->position and isometric->rate;
+# a hand is ISOTONIC (free-moving, no resistance), so rate control alone would
+# be the bad pairing. But pure position control can't cover unbounded rotation
+# from a bounded workspace without clutching, and clutching is what wrecked v1.
+# Casiez et al.'s RubberEdge resolves exactly this: POSITION control inside a
+# disc around the grab origin, blending to RATE control outside it — measured
+# ~20% better than position control when clutching is significant.
+#
+# So: within ST_CAM_POS_RADIUS_PX of where the two-pinch started, hand offset
+# maps ABSOLUTELY to an angle offset (precise, aimable, has a home). Push past
+# the disc and the excess becomes angular VELOCITY, so you can spin forever
+# from a small, comfortable, well-tracked region near the frame centre.
+ST_CAM_POS_RADIUS_PX = 150.0
+ST_CAM_YAW_POS_GAIN = 0.0075    # rad per px inside the disc (~64 deg at the rim)
+ST_CAM_PITCH_POS_GAIN = 0.0075
+ST_CAM_YAW_RATE_GAIN = 0.011    # rad/s per px of excess beyond the disc
+ST_CAM_PITCH_RATE_GAIN = 0.009
+ST_CAM_RATE_MAX_RAD_S = 2.2     # ~1 turn / 3 s at full push; fast but trackable
+# Zoom is position-controlled from the grab's opening span, with a deadzone so
+# the hands' natural drift while yawing does not smuggle in a zoom.
+ST_ZOOM_DEADZONE = 0.07
+# Camera easing (0..1 per frame): the rendered angles chase the gesture target,
+# killing the tremor a bare hand cannot avoid. Also drives the view-toggle
+# animation, so it doubles as the snap-to-view speed.
 ST_CAM_SMOOTH = 0.25
 
 # Orbit integration. Velocity-Verlet in fixed ST_PHYS_DT chunks, exactly like

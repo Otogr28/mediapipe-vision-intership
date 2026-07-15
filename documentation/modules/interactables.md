@@ -269,24 +269,37 @@ Relativistic gravity sandbox: a wireframe sheet that bends under the masses you 
 
 > The three experiments added before this one (`Orbitals`, `Waves`, `Charges`) are not yet written up in this file — see their `ST_*`-style config blocks and class docstrings, which carry the same detail.
 
-### One geometry, two uses
+### One geometry, everything else
 
-Each mass gets a Schwarzschild radius `rs = ST_RS_PER_MASS * m`, and that same `rs` drives both halves — so the shape on screen and the physics the particles feel are the same spacetime, not two unrelated effects. Fixing `rs` per unit mass also fixes `c` in screen units (`rs = 2GM/c²`), which is why there is no separate `c` knob.
+Each mass gets a Schwarzschild radius `rs = ST_RS_PER_MASS * m`, and that same `rs` drives every other part — so the shape on screen and the physics the particles feel are the same spacetime, not unrelated effects. Fixing `rs` per unit mass also fixes `c` in screen units (`rs = 2GM/c²`), which is why there is no separate `c` knob (`_C_SCREEN` is derived).
 
-- **The sheet** is Flamm's paraboloid `z(r) = 2·√(rs·(r − rs))`, the exact embedding of the Schwarzschild equatorial slice, measured *downward* from `ST_CURV_REACH_PX` so each well is local and finite (it bottoms out at the throat instead of diverging like a Newtonian 1/r funnel). Summing one-mass paraboloids is **not** a solution of Einstein's equations — they are nonlinear, so wells do not really superpose. It is the standard visual approximation, and exact for a single mass.
-- **The orbits** use the Paczyński–Wiita potential `a = −GM/(r − rs)²`. Moving the pole from the centre to the horizon is the whole trick: it reproduces perihelion **precession** and an **ISCO** at `3·rs`, inside which nothing orbits and the particle plunges and is swallowed. Measured: a Star at r ≈ 22·rs precesses ~47° per lap, stable over long runs (velocity-Verlet is symplectic).
+- **The sheet (2D view)** is Flamm's paraboloid `z(r) = 2·√(rs·(r − rs))`, the exact embedding of the Schwarzschild equatorial slice, measured *downward* from `ST_CURV_REACH_PX` so each well is local and finite (it bottoms out at the throat instead of diverging like a Newtonian 1/r funnel).
+- **The lattice (3D view)** is a *volume*, mapped by Schwarzschild's **isotropic** coordinate relation `r = r̄(1 + rs/(4r̄))²`, inverted in `_isotropic_radius`, which lands the horizon at `r̄ = rs/4`. Drawing a uniform lattice at `r̄` compresses space toward each mass — no fake extra dimension and no "downhill", just distances being stretched, which is what curvature actually is. It is the honest picture; the sheet is the famous one.
+- **The orbits** use Mukhopadhyay (2002)'s pseudo-Newtonian **Kerr** force. It is *constructed* to give the exact Kerr ISCO (measured: 0.0% error at every spin from −0.998 to +0.998) and collapses to Paczyński–Wiita at `a* = 0` to machine precision (3e-16), so spin is a strict generalisation. Precession is measured at 47°/lap for a Star at r ≈ 22·r_g, unchanged by the Kerr work.
+- **Spin** (`ST_MASS_TYPES[...]["spin"]`, dimensionless `a*`) makes the ISCO **directional** — 1.24 r_g co-rotating, 6.00 static, 8.99 counter-rotating. `_accel` signs `a` by the particle's own angular momentum, so this falls out rather than being special-cased. Verified: at the same radius and speed around an `a*=0.9` hole, a prograde orbit runs 14.6 laps while a retrograde one plunges in 0.15.
+- **Frame dragging** shows up twice: in the physics via that signed spin, and visually via `_drag_frame`'s Lense–Thirring swirl `ω = 2GJ/(c²r³)`. The ergosphere ring sits at `rs` regardless of spin while `r_horizon` shrinks under it, so the **gap between the two rings is the spin** — and closes by itself at `a* = 0`.
 
-The masses are static, like `Charges`' charges — the arrangement is the subject.
+Superposing per-mass geometry is **not** a solution of Einstein's equations — they are nonlinear, so wells and lattices do not really superpose. It is the standard visual approximation, exact for a single mass. The masses are static, like `Charges`' charges — the arrangement is the subject.
 
 ### Display-only geometry
 
-`ST_DEPTH_GAIN` exaggerates the sheet and `ST_MAX_DEPTH_PX` soft-clamps it (`z = −max·tanh(|z|/max)`). Both exist because `dz/dr → ∞` at the throat: a to-scale funnel is genuinely vertical there and projects to a tangle of near-parallel lines. **`_accel` never reads `_depth`** — keep it that way, or the art starts changing the physics.
+Three exaggerations, all strictly on the render side. `ST_DEPTH_GAIN` scales the sheet and `ST_MAX_DEPTH_PX` soft-clamps it (`z = −max·tanh(|z|/max)`) because `dz/dr → ∞` at the throat — a to-scale funnel is genuinely vertical there and projects to a tangle. `ST_LATTICE_GAIN` scales the lattice's radial pull because the isotropic map is honest and therefore *tiny*: it saturates at `rs/2`, ~18 px for the Hole against a 720 px frame. The maps are the metric's; only their amplitude is turned up.
 
-### Gestures
+**`_accel` never reads `_depth` or `_lattice_offset`** — keep it that way, or the art starts changing the physics.
+
+### Gestures and the camera
 
 - one pinch on empty space → arms a placement, committed on **release** (a ghost shows where)
 - one pinch on a mass → drag it live; the curvature follows
-- **two pinches at once** → 3D camera: midpoint travel yaws/pitches, hand span zooms. This *supersedes* place/drag and cancels any pending placement, so a mass never appears just because the user was reaching for the second pinch. Hands that took part stay inert until they re-pinch.
+- **two pinches at once** → 3D camera. This *supersedes* place/drag and cancels any pending placement, so a mass never appears just because the user was reaching for the second pinch. Hands that took part stay inert until they re-pinch.
+
+The camera is a **turntable** (yaw about the sheet's normal + elevation), not an arcball: the scene has a real "up" and preserving it is what keeps the view legible — Blender defaults to turntable for the same reason.
+
+Its transfer function is a **hybrid position/rate** control (RubberEdge, Casiez et al.), and this is load-bearing rather than fussy. v1 was a plain incremental drag and failed twice over: reaching a top-down view needed ~240 px of sustained travel with both pinches held, which ends near the frame border where `EDGE_MARGIN_FRAC` documents tracking degrading — so the gesture died half-way and the top view was effectively unreachable — and incremental mapping has no home, so returning your hands never returned the view. Zhai & Milgram's taxonomy explains why pure rate control is not the fix either: a hand is *isotonic*, and isotonic→rate is a known-bad pairing. So: inside `ST_CAM_POS_RADIUS_PX` of the grab origin, offset maps absolutely to angle (precise, homed); outside, the excess becomes angular velocity (unbounded travel from a small, well-tracked region). Measured: a 200 px push held 3 s reaches pitch 90° without the hands ever leaving the safe zone, and a nudge-and-return lands back within 0.1°.
+
+### View toggle
+
+The `st.view` button swaps the sheet for the lattice and eases the camera to that mode's home angle (the lattice reads a little flatter — it is a box, and a steep angle collapses its layers onto each other). It is also the reliable way back to a sane view after a visitor tumbles the camera.
 
 ### Backdrop
 
