@@ -391,7 +391,10 @@ def scene_state(t):
         # Two static mid sources (interference fringes between them) + one
         # slowly circling high source (Doppler wake).
         cx, cy = W / 2, H / 2
-        sources = [
+        # MOCK_WAVE_N=<n> scenes 1..5 sources (default 3) so the saturation
+        # case (5 sources left running) can be reproduced headless.
+        n_src = int(os.environ.get("MOCK_WAVE_N", "3"))
+        all_src = [
             {"id": 0, "x": cx - 180, "y": cy + 40, "freq": 2.4, "amp": 1.0,
              "born": 0.0, "grabbed": False},
             {"id": 1, "x": cx + 180, "y": cy + 40, "freq": 2.4, "amp": 1.0,
@@ -401,7 +404,12 @@ def scene_state(t):
              "y": round(cy - 180 + 60 * math.sin(t * 0.5), 1),
              "freq": 4.0, "amp": 1.0, "born": 2.0,
              "grabbed": int(t) % 4 == 0},
+            {"id": 3, "x": cx - 400, "y": cy - 200, "freq": 1.2, "amp": 1.0,
+             "born": 1.0, "grabbed": False},
+            {"id": 4, "x": cx + 420, "y": cy + 220, "freq": 4.0, "amp": 1.0,
+             "born": 3.0, "grabbed": False},
         ]
+        sources = all_src[:max(1, min(5, n_src))]
         base["objects"] = [{
             "type": "waves", "t": round(t, 3), "c": 340.0,
             "time_scale": 1.0, "kind": "mid", "count": len(sources),

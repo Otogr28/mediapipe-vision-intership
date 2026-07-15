@@ -19,10 +19,11 @@ from config import (BH_DEFAULT_POS_FACTOR, BH_DISK_BRIGHTNESS,
                     ORB_RESTITUTION, ORB_SOFTENING_PX, ORB_TIME_SCALES,
                     ORB_TRAIL_LEN, PUPPET_IDLE_BOB_S, SIXSEVEN_FLASH_FRAMES,
                     SIXSEVEN_HYSTERESIS, SIXSEVEN_MIN_VISIBILITY, WAVE_AMP,
-                    WAVE_DECAY_TAU_S, WAVE_DEFAULT_KIND, WAVE_FRAME_DT,
-                    WAVE_GRAB_PAD_PX, WAVE_GRID_PX, WAVE_MAX_SOURCES,
-                    WAVE_RAMP_S, WAVE_SOURCE_TYPES, WAVE_SPEED_PX_S,
-                    WAVE_TIME_SCALES)
+                    WAVE_DECAY_TAU_S, WAVE_DEFAULT_KIND, WAVE_DISPLAY_GAIN,
+                    WAVE_DISPLAY_MAX_ALPHA, WAVE_FRAME_DT, WAVE_GRAB_PAD_PX,
+                    WAVE_GRID_PX, WAVE_MAX_DEBT_S, WAVE_MAX_SOURCES,
+                    WAVE_MAX_SUBSTEPS, WAVE_PHYS_DT, WAVE_RAMP_S,
+                    WAVE_SOURCE_TYPES, WAVE_SPEED_PX_S, WAVE_TIME_SCALES)
 from detection.gestures import hand_id, pinch_info, pinch_state
 from ui.button import Button
 
@@ -1805,8 +1806,11 @@ class Waves:
         self.grab_offset_y = 0.0
         # cv2-fallback field state, lazily built on first draw() call.
         self._u = None          # field at t (float32, grid res)
-        self._u_prev = None     # field at t - dt
-        self._field_t = 0.0     # how far the field has been integrated
+        self._u_prev = None     # field at t - WAVE_PHYS_DT
+        self._sim_t = 0.0       # how far the field has actually been
+                                # integrated; advances ONLY in exact
+                                # WAVE_PHYS_DT chunks and lags _clock by
+                                # < one chunk (that remainder is the bank)
         self._build_palette()
         self._apply_selection()
 
@@ -1948,7 +1952,10 @@ class Waves:
     # sources blended in as Dirichlet oscillators. Edge-replicated padding
     # gives Neumann boundaries -> the frame edges reflect.
 
-    def _step_field(self, dt):
+    def _step_field(self):
+        # dt is ALWAYS WAVE_PHYS_DT — see the config note: a varying dt breaks
+        # the leapfrog's time levels and pumps energy until the field diverges.
+        dt = WAVE_PHYS_DT
         c_dx = WAVE_SPEED_PX_S * dt / WAVE_GRID_PX
         s2 = c_dx * c_dx
         delta = min(1.0, 2.0 * dt / WAVE_DECAY_TAU_S)
@@ -1965,7 +1972,7 @@ class Waves:
 
         gh, gw = u.shape
         for s in self.sources:
-            age = self._field_t - s.born
+            age = self._sim_t - s.born
             if age < 0.0:
                 continue
             ramp = min(1.0, age / WAVE_RAMP_S)
@@ -1988,16 +1995,20 @@ class Waves:
             gh = max(2, self.h // WAVE_GRID_PX)
             self._u = np.zeros((gh, gw), np.float32)
             self._u_prev = np.zeros((gh, gw), np.float32)
-            self._field_t = self._clock
-        # CFL-stable sub-steps up to the clock; after a stall (draw not
-        # called for a while) integrate at most a quarter second of it.
-        dt_max = 0.6 * WAVE_GRID_PX / WAVE_SPEED_PX_S
-        if self._clock - self._field_t > 0.25:
-            self._field_t = self._clock - 0.25
-        while self._field_t < self._clock - 1e-9:
-            dt = min(dt_max, self._clock - self._field_t)
-            self._field_t += dt
-            self._step_field(dt)
+            self._sim_t = self._clock
+        # Fixed-timestep integration (same discipline as the Orbitals sim):
+        # step in whole WAVE_PHYS_DT chunks and leave the sub-chunk remainder
+        # banked as the _sim_t/_clock gap for next frame. NEVER shorten the
+        # last step to land exactly on the clock — that varying dt is what
+        # diverged the field.
+        if self._clock - self._sim_t > WAVE_MAX_DEBT_S:
+            self._sim_t = self._clock - WAVE_MAX_DEBT_S   # drop stall debt
+        steps = 0
+        while (self._sim_t + WAVE_PHYS_DT <= self._clock
+               and steps < WAVE_MAX_SUBSTEPS):
+            self._sim_t += WAVE_PHYS_DT
+            self._step_field()
+            steps += 1
 
     # Crests tint toward icy white, troughs toward deep blue (BGR).
     _CREST_BGR = np.array([255, 238, 190], np.uint8)
@@ -2012,7 +2023,10 @@ class Waves:
         # cost ~75 ms/frame at 720p, this is a few ms.
         color = np.where((u > 0.0)[..., None], self._CREST_BGR,
                          self._TROUGH_BGR)
-        w = np.clip(np.abs(u) * 0.45, 0.0, 0.7).astype(np.float32)
+        # tanh tone curve (see WAVE_DISPLAY_GAIN): steep near zero so faint
+        # ripples read, saturating so six sources don't white the frame out.
+        w = (WAVE_DISPLAY_MAX_ALPHA
+             * np.tanh(np.abs(u) * WAVE_DISPLAY_GAIN)).astype(np.float32)
         color = cv2.resize(color, (self.w, self.h),
                            interpolation=cv2.INTER_LINEAR)
         w = cv2.resize(w, (self.w, self.h), interpolation=cv2.INTER_LINEAR)

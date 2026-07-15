@@ -14,14 +14,22 @@ interface Props {
 
 /** Frame pixels per sim cell — the FDTD grid is frame/4 (320x180 at 720p). */
 const GRID_PX = 4;
-/** CFL safety factor: substep dt <= 0.6 * dx / c. */
-const CFL = 0.6;
+/**
+ * FIXED physics sub-step (s) — mirrors config.WAVE_PHYS_DT. The leapfrog
+ * update assumes a CONSTANT dt (`u_prev` lives at `t - dt`), so deriving a
+ * step from the frame's leftover time mismatches the time levels and pumps
+ * energy until the field diverges (it read as the screen saturating). Bank
+ * the time and step in whole chunks instead; never scale dt to the frame.
+ */
+const PHYS_DT = 1 / 240;
 /** Field ring-down time constant (s) — mirrors config.WAVE_DECAY_TAU_S. */
-const DECAY_TAU_S = 1.6;
+const DECAY_TAU_S = 0.9;
 /** Source onset ramp (s) — mirrors config.WAVE_RAMP_S. */
 const RAMP_S = 0.3;
 /** Max substeps per rAF, so a background tab can't spiral on resume. */
-const MAX_STEPS = 12;
+const MAX_STEPS = 16;
+/** After a stall, integrate at most this much debt — mirrors WAVE_MAX_DEBT_S. */
+const MAX_DEBT_S = 0.25;
 
 /**
  * The Waves layer: a transparent WebGL2 canvas over the video that
@@ -134,10 +142,15 @@ export function WavesLayer({ pairRef, frameW, frameH }: Props) {
 
     const srcArr = new Float32Array(6 * 4);
 
-    // Sim clock: seeded from the first snapshot's experiment clock, then
-    // advanced by wall time * time_scale with a gentle pull toward the
-    // backend clock (so source phases stay aligned without ever jumping).
-    let simT: number | null = null;
+    // Two clocks, mirroring the Python side:
+    //  targetT — where the sim SHOULD be: advanced by wall time * time_scale
+    //            with a gentle pull toward the backend's experiment clock, so
+    //            source phases stay aligned without ever jumping.
+    //  simT    — how far the field has ACTUALLY been integrated; only ever
+    //            advances in exact PHYS_DT chunks. The sub-chunk remainder
+    //            stays banked as the simT/targetT gap.
+    let targetT: number | null = null;
+    let simT = 0;
     let lastNow: number | null = null;
 
     let raf = 0;
@@ -155,7 +168,8 @@ export function WavesLayer({ pairRef, frameW, frameH }: Props) {
 
       const backendT =
         waves.t + ((now - pair.currAt) / 1000) * waves.time_scale;
-      if (simT === null || lastNow === null) {
+      if (targetT === null || lastNow === null) {
+        targetT = backendT;
         simT = backendT;
         lastNow = now;
         return;
@@ -163,46 +177,46 @@ export function WavesLayer({ pairRef, frameW, frameH }: Props) {
       const wallDt = Math.min(0.1, (now - lastNow) / 1000);
       lastNow = now;
       let advance = wallDt * waves.time_scale;
-      advance += 0.05 * (backendT - simT - advance); // drift correction
-
-      // c in cells/s; substeps sized to the CFL limit. A paused/negative
-      // advance (drift pull) renders the existing field without stepping —
-      // a dt of exactly 0 would still extrapolate (2u - u_prev) and blow up.
-      const cCells = waves.c / GRID_PX;
-      const dtMax = CFL / cCells;
-      const n =
-        advance > 1e-6
-          ? Math.min(MAX_STEPS, Math.max(1, Math.ceil(advance / dtMax)))
-          : 0;
-      const dt = n > 0 ? advance / n : 0;
+      advance += 0.05 * (backendT - targetT - advance); // drift correction
+      targetT += Math.max(0, advance);
+      // Drop debt after a stall (hidden tab) rather than sprint to catch up.
+      if (targetT - simT > MAX_DEBT_S) simT = targetT - MAX_DEBT_S;
 
       const count = Math.min(6, waves.sources.length);
       for (let i = 0; i < count; i++) {
         const s = waves.sources[i];
         srcArr[i * 4] = s.x / GRID_PX;
-        srcArr[i * 4 + 1] = s.y / GRID_PX;
+        // Frame coords are y-DOWN; the field's texels are y-UP (the step
+        // shader indexes by gl_FragCoord — see its orientation note). Without
+        // this flip each source is injected at its mirrored row, so one source
+        // renders as two.
+        srcArr[i * 4 + 1] = simH - s.y / GRID_PX;
         srcArr[i * 4 + 2] = s.freq;
         srcArr[i * 4 + 3] = s.born;
       }
 
+      // Every sub-step uses the SAME PHYS_DT, so these are frame-invariant.
+      const sCell = (waves.c / GRID_PX) * PHYS_DT;
       gl.useProgram(stepProg);
       gl.viewport(0, 0, simW, simH);
       gl.uniform1i(uField, 0);
       gl.uniform2f(uSim, simW, simH);
-      gl.uniform1f(uS2, cCells * dt * (cCells * dt));
-      gl.uniform1f(uDelta, Math.min(1, (2 * dt) / DECAY_TAU_S));
+      gl.uniform1f(uS2, sCell * sCell);
+      gl.uniform1f(uDelta, Math.min(1, (2 * PHYS_DT) / DECAY_TAU_S));
       gl.uniform1i(uCount, count);
       gl.uniform4fv(uSources, srcArr);
       gl.uniform1f(uAmp, count ? waves.sources[0].amp : 1);
       gl.uniform1f(uRamp, RAMP_S);
       gl.activeTexture(gl.TEXTURE0);
-      for (let k = 0; k < n; k++) {
-        simT += dt;
+      let steps = 0;
+      while (simT + PHYS_DT <= targetT && steps < MAX_STEPS) {
+        simT += PHYS_DT;
         gl.uniform1f(uTime, simT);
         gl.bindFramebuffer(gl.FRAMEBUFFER, next.fbo);
         gl.bindTexture(gl.TEXTURE_2D, curr.tex);
         gl.drawArrays(gl.TRIANGLES, 0, 3);
         [curr, next] = [next, curr];
+        steps++;
       }
 
       gl.bindFramebuffer(gl.FRAMEBUFFER, null);
