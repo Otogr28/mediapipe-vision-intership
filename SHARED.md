@@ -2026,3 +2026,28 @@ Frame dragging appears twice: in the physics (signed spin) and visually
   ST_LATTICE_VERTICALS = 0 (Canvas2D, so `?glscale` does NOT apply).
 - Light-cone / Penrose causal-structure experiment is now in IDEAS.md "Next up"
   as a SIBLING experiment, with the EF-vs-Penrose call written up.
+
+### 2026-07-15 hotfix — Spacetime shipped BROKEN, and why the tests missed it
+`ST_LATTICE_GAIN` / `ST_LATTICE_VERT_STRIDE` were used in `_lattice_offset` and
+`to_state()` but never imported: an in-place `sed` patch to the import block
+silently no-op'd because isort had already reflowed it, and nothing re-checked.
+Caught only by running the real code on the Jetson AFTER pushing. Impact would
+have been severe, not cosmetic: in web mode `to_state()` runs every frame inside
+`main.py`'s resilient try/except, so a NameError there does not crash the
+process — it stops the state publish AND `sink.present`, freezing the kiosk for
+anyone who opened Spacetime, with no working Reset to escape (the buttons come
+from the state that is no longer being published).
+
+The miss: the pre-push check called `update()` and NOTHING ELSE. Importing the
+module proves the class body parses; it does not prove `to_state()` or `draw()`
+run, and the bug lived in exactly the entry points that were never called.
+
+Added `tests/smoke_scenes.py` (plain python, no pytest — so it also runs on the
+Jetson's 3.10): every scene through update/to_state/draw + JSON-encodability,
+including Spacetime in BOTH view modes. Run it before any scene change:
+
+    uv run python tests/smoke_scenes.py
+    ssh jetson@100.91.206.114 'cd ~/HalLMediaPipe && python3 tests/smoke_scenes.py'
+
+Verified 9/9 locally AND on the Jetson's Python 3.10 (dry-run: scp'd the fix in,
+ran, restored, THEN pushed — verify on the target before shipping, not after).
