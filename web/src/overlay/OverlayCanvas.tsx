@@ -2,7 +2,7 @@ import { useEffect, useRef } from "react";
 import { interpolate } from "../state/interp";
 import type { SnapshotPair } from "../state/useAppState";
 import { drawCursors } from "./cursor";
-import { drawScene, updateTrails } from "./scene";
+import { drawBackdrop, drawScene, updateTrails } from "./scene";
 import { drawSkeleton } from "./skeleton";
 
 interface Props {
@@ -49,6 +49,11 @@ export function OverlayCanvas({ pairRef, frameW, frameH }: Props) {
       }
 
       const state = interpolate(pair, now);
+      // The backdrop dims the camera image only: it goes down first, so the
+      // skeleton, scene and cursors all sit on top of it at full strength.
+      // Nothing here can reach the frame inference sees — the backend streams
+      // raw frames and does no drawing in web mode.
+      drawBackdrop(ctx, state);
       drawSkeleton(ctx, state, frameW, frameH);
       drawScene(ctx, state, now);
       drawCursors(ctx, state.hands, flashes, now, frameW, frameH);

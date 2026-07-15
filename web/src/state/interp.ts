@@ -130,6 +130,33 @@ export function interpolate(pair: SnapshotPair, now: number): AppState {
           }),
         };
       }
+      case "spacetime": {
+        if (po.type !== "spacetime") return o;
+        const prevMass = new Map(po.masses.map((m) => [m.id, m]));
+        const prevOrb = new Map(po.orbiters.map((b) => [b.id, b]));
+        return {
+          ...o,
+          // The camera angles are already eased backend-side (ST_CAM_SMOOTH);
+          // lerping them here only removes the 30 Hz stepping while rotating.
+          // Plain lerp is safe because yaw accumulates continuously — it is
+          // never wrapped into [-pi, pi], so there is no seam to cross.
+          yaw: lerp(po.yaw, o.yaw, t),
+          pitch: lerp(po.pitch, o.pitch, t),
+          zoom: lerp(po.zoom, o.zoom, t),
+          masses: o.masses.map((m) => {
+            const pm = prevMass.get(m.id);
+            return pm
+              ? { ...m, x: lerp(pm.x, m.x, t), y: lerp(pm.y, m.y, t) }
+              : m;
+          }),
+          orbiters: o.orbiters.map((b) => {
+            const pb = prevOrb.get(b.id);
+            return pb
+              ? { ...b, x: lerp(pb.x, b.x, t), y: lerp(pb.y, b.y, t) }
+              : b;
+          }),
+        };
+      }
       default:
         return o;
     }
