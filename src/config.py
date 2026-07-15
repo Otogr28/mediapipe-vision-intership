@@ -536,6 +536,22 @@ CHG_SOFTEN_PX = 14.0
 CHG_LINES_PER_Q = 12
 CHG_LINE_STEP_PX = 6.0       # streamline integration step (RK2)
 CHG_LINE_MAX_STEPS = 320     # give up after this many (bounds a stray line)
+
+# Flowing arrowheads along the field lines (mirrored in
+# web/src/overlay/scene.ts — keep in sync). They ride the SAME traced
+# polylines, so the geometry is untouched; they only show which way the field
+# points: out of + charges, into - ones. Arc length along a line is exactly
+# `index * CHG_LINE_STEP_PX` (the tracer steps a fixed distance), so finding
+# the vertex under an arrow is a divide rather than a search.
+CHG_ARROW_SPACING_PX = 46.0  # arc length between arrows on one line
+CHG_ARROW_SPEED_PX_S = 34.0  # how fast they crawl along it
+CHG_ARROW_LEN_PX = 9.0
+# |E| that maps to a full-strength arrow. Arrow size/opacity come from the
+# LOCAL |E|, which is what makes cancellation visible for free: at the null
+# point between like charges |E| is exactly 0, so those arrows shrink to
+# nothing on their own — no special case. The far field fades too, which keeps
+# the picture clean. ~3 puts a unit charge's arrows at full strength ~150 px out.
+CHG_ARROW_E_REF = 3.0
 # Equipotential contour spacing (in the same V units as CHG_K). The shader
 # draws a band every multiple of this.
 CHG_EQUIPOT_STEP = 900.0
