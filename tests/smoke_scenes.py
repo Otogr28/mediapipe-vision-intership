@@ -62,6 +62,53 @@ def _exercise(name, obj, frames=30, toggles=()):
     return True
 
 
+def check_spacetime_physics():
+    """Assert the geometry is the textbook one, not something that merely looks
+    plausible. These are the claims the config comments make; if a refactor
+    breaks one, it should fail here rather than in front of a visitor."""
+    import math
+
+    import config as C
+    from ui.interactables import _embed_height, _kerr_force_factor
+
+    # 1. The interior cap and the exterior paraboloid must meet with a COMMON
+    #    TANGENT at the body's surface [MTW 1973 Box 23.2]: both slopes equal
+    #    sqrt(rs/(R - rs)). A mismatch would put a visible crease in the sheet.
+    for name, spec in C.ST_MASS_TYPES.items():
+        rs = C.ST_RS_PER_MASS * spec["m"]
+        R = rs * spec["r_over_rs"]
+        if R <= rs * 1.001:
+            continue                      # a horizon, not a surface
+        h = 1e-4
+        inside = (_embed_height(R - h, rs, R) - _embed_height(R - 2 * h, rs, R)) / h
+        outside = (_embed_height(R + 2 * h, rs, R) - _embed_height(R + h, rs, R)) / h
+        exact = math.sqrt(rs / (R - rs))
+        assert abs(inside - exact) < 1e-3, f"{name}: interior slope {inside} != {exact}"
+        assert abs(outside - exact) < 1e-3, f"{name}: exterior slope {outside} != {exact}"
+
+    # 2. A black hole must be far deeper than a star, and only IT may have the
+    #    vertical throat — the whole point of the palette.
+    def depth(spec):
+        rs = C.ST_RS_PER_MASS * spec["m"]
+        R = rs * spec["r_over_rs"]
+        return _embed_height(C.ST_CURV_REACH_PX, rs, R) - _embed_height(max(R, rs), rs, R)
+
+    d_sun = depth(C.ST_MASS_TYPES["sun"])
+    d_bh = depth(C.ST_MASS_TYPES["bh"])
+    assert d_bh > 3 * d_sun, f"hole ({d_bh:.0f}px) not dramatically deeper than sun ({d_sun:.0f}px)"
+
+    # 3. Mukhopadhyay must collapse to Paczynski-Wiita at zero spin, or the
+    #    measured 47 deg/lap precession silently changes meaning.
+    for x in (3.0, 6.0, 50.0):
+        assert abs(_kerr_force_factor(x, 0.0) - 1.0 / (x - 2.0) ** 2) < 1e-12
+
+    # 4. Pitch is UNCLAMPED on purpose (the user must be able to orbit under
+    #    the sheet). Guard against a well-meaning clamp creeping back in.
+    assert not hasattr(C, "ST_PITCH_MAX_RAD"), "pitch clamp came back"
+    assert not hasattr(C, "ST_PITCH_MIN_RAD"), "pitch clamp came back"
+    print("  ok    Spacetime physics (tangency / depth ordering / PW limit / free pitch)")
+
+
 def main():
     cases = []
 
@@ -89,13 +136,20 @@ def main():
 
     st = Spacetime(W, H)
     st._preset_precession()
-    st._place_mass(W * 0.75, H * 0.35, "bh")     # a spinning body: Kerr paths
-    # Both render modes: the 2D sheet AND the 3D volumetric lattice.
-    cases.append(("Spacetime", st, (st._toggle_view, st._toggle_view)))
+    st._place_mass(W * 0.75, H * 0.35, "bh")       # spinning body: Kerr paths
+    st._place_mass(W * 0.25, H * 0.65, "neutron")  # interior cap path
+    # Every render/camera branch: 2D sheet, 3D lattice, and the Top snap.
+    cases.append(("Spacetime", st, (st._toggle_view, st._toggle_top,
+                                    st._toggle_top, st._toggle_view)))
 
     cases.append(("Puppet", Puppet(W, H), ()))
 
     failed = []
+    try:
+        check_spacetime_physics()
+    except Exception:
+        failed.append('Spacetime physics')
+        print('  FAIL  Spacetime physics\n' + traceback.format_exc())
     for name, obj, toggles in cases:
         try:
             _exercise(name, obj, toggles=toggles)

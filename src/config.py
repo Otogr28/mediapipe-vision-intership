@@ -574,14 +574,50 @@ CHG_GRID_PX = 8
 # fixes the speed of light in screen units too (rs = 2GM/c^2 => c^2 =
 # 2*ST_ORB_G/ST_RS_PER_MASS), which is why there is no separate `c` knob.
 #
-# THE SHEET is Flamm's paraboloid — the exact embedding of the Schwarzschild
-# equatorial slice, z(r) = 2*sqrt(rs*(r - rs)) — measured downward from a
-# radius where we declare space flat again (ST_CURV_REACH_PX) so each well is
-# local and FINITE (the throat bottoms out at the horizon instead of diverging
-# like the Newtonian 1/r). Caveat worth knowing before "fixing" it: summing
-# one-mass paraboloids is NOT a solution of Einstein's equations — they are
-# nonlinear, so two wells do not superpose. It is the standard visual
-# approximation and is exact for the single-mass case.
+# SOURCES (every formula below is one of these, not something invented here):
+#   [Flamm 1916]  L. Flamm, "Beitraege zur Einsteinschen Gravitationstheorie",
+#                 Phys. Z. 17, 448 (1916). The original embedding; reprinted as
+#                 a Golden Oldie in Gen. Rel. Grav. 47, 72 (2015).
+#   [Schwarzschild 1916b]  K. Schwarzschild, interior solution for an
+#                 incompressible sphere, Sitzungsber. Preuss. Akad. Wiss. 424.
+#   [MTW 1973]    Misner, Thorne & Wheeler, "Gravitation", Box 23.2 / Fig 23.1:
+#                 the star embedding = interior spherical CAP + exterior Flamm
+#                 paraboloid, joined with a common tangent at the surface.
+#   [PW 1980]     Paczynski & Wiita, A&A 88, 23: pseudo-Newtonian potential.
+#   [BPT 1972]    Bardeen, Press & Teukolsky, ApJ 178, 347: the Kerr ISCO.
+#   [Mukhopadhyay 2002]  ApJ 581, 427: pseudo-Newtonian Kerr force.
+#   [Thorne 1974] ApJ 191, 507: the a* <= 0.998 spin-up limit.
+#   [Lense-Thirring 1918]  Phys. Z. 19, 156: frame dragging.
+#
+# THE SHEET is the textbook embedding of the equatorial slice, and a body's
+# RADIUS is what makes it interesting — this is the correction that matters:
+#
+#   * OUTSIDE the body (r >= R): Flamm's paraboloid, z(r) = 2*sqrt(rs*(r-rs)).
+#     [Flamm 1916]
+#   * INSIDE it (r < R): the interior Schwarzschild solution embeds as a
+#     SPHERICAL CAP of radius A = sqrt(R^3/rs) — a smooth, shallow bowl with no
+#     throat at all. It meets the paraboloid with a COMMON TANGENT at r = R
+#     (both slopes are sqrt(rs/(R-rs)) there — verified numerically in tests).
+#     [Schwarzschild 1916b], [MTW 1973 Box 23.2]
+#
+# This is why a star and a black hole are not the same picture, and the earlier
+# version of this file got it WRONG. Treating a star as a point mass gives it a
+# full funnel down to its own rs — i.e. draws every star as a black hole. A real
+# star's surface sits far outside its rs (the Sun: R/rs ~ 2.4e5), so its funnel
+# is amputated at the surface and replaced by a gentle cap. A black hole has NO
+# surface: the funnel runs all the way to the horizon, where dz/dr -> infinity
+# and the sheet goes VERTICAL. That cliff — not depth — is what "black holes
+# deform space much more" actually means.
+#
+# Worth being precise about the depth, because intuition oversells it: Flamm
+# depth goes as sqrt(rs) ~ sqrt(M), so 4x the mass is only 2x deeper. By
+# Birkhoff's theorem a 1 Msun star and a 1 Msun hole have IDENTICAL geometry
+# outside the star's surface — the far field cannot tell them apart. The drama
+# is entirely COMPACTNESS: how far down the funnel you are allowed to go.
+#
+# Caveat, unchanged: summing one-mass embeddings is NOT a solution of Einstein's
+# equations — they are nonlinear, so two wells do not superpose. It is the
+# standard visual approximation and is exact for the single-mass case.
 #
 # THE ORBITS use a pseudo-Newtonian stand-in for the geodesics. For a
 # non-spinning body that is Paczynski-Wiita, a = -G*M/(r - rs)^2 — moving the
@@ -617,21 +653,20 @@ ST_MAX_ORBITERS = 12
 ST_GRAB_PAD_PX = 46
 ST_RS_PER_MASS = 9.0         # Schwarzschild radius (px) per unit mass
 ST_CURV_REACH_PX = 460.0     # radius at which a well is declared flat again
-# Vertical exaggeration of the sheet. Flamm's paraboloid is drawn to scale in
-# the plane, so at true scale the funnel is far too shallow to read on a 720p
-# kiosk; this is honest artistic licence on the z axis only (the ORBIT physics
-# never sees it).
-ST_DEPTH_GAIN = 1.25
-# Soft depth ceiling: z_shown = -MAX * tanh(|z| / MAX).
-#
-# Needed because dz/dr -> infinity as r -> rs: the embedding is genuinely
-# VERTICAL at the throat, so a to-scale funnel projects to a tangle of
-# near-parallel lines plunging off the bottom of the frame (a compact hole is
-# ~310 px deep against a 720 px frame). tanh is linear for shallow wells — a
-# lone star's dip is untouched — and saturates smoothly instead of creasing,
-# the same trick WAVE_DISPLAY_GAIN uses to serve one and six sources at once.
-# Display only; the ORBIT physics reads the unclamped geometry.
-ST_MAX_DEPTH_PX = 210.0
+# Vertical scale of the sheet. 1.0 = TO SCALE: z and r are both lengths in the
+# same px, so the paraboloid is plotted exactly as [Flamm 1916] gives it, with
+# no vertical exaggeration whatsoever. It was 1.25 with a tanh ceiling on top;
+# both are gone, because they were the two things making a hole look like a
+# deep star instead of a different object. Leave this at 1.0.
+ST_DEPTH_GAIN = 1.0
+# The tanh depth ceiling that used to live here has been REMOVED, deliberately.
+# It squashed the exact thing that should be dramatic: with it, a Hole came out
+# 189 px deep against a Star's 82 px — a 2.3x difference standing in for what
+# should be a smooth bowl versus a bottomless vertical funnel. Its stated job
+# was taming the "tangle" of near-parallel lines at the throat, but that tangle
+# is not an artefact to hide: dz/dr genuinely diverges at the horizon, and
+# converging lines are what a vertical cliff LOOKS like. Stars no longer have a
+# throat at all (they have a cap), so only holes show it — correctly.
 
 # Mass presets: (m, label, rgb, spin). `compact` marks a horizon-sized body
 # drawn as a black disk — same mass scale, but its rs is where the sheet's
@@ -644,15 +679,42 @@ ST_MAX_DEPTH_PX = 210.0
 # marker turns), while accreting black holes are commonly measured near
 # extremal. 0.998 is the Thorne limit — radiation capture stops accretion
 # spinning a hole past it, so a* = 1 is not physical and is not offered.
+# `r_over_rs` is the body's COMPACTNESS R/rs — the parameter that decides
+# whether you get a bowl or a funnel, and now the whole point of the palette.
+#
+# It is also the one number here that is CHOSEN rather than derived, so be
+# straight about it: real stars are nowhere near this compact (Sun R/rs = 2.4e5,
+# white dwarf ~ 4e3), and at any scale where a hole's horizon is a visible disk
+# a Sun-like star's bowl is flat to well under a pixel. That is not a rendering
+# failure, it is the actual physics — normal matter barely curves spacetime.
+# So the palette lives in the strong-field regime where the comparison fits on
+# one screen: R/rs = 6 is roughly neutron-star territory (a real neutron star
+# is ~2.9), which is the least compact thing that still visibly bends a 720 px
+# frame. The GEOMETRY is exact; only this parameter is staged.
+#
+# `compact` (bool) means "no surface — this IS its horizon", i.e. a black hole.
+# The palette IS the lesson, and it is the canonical Sun / neutron star / black
+# hole trio: three objects of comparable mass whose wells look nothing alike,
+# because what sets the shape is how far down the funnel their surface lets you
+# go. The Sun is a big ball in a shallow dimple with NO funnel; the neutron star
+# is a small ball at the bottom of a long one; the hole is a tiny disk with a
+# funnel that runs to a vertical throat.
 ST_MASS_TYPES = {
-    "star":  {"m": 1.0, "label": "Star", "rgb": [255, 226, 158],
-              "compact": False, "spin": 0.15},
-    "giant": {"m": 2.4, "label": "Giant", "rgb": [255, 168, 104],
-              "compact": False, "spin": 0.3},
-    "bh":    {"m": 4.0, "label": "Hole", "rgb": [18, 16, 26],
-              "compact": True, "spin": 0.9},
+    # Sun: R/rs is STAGED (real value 2.4e5 — at that compactness the whole
+    # frame sits inside the star and the sheet is exactly flat, which is true
+    # and useless). 20 is the least compact thing that still visibly dimples.
+    "sun":     {"m": 1.0, "label": "Sun", "rgb": [255, 214, 120],
+                "compact": False, "r_over_rs": 20.0, "spin": 0.1},
+    # Neutron star: R/rs = 2.9 is REAL (M ~ 1.4 Msun, R ~ 12 km, rs ~ 4.1 km).
+    # Nothing is staged here — this is what a neutron star's well looks like.
+    "neutron": {"m": 1.4, "label": "Neutron", "rgb": [190, 225, 255],
+                "compact": False, "r_over_rs": 2.9, "spin": 0.5},
+    # R = rs: no surface to stop the funnel. The SMALLEST marker on screen and
+    # by far the deepest well — the lesson, not an accident.
+    "bh":      {"m": 4.0, "label": "Hole", "rgb": [18, 16, 26],
+                "compact": True, "r_over_rs": 1.0, "spin": 0.9},
 }
-ST_DEFAULT_KIND = "star"
+ST_DEFAULT_KIND = "sun"
 ST_SPIN_MAX = 0.998          # Thorne limit
 # Visual rotation rate of a marker, as a fraction of the body's own horizon
 # angular velocity Omega_H = a*c^3 / (2GM(1 + sqrt(1 - a*^2))). Scaled down
@@ -741,14 +803,23 @@ ST_GRID_MARGIN = 1.7
 # an unreadable angle with no way back. Blender defaults to turntable for the
 # same reason.
 #
-# `pitch` is elevation above the sheet: 90 deg is straight down, 0 is edge-on.
+# `pitch` is elevation above the sheet: 90 deg is straight down, 0 is edge-on,
+# 180 deg is edge-on from the far side, 270 deg is straight up from underneath.
+#
+# It is UNCLAMPED — pitch accumulates freely like yaw, so the camera can orbit
+# all the way around and look at the sheet from below. Turntable cameras
+# usually cap elevation to stop the view going upside down, and this one did
+# (first 89 deg, then 90); both were wrong for an exhibit. The projection has
+# no singularity anywhere: at pitch > 90 you simply cross over the top and see
+# the underside of the well, which for a funnel is worth seeing. Nothing here
+# needs a limit, so there isn't one.
+#
+# Consequence to preserve: pitch must NOT be wrapped into [0, 2pi). Keeping it
+# continuous is what lets the easing and the frontend's lerp (state/interp.ts)
+# stay plain — a wrap would make them take the long way round at the seam.
 ST_YAW_DEFAULT_RAD = 0.0
 ST_PITCH_DEFAULT_RAD = math.radians(34.0)   # classic three-quarter view
-ST_PITCH_MIN_RAD = math.radians(6.0)        # below this the sheet is a line
-# 90 deg exactly is fine and reachable — the projection has no singularity
-# there (it degenerates to a plain top-down map, which is the point). The old
-# 89 deg cap was pointless timidity.
-ST_PITCH_MAX_RAD = math.radians(90.0)
+ST_PITCH_TOP_RAD = math.radians(90.0)       # the "Top" button's exact XY view
 ST_FOCAL_PX = 1700.0         # perspective focal length; larger = flatter
 ST_ZOOM_MIN, ST_ZOOM_MAX = 0.55, 2.4
 

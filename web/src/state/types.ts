@@ -204,7 +204,7 @@ export interface ChargesObject {
   charges: PointCharge[];
 }
 
-export type SpacetimeKind = "star" | "giant" | "bh" | "orbiter";
+export type SpacetimeKind = "sun" | "neutron" | "bh" | "orbiter";
 
 export interface SpacetimeMass {
   id: number;
@@ -227,6 +227,10 @@ export interface SpacetimeMass {
   phase: number;
   /** Kerr outer horizon r+ = M(1+√(1−a*²)) px: shrinks rs → rs/2 with spin */
   r_horizon: number;
+  /** the body's SURFACE radius (px). Outside it the sheet is Flamm's
+   *  paraboloid; inside, the interior Schwarzschild spherical cap. A hole has
+   *  no surface (r_body = rs), so its funnel runs to a vertical throat. */
+  r_body: number;
   /** equatorial ergosphere r_E = 2M = rs px — spin-independent, so the GAP
    *  between this and r_horizon is the spin made visible (zero at a* = 0) */
   r_ergo: number;
@@ -261,8 +265,6 @@ export interface SpacetimeObject {
   reach: number;
   /** vertical exaggeration of the sheet (display only — orbits never see it) */
   depth_gain: number;
-  /** soft depth ceiling (px): z = -max*tanh(|z|/max). Display only. */
-  max_depth: number;
   /** [cols, rows, samplesPerLine, extentAsFractionOfFrame] */
   grid: [number, number, number, number];
   /** false = the 2D embedding sheet, true = the 3D volumetric lattice */

@@ -165,7 +165,7 @@ constant and fix the other:
 | Waves | `WAVE_MAX_SOURCES`, display tone curve | `web/src/gl/waves_step.frag.glsl`, `waves_render.frag.glsl` |
 | Charges | `CHG_MAX`, arrow constants | `web/src/gl/charges.frag.glsl`, `web/src/overlay/scene.ts` |
 | Black hole | `rendering/shaders/black_hole.frag` | `web/src/gl/blackhole.frag.glsl` |
-| Spacetime | `_flamm_depth`, `_isotropic_radius`, `_project`, `_depth`, `_drag_frame`, `_lattice_offset` | `web/src/overlay/scene.ts` (`flammDepth` / `isotropicRadius` / `project` / `sheetDepth` / `dragFrame` / `latticeOffset`) |
+| Spacetime | `_embed_height`, `_embed_depth`, `_isotropic_radius`, `_project`, `_depth`, `_drag_frame`, `_lattice_offset` | `web/src/overlay/scene.ts` (`embedHeight` / `embedDepth` / `isotropicRadius` / `project` / `sheetDepth` / `dragFrame` / `latticeOffset`) |
 
 Two physics lessons already paid for, recorded in `config.py` and worth not re-learning:
 the leapfrog integrators (`WAVE_PHYS_DT`, `ORB_PHYS_DT`, `ST_PHYS_DT`) **must** step in
@@ -175,11 +175,19 @@ integration at all, by design: the charges are static because the field is the s
 letting them attract would just collapse into Orbitals-with-signs. `Spacetime` pins its
 masses for the same reason.
 
-**Display-only vs. physics.** `Spacetime` deliberately keeps two geometries apart:
-`ST_DEPTH_GAIN` and the `ST_MAX_DEPTH_PX` tanh clamp exaggerate then compress the sheet so
-a funnel reads on a 720p kiosk, while the orbits integrate the *unclamped* Paczynski-Wiita
-field. Anything that makes the sheet prettier belongs in `_depth`, never in `_accel` —
-mixing them would silently change the physics to match the art.
+**Display-only vs. physics.** `Spacetime` keeps the two apart: anything that shapes the
+sheet belongs in `_depth`, never in `_accel`. But note the sheet is now drawn **to scale**
+(`ST_DEPTH_GAIN = 1.0`, no ceiling) — an earlier version exaggerated it *and* tanh-clamped
+it, which squashed a black hole into looking like a slightly deeper star. If a well seems
+too shallow, the honest fix is compactness (`r_over_rs`), not a gain.
+
+**Bodies have a RADIUS, and it is the whole point.** A star is not a point mass: outside its
+surface the sheet is Flamm's paraboloid, inside it is the interior Schwarzschild *spherical
+cap* (a smooth bowl, no throat), joined with a common tangent. A black hole has no surface,
+so its funnel runs to the horizon and goes vertical. Treating a star as a point mass draws
+every star as a black hole — that was the bug. By Birkhoff the far field can't tell them
+apart; only compactness can. `tests/smoke_scenes.py` asserts the tangency and the depth
+ordering.
 
 **Two-hand gestures.** `Spacetime` is the first scene to use both hands at once: two
 simultaneous pinches drive the camera and *supersede* place/drag, the way a two-finger

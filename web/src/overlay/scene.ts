@@ -775,23 +775,53 @@ function drawPuppet(
  * KEEP IN SYNC. The backend sends the masses, the camera and the constants;
  * the sheet itself is re-derived here so it costs nothing in the payload.
  */
-function flammDepth(r: number, rs: number, reach: number, gain: number) {
+/**
+ * Embedding height z(r), increasing outward — port of `_embed_height`.
+ * KEEP IN SYNC with ui/interactables.py.
+ *
+ * Outside the body: Flamm's paraboloid [Flamm 1916]. Inside it: the interior
+ * Schwarzschild solution's SPHERICAL CAP of radius A = sqrt(R³/rs)
+ * [MTW 1973 Box 23.2], which joins the paraboloid with a common tangent at the
+ * surface. A black hole has r_body = rs — no surface, so the funnel runs to the
+ * horizon and goes vertical. That is the whole star-vs-hole difference.
+ */
+function embedHeight(r: number, rs: number, rBody: number) {
+  if (rs <= 0) return 0;
+  const R = Math.max(rBody, rs);
+  if (r >= R) return 2 * Math.sqrt(rs * Math.max(r - rs, 0));
+  const zSurf = 2 * Math.sqrt(rs * Math.max(R - rs, 0));
+  const a = Math.sqrt((R * R * R) / rs);
+  const rr = Math.min(r, a);
+  const capHere = a * Math.sqrt(Math.max(1 - (rr / a) ** 2, 0));
+  const capSurf = a * Math.sqrt(Math.max(1 - (R / a) ** 2, 0));
+  return zSurf - (capHere - capSurf);
+}
+
+function embedDepth(
+  r: number,
+  rs: number,
+  rBody: number,
+  reach: number,
+  gain: number,
+) {
   if (rs <= 0 || r >= reach || rs >= reach) return 0;
-  const rr = Math.max(r, rs); // inside the horizon the embedding ends
-  const edge = 2 * Math.sqrt(rs * (reach - rs));
-  const here = 2 * Math.sqrt(rs * (rr - rs));
-  return -gain * (edge - here);
+  return -gain * (embedHeight(reach, rs, rBody) - embedHeight(r, rs, rBody));
 }
 
 function sheetDepth(o: SpacetimeObject, x: number, y: number) {
+  // To scale: no exaggeration, no ceiling. The old tanh clamp squashed a hole
+  // into looking like a deep star; it is gone on purpose (see config).
   let z = 0;
   for (const m of o.masses) {
-    z += flammDepth(Math.hypot(x - m.x, y - m.y), m.rs, o.reach, o.depth_gain);
+    z += embedDepth(
+      Math.hypot(x - m.x, y - m.y),
+      m.rs,
+      m.r_body,
+      o.reach,
+      o.depth_gain,
+    );
   }
-  // Soft depth ceiling — mirrors Spacetime._depth. The embedding is vertical
-  // at the throat, so an unclamped funnel projects to a tangle; tanh leaves a
-  // shallow well untouched and saturates the deep ones smoothly.
-  return -o.max_depth * Math.tanh(-z / o.max_depth);
+  return z;
 }
 
 /**
@@ -1076,9 +1106,9 @@ function drawSpacetime(
     // A compact body IS its horizon, so it is drawn at r_horizon — which
     // SHRINKS as it spins. A star only gets a marker, floored so it stays
     // visible when the camera pulls back.
-    const rad = m.compact
-      ? Math.max(4, m.r_horizon * sc)
-      : Math.max(7, m.r_horizon * sc * 0.9);
+    // The body's real surface radius: a Sun is a big ball in a shallow
+    // dimple, a hole is a tiny disk over a bottomless funnel.
+    const rad = Math.max(3, m.r_body * sc);
     const ergo = m.r_ergo * sc;
     const [r, g, b] = m.rgb;
     markers.push({
