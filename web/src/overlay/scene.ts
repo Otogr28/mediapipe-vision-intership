@@ -2,6 +2,7 @@ import { isVrmReady } from "../gl/vrmState";
 import { isSkeletonView } from "./debugView";
 import type {
   AppState,
+  ChargesObject,
   OrbitalsObject,
   SlingshotObject,
   SphereObject,
@@ -475,6 +476,144 @@ function drawWaves(
   }
 }
 
+// ---- charges (field lines + markers; the tint/equipotentials are the
+// ---- WebGL layer, gl/ChargesLayer) -------------------------------------
+//
+// The field lines are DERIVED from the charge list here rather than streamed
+// — same deal as the client-side Orbitals trails: the backend sends 8 charges
+// (~50 bytes) and the browser reconstructs hundreds of polyline points from
+// them. Streaming the lines themselves would blow the ~5 KB state budget.
+// Ported from Charges.field_at / Charges._field_lines in ui/interactables.py.
+
+function fieldAt(
+  o: ChargesObject,
+  x: number,
+  y: number,
+): [number, number] {
+  let ex = 0;
+  let ey = 0;
+  const s2 = o.soften * o.soften;
+  for (const c of o.charges) {
+    const dx = x - c.x;
+    const dy = y - c.y;
+    const r2 = dx * dx + dy * dy + s2;
+    const inv = (o.k * c.q) / (r2 * Math.sqrt(r2));
+    ex += inv * dx;
+    ey += inv * dy;
+  }
+  return [ex, ey];
+}
+
+const LINE_STEP_PX = 6;
+const LINE_MAX_STEPS = 320;
+
+function fieldLines(o: ChargesObject, w: number, h: number): Vec2[][] {
+  const lines: Vec2[][] = [];
+  if (!o.charges.length) return lines;
+  const hasNeg = o.charges.some((c) => c.q < 0);
+  // Lines run + -> -, so seed on the positives. With no positive charge in
+  // the scene, seed the negatives and walk backwards along E instead of
+  // rendering nothing.
+  let seeds = o.charges.filter((c) => c.q > 0);
+  let dir = 1;
+  if (!seeds.length) {
+    seeds = o.charges.filter((c) => c.q < 0);
+    dir = -1;
+  }
+  for (const c of seeds) {
+    // Line COUNT scales with |q| — the textbook convention that line density
+    // encodes charge magnitude, so a 2q charge visibly sprouts twice as many.
+    const n = Math.max(3, Math.round(o.lines_per_q * Math.abs(c.q)));
+    for (let i = 0; i < n; i++) {
+      const a = (2 * Math.PI * i) / n;
+      let x = c.x + Math.cos(a) * o.soften;
+      let y = c.y + Math.sin(a) * o.soften;
+      const pts: Vec2[] = [[x, y]];
+      for (let s = 0; s < LINE_MAX_STEPS; s++) {
+        const [ex, ey] = fieldAt(o, x, y);
+        const m = Math.hypot(ex, ey);
+        if (m < 1e-9) break;
+        // RK2 (midpoint) on the unit field direction.
+        const mx = x + (dir * (ex / m) * LINE_STEP_PX) / 2;
+        const my = y + (dir * (ey / m) * LINE_STEP_PX) / 2;
+        const [ex2, ey2] = fieldAt(o, mx, my);
+        const m2 = Math.hypot(ex2, ey2);
+        if (m2 < 1e-9) break;
+        x += dir * (ex2 / m2) * LINE_STEP_PX;
+        y += dir * (ey2 / m2) * LINE_STEP_PX;
+        pts.push([x, y]);
+        if (x < 0 || x >= w || y < 0 || y >= h) break;
+        // Terminate on a negative charge (field lines end on them).
+        if (
+          hasNeg &&
+          o.charges.some(
+            (c2) => c2.q < 0 && Math.hypot(x - c2.x, y - c2.y) < o.soften * 1.2,
+          )
+        ) {
+          break;
+        }
+      }
+      if (pts.length > 1) lines.push(pts);
+    }
+  }
+  return lines;
+}
+
+// Tracing is O(lines x steps x charges) — up to ~1M ops/frame with eight 2q
+// charges, which the Jetson would feel at 60 fps. But the lines only change
+// when a charge MOVES, and the common case is a static scene the user is
+// looking at, so memoise on a signature of the charge list: dragging retraces,
+// standing still is free.
+let linesCache: Vec2[][] = [];
+let linesKey = "";
+
+function cachedFieldLines(o: ChargesObject, w: number, h: number): Vec2[][] {
+  const key = o.charges
+    .map((c) => `${c.id}:${c.x.toFixed(1)}:${c.y.toFixed(1)}:${c.q}`)
+    .join("|");
+  if (key !== linesKey) {
+    linesKey = key;
+    linesCache = fieldLines(o, w, h);
+  }
+  return linesCache;
+}
+
+function drawCharges(ctx: CanvasRenderingContext2D, o: ChargesObject) {
+  const w = ctx.canvas.width;
+  const h = ctx.canvas.height;
+
+  ctx.strokeStyle = "rgba(255,255,255,0.62)";
+  ctx.lineWidth = 1.25;
+  for (const pts of cachedFieldLines(o, w, h)) {
+    ctx.beginPath();
+    ctx.moveTo(pts[0][0], pts[0][1]);
+    for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i][0], pts[i][1]);
+    ctx.stroke();
+  }
+
+  for (const c of o.charges) {
+    const r = 13 + 5 * (Math.abs(c.q) - 1);
+    ctx.fillStyle = c.q > 0 ? "#f45a5a" : "#509bf5";
+    ctx.beginPath();
+    ctx.arc(c.x, c.y, r, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.strokeStyle = "rgba(255,255,255,0.95)";
+    ctx.lineWidth = c.grabbed ? 3 : 1.5;
+    ctx.stroke();
+    // +/- glyph.
+    ctx.lineWidth = 2.5;
+    ctx.lineCap = "round";
+    ctx.beginPath();
+    ctx.moveTo(c.x - r / 2, c.y);
+    ctx.lineTo(c.x + r / 2, c.y);
+    if (c.q > 0) {
+      ctx.moveTo(c.x, c.y - r / 2);
+      ctx.lineTo(c.x, c.y + r / 2);
+    }
+    ctx.stroke();
+  }
+}
+
 // ---- vtuber avatar (loading state) ------------------------------------
 // The real avatar is the WebGL VRM (gl/VrmAvatar). Here we only dim the
 // camera and, until the model is live, show a clean loading spinner — NO
@@ -537,6 +676,9 @@ export function drawScene(
         break;
       case "waves":
         drawWaves(ctx, obj, _now);
+        break;
+      case "charges":
+        drawCharges(ctx, obj);
         break;
       case "vtuber":
         drawPuppet(ctx, state, _now);

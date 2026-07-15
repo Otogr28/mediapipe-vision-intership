@@ -3,6 +3,25 @@
 
 ## Shipped
 
+- [x] **Charges — electrostatic field** — SHIPPED 2026-07-15. Experiments →
+  "Charges". Pinch empty space to drop a point charge (palette -2q/-q/+q/+2q),
+  pinch one to drag it and watch the field reorganise live; a "Dipole" preset
+  drops the textbook +/- pair in one press. Shows field LINES (density encodes
+  |q| — a 2q sprouts twice as many), EQUIPOTENTIAL contour bands, the dipole,
+  and the null point between like charges.
+  **Design note (why it isn't Orbitals with signs):** the charges are STATIC.
+  With inverse-square attraction and no orbital velocity a +/- pair would just
+  collide instantly; real exhibits pin the charges because the FIELD is the
+  subject. So there is NO time integration at all — the potential is analytic
+  (`V = k*sum(q/r)`), evaluated per pixel in a single stateless shader pass
+  (`web/src/gl/charges.frag.glsl`), which also makes it the cheapest experiment
+  on the GPU and immune to the dt/divergence class of bug. Field lines are
+  traced client-side in JS from the charge list (`web/src/overlay/scene.ts`,
+  memoised on charge positions so a static scene costs nothing), the same
+  trick as the Orbitals trails; the backend ships only ~8 charges. cv2
+  window/stream fallback does both in numpy. Code: `Charges` in
+  `ui/interactables.py`, `CHG_*` in `config.py`.
+
 - [x] **Waves — interactive ripple tank** — SHIPPED 2026-07-14. Experiments →
   "Waves". Pinch on empty water drops an oscillating point source (palette
   picks Low/Mid/High frequency), pinch a source to DRAG it — the wake

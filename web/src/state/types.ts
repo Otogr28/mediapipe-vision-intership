@@ -179,6 +179,31 @@ export interface WavesObject {
   sources: WaveSource[];
 }
 
+export interface PointCharge {
+  id: number;
+  x: number;
+  y: number;
+  /** charge in palette units; the SIGN is the physics (+1, -2, ...) */
+  q: number;
+  grabbed: boolean;
+}
+
+export interface ChargesObject {
+  type: "charges";
+  /** Coulomb constant in screen units (px), sets the V scale */
+  k: number;
+  /** core softening radius (px) — keeps 1/r finite at a charge's centre */
+  soften: number;
+  /** volts between equipotential contour bands */
+  equipot_step: number;
+  /** field lines a unit charge emits (a 2q charge emits twice as many) */
+  lines_per_q: number;
+  /** palette selection for the next placed charge */
+  kind: "neg2" | "neg1" | "pos1" | "pos2";
+  count: number;
+  charges: PointCharge[];
+}
+
 export interface VtuberObject {
   type: "vtuber";
   /** spawn-relative clock (s), wrapped — drives the idle bob */
@@ -194,6 +219,7 @@ export type SceneObject =
   | SlingshotObject
   | OrbitalsObject
   | WavesObject
+  | ChargesObject
   | VtuberObject;
 
 export interface DebugState {
@@ -215,7 +241,13 @@ export interface AppState {
   pose_world?: PoseWorld | null;
   session: {
     state: "menu" | "interactables" | "experiments";
-    experiment: "black_hole" | "slingshot" | "orbitals" | "waves" | null;
+    experiment:
+      | "black_hole"
+      | "slingshot"
+      | "orbitals"
+      | "waves"
+      | "charges"
+      | null;
     hint: { visible: boolean };
     /** vtuber "Points" toggle — hide the avatar + draw the raw skeleton */
     show_points?: boolean;
