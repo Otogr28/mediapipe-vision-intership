@@ -11,8 +11,18 @@
 // by a small Gaussian weight), matching the numpy fallback in
 // src/ui/interactables.py (Waves._step_field) — keep the two in sync.
 //
-// Boundataries: sampling is clamped to the edge texel (Neumann, du/dn = 0),
+// Boundaries: sampling is clamped to the edge texel (Neumann, du/dn = 0),
 // so the frame edges REFLECT like the walls of a real ripple tank.
+//
+// ORIENTATION (subtle — this was a bug): the texel index comes from
+// gl_FragCoord, i.e. THE TEXEL THIS FRAGMENT WRITES, so the read and the write
+// are the same cell. Deriving it from the shared vertex shader's v_uv instead
+// mixes conventions — v_uv is top-left origin while gl_FragCoord.y is
+// bottom-origin — so every step read row 0 and wrote row simH-1, flipping the
+// field and injecting each source at its mirrored row (one source rendered as
+// two, mirrored vertically). Consequently gl_FragCoord.y (and therefore
+// u_sources' y) is BOTTOM-origin: the JS side converts source y out of frame
+// coords, and the display pass flips v back. Keep all three in agreement.
 //
 // MAX_SOURCES mirrors config.WAVE_MAX_SOURCES — keep in sync.
 
@@ -24,11 +34,13 @@ uniform float u_s2;          // (c * dt / dx)^2, Courant number squared
 uniform float u_delta;       // velocity damping this step (0..1)
 uniform float u_time;        // sim clock AFTER this step (s)
 uniform int   u_count;       // live sources
-uniform vec4  u_sources[6];  // per source: x_cell, y_cell, freq_hz, born_s
+uniform vec4  u_sources[6];  // per source: x_cell, y_cell (BOTTOM-origin, see
+                             // the orientation note), freq_hz, born_s
 uniform float u_amp;         // source amplitude (field units)
 uniform float u_ramp;        // onset ramp length (s)
 
-in  vec2 v_uv;
+// NOTE: deliberately does NOT read the vertex shader's v_uv — see the
+// orientation note above. The texel index comes from gl_FragCoord.
 out vec2 f_field;
 
 const float SIGMA2 = 2.25;   // Gaussian source footprint, sigma = 1.5 cells
@@ -38,9 +50,9 @@ float at(ivec2 p, ivec2 hi) {
 }
 
 void main() {
-    ivec2 p = ivec2(v_uv * u_sim);
+    // The texel this fragment writes — read the same one (see the note above).
     ivec2 hi = ivec2(u_sim) - 1;
-    p = clamp(p, ivec2(0), hi);
+    ivec2 p = clamp(ivec2(gl_FragCoord.xy), ivec2(0), hi);
 
     vec2 uv2 = texelFetch(u_field, p, 0).rg;   // (u, u_prev)
     float u = uv2.r;

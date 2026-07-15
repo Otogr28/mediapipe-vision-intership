@@ -439,7 +439,33 @@ WAVE_GRAB_PAD_PX = 46        # pinch-grab radius around a source centre
 WAVE_AMP = 1.0               # source amplitude (field units; render maps ~1
                              # to full crest brightness)
 WAVE_RAMP_S = 0.3            # source onset ramp, avoids a shock front
-WAVE_DECAY_TAU_S = 1.6       # field ring-down time constant (damping)
+# Field ring-down time constant (s) — how far a ripple travels before fading.
+# This is the knob that decides whether the tank reads or turns to soup: the
+# decay LENGTH is c * tau, so 0.9 s ~= 306 px against a 1280 px frame. Waves
+# stay local to their source and the far field goes calm (so the camera image
+# shows through and the pattern is readable), while two sources a few hundred
+# px apart still overlap strongly enough to show clean interference fringes.
+# Measured at 1280x720, 2 sources: raising this to 1.6 s barely strengthens the
+# interference zone (+17%) but more than doubles the far-field fill (+115%) —
+# i.e. it just washes the frame. Lower = more local; higher = longer reach.
+# (An absorbing "beach" border was tried here and REJECTED: with this damping,
+# reflections already return at ~10%, so it changed the far field by ~16% and
+# did not earn its complexity.)
+WAVE_DECAY_TAU_S = 0.9
+# Physics sub-step (s). The leapfrog update `u_next = 2u - u_prev + s^2*lap`
+# assumes a CONSTANT dt — `u_prev` lives at `t - dt`, so a step that changes
+# dt silently mismatches the time levels and PUMPS energy every frame. That
+# bug made the field diverge to ~1e32 in 5 s (it read as the screen
+# saturating). Both renderers now bank time and step in whole WAVE_PHYS_DT
+# chunks, exactly like the Orbitals sim does with ORB_PHYS_DT — never derive
+# a sub-step from the frame remainder.
+# Stability (CFL): needs s = c*dt/dx <= ~0.86 for the 9-point stencil. At the
+# FINEST grid either renderer uses (the shader's frame/4 -> dx=4 px):
+# s = 340*(1/240)/4 = 0.35. Comfortable on both paths.
+WAVE_PHYS_DT = 1.0 / 240.0
+WAVE_MAX_SUBSTEPS = 16       # per-frame cap; drops sim debt rather than stall
+WAVE_MAX_DEBT_S = 0.25       # after a stall, integrate at most this much
+
 # Palette presets: the oscillation frequency the next placed source gets.
 # With c = 340 px/s these give wavelengths of ~280 / ~140 / ~85 px — "low"
 # reads as slow rolling swells, "high" as tight ripples, and two "mid"
@@ -453,6 +479,17 @@ WAVE_DEFAULT_KIND = "mid"
 # cv2 fallback field only (the WebGL path has its own grid): sim cell size
 # in frame px. 8 px/cell keeps the numpy grid ~160x90 at 720p.
 WAVE_GRID_PX = 8
+
+# Display tone curve, shared by both renderers (mirrored in
+# web/src/gl/waves_render.frag.glsl — keep in sync). The water tint's opacity
+# is `MAX_ALPHA * tanh(|u| * GAIN)` rather than a plain linear ramp, because
+# the field's amplitude scales with how many sources are running: measured
+# max|u| is ~0.5 for one source but ~1.2 for six. A linear ramp bright enough
+# to show a single source's ripples would white out at six. tanh is steep near
+# zero (faint ripples become clearly visible) and saturates gently (six sources
+# land just above one instead of 6x), so one curve serves both ends.
+WAVE_DISPLAY_GAIN = 1.8
+WAVE_DISPLAY_MAX_ALPHA = 0.85
 
 # Vtuber / Puppet interactable.
 # A friendly cosmic mascot puppeteered by the live landmarks: its paws ride

@@ -13,11 +13,22 @@
   integrates it in a WebGL2 ping-pong RG16F texture at frame/4 res
   (`web/src/gl/WavesLayer.tsx` + `waves_step/render.frag.glsl`), the cv2
   window/stream fallback runs the same scheme in numpy at `WAVE_GRID_PX`
-  (~14 ms/frame at 720p via a grid-res colour + one SIMD blendLinear).
+  (~8 ms/frame at 720p via a grid-res colour + one SIMD blendLinear).
   Python owns sources/palette/clock only (`Waves` in `ui/interactables.py`,
   `WAVE_*` in `config.py`); the -/+ stepper scales oscillation + propagation
   together. Also SHIPPED same day: **GPU-hand ROI tracking** (see SHARED.md)
   — edge-crossing landmark error 11.2 → 4.7 px.
+  - *Fixed 2026-07-15 (v1 was unusable — see SHARED.md):* the field DIVERGED
+    to ~1e32 in 5 s (read as "the screen saturates") because the leapfrog was
+    fed a **varying dt** (the frame's leftover time) — it assumes a constant
+    dt, so the time levels mismatched and pumped energy. Both renderers now
+    bank time and step in whole `WAVE_PHYS_DT` chunks (the Orbitals
+    discipline). Visibility: the display alpha is now `tanh`-toned, steep near
+    zero and saturating, so one source reads clearly AND six don't white out.
+    `WAVE_DECAY_TAU_S` 1.6 → 0.9 s keeps ripples local to their source (the
+    far field stays calm so the camera shows through, interference stays
+    crisp). An absorbing "beach" border was tried and rejected — measured only
+    ~16% far-field change, since damping already kills reflections.
 
 - [x] **Orbitals — astro simulator** — SHIPPED 2026-07-07. Experiments →
   "Orbitals". Symplectic velocity-Verlet (leapfrog, 1 force-eval/step),
