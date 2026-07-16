@@ -909,7 +909,13 @@ ST_FRAME_DT = 1.0 / 30.0
 ST_MAX_SUBSTEPS = 40
 ST_TIME_SCALES = (0.25, 0.5, 1.0, 2.0, 4.0)
 ST_ORB_TRAIL_LEN = 360       # ~2 laps at 1x — enough to see the axis walk
-ST_PRUNE_MARGIN = 1.8        # orbiters beyond this * frame extent are dropped
+# Anything beyond this * frame extent is removed — masses AND orbiters. With
+# everything gravitating, a close encounter can sling a body off-screen, and an
+# off-screen mass would keep pulling the scene with no visible cause. 1.8 is
+# just past the drawn sheet (ST_GRID_MARGIN 1.7) and matches the widest view
+# (min zoom 0.55 shows ~1.8x the frame), so a body vanishes only once no
+# camera setting could still show it. A grabbed mass is never pruned.
+ST_PRUNE_MARGIN = 1.8
 # Spawn velocity as a fraction of the local circular speed. 1.0 would give a
 # circle, which precesses invisibly (a rotating circle looks identical); 0.72
 # gives a clearly eccentric ellipse whose axis visibly walks around.

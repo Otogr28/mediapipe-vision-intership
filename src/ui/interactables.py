@@ -2665,17 +2665,18 @@ class Spacetime:
     both halves, so the shape you see and the physics the particles feel are
     the same geometry.
 
-    * the SHEET is Flamm's paraboloid, the exact Schwarzschild embedding
-      (:func:`_flamm_depth`), summed per mass — a visual approximation, since
-      GR is nonlinear and wells do not really superpose, but exact for one mass
-    * the ORBITS use the Paczynski-Wiita potential, ``a = -GM/(r - rs)^2``,
-      which reproduces what Newton cannot: perihelion PRECESSION (the ellipse
-      rotates) and an ISCO at ``3*rs``, inside which the particle spirals in
-      and is swallowed
+    * the SHEET is Flamm's paraboloid outside a body's surface and the
+      interior Schwarzschild cap inside it (:func:`_embed_depth`), summed per
+      mass — a visual approximation, since GR is nonlinear and wells do not
+      really superpose, but exact for one mass
+    * the DYNAMICS are the EIH 1PN N-body equations plus Peters' GW drag
+      (:meth:`_accelerate`), which give what Newton cannot: perihelion
+      PRECESSION (the ellipse rotates) and binaries that inspiral and merge
 
-    The masses are STATIC — they do not fall toward each other. That is
-    deliberate, the same call Charges makes: the user's arrangement is the
-    subject, and mutually attracting masses would collapse into Orbitals.
+    EVERYTHING gravitates and moves, masses included (see the ST_ORB_G config
+    note for why the old pinned-masses call was reversed). A body that drifts
+    off the renderable patch of the plane is removed (:meth:`_prune`) — an
+    off-screen mass would keep pulling the scene with no visible cause.
 
     This class owns the mass/orbiter lists, the camera angles and the
     integration; both renderers derive the picture from
@@ -3503,10 +3504,24 @@ class Spacetime:
                     break
 
     def _prune(self):
+        """Drop anything that has left the renderable patch of the plane.
+
+        Masses too, not only orbiters: everything gravitates, so a close
+        encounter or a merger recoil can sling a body off-screen — and an
+        off-screen mass keeps pulling the scene from beyond the sheet with no
+        visible cause. Once it is past the drawn grid it is gone for good
+        anyway (nothing on screen can bring it back), so remove it. A grabbed
+        mass is exempt: the hand pins it, and the hand is always on-screen.
+        """
         cx, cy = self.w * 0.5, self.h * 0.5
         ex, ey = self.w * ST_PRUNE_MARGIN * 0.5, self.h * ST_PRUNE_MARGIN * 0.5
-        self.orbiters = [o for o in self.orbiters
-                         if abs(o.x - cx) <= ex and abs(o.y - cy) <= ey]
+
+        def gone(b):
+            return abs(b.x - cx) > ex or abs(b.y - cy) > ey
+
+        self.orbiters = [o for o in self.orbiters if not gone(o)]
+        self.masses = [m for m in self.masses
+                       if m is self._grab_mass or not gone(m)]
 
     def _advance(self, dt=None):
         # Spin the bodies. Visual only, and on the SIM clock (time_scale) so
