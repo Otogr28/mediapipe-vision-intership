@@ -548,7 +548,7 @@ def scene_state(t):
         base["session"]["state"] = "interactables"
         base["buttons"] = [
             btn("spawn.sphere", "Sphere", margin, margin, 120, 50),
-            btn("spawn.vtuber", "Vtuber", margin + 130, margin, 150, 50, pressed=True),
+            btn("spawn.vtuber", "Rigged Model", margin + 130, margin, 150, 50, pressed=True),
             btn("reset", "Reset", W - 130 - margin, H - 50 - margin, 130, 50),
         ]
         # Two hands placed at each arm's WRIST so the avatar's image-x hand

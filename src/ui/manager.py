@@ -113,8 +113,9 @@ class UIManager:
 
         self._vtuber_btn = Button(
             x=margin + 120 + 10, y=margin, width=150, height=50,
-            label="Vtuber",
+            label="Rigged Model",
             on_click=self._spawn_puppet,
+            font_scale=0.6,
         )
 
         self._sixseven_btn = Button(
