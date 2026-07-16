@@ -2274,3 +2274,15 @@ remaining hole survives, to_state()/draw() stay healthy incl. the empty scene.
 - Both new IDEAS entries are concept-only — nothing built yet.
 - Remember: pushing to `main` deploys to the Jetson kiosk in ~60 s; the
   label change is safe to ship (no contract change).
+
+## Update - 2026-07-16 (later) - [Claude (Fable 5)]
+
+### What I did
+- **Dropped the two IDEAS entries added earlier today** (time dilation +
+  singularity hypothesis gallery) at the user's request — they judged both
+  too hard to turn into honest interactive simulations. Removed from
+  `IDEAS.md` (the dated "Rigged Model" rename note in the Shipped section
+  stays). Don't re-add them without asking.
+
+### Files changed
+- `IDEAS.md`
