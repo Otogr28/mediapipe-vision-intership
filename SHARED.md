@@ -2170,3 +2170,70 @@ magnitude in OPPOSITE directions.)
 - Bodies now render small (the rs rescale). User wants them drawn BIGGER while
   keeping real properties — the clean way is to split the RENDER radius from
   the physical r_body that feeds the cap/well geometry. Not done yet.
+
+## Update - 2026-07-16 - [Claude (Fable 5)] — Spacetime: off-screen masses now vanish + accuracy audit
+
+User asked for two things: audit Spacetime's physics accuracy (analysis), and
+make bodies DISAPPEAR once they leave the renderable screen space (implemented).
+
+### Implemented: `_prune()` now drops masses, not only orbiters
+Since round 4 everything gravitates, so a close encounter / merger recoil can
+sling a mass off-screen — and it kept pulling the scene from beyond the sheet
+with no visible cause, forever. `Spacetime._prune` now removes masses past
+`ST_PRUNE_MARGIN` (1.8x frame extent — just past the drawn sheet at 1.7 and the
+widest zoom 0.55 ~ 1.82x, so a body vanishes only when no camera setting could
+still show it). The grabbed mass is exempt (the hand pins it on-screen).
+No state-contract change; no web/dist rebuild needed (the browser derives masses
+from the payload each frame, and interp.ts already tolerates vanishing ids).
+Verified: smoke check #8 (prune + grabbed exemption) AND an end-to-end run
+through `update()` — an ejected sun at 3000 px/s vanishes at the margin, the
+remaining hole survives, to_state()/draw() stay healthy incl. the empty scene.
+`tests/smoke_scenes.py` 9/9. isort clean (the one pre-existing failure is
+`_zoo/mp_persondet.py`, untouched vendored code).
+
+### Audit — verified correct (leave alone)
+- `_embed_height` (Flamm + interior cap + common tangent), `_isotropic_radius`,
+  `_eih_accel` checked term-by-term against Will 1993 eq. 6.80 — all exact.
+- `gw_strain` prefactor G/(c^4 D) is RIGHT (it's 2G/c^4D times the TT
+  projector's 1/2). scene.ts:165 using `ixy` where Python uses `qxy` is fine —
+  they are equal off-diagonal. TS mirrors (waveHeight/sheetDepth/dragFrame/
+  latticeOffset/project) all match Python.
+
+### Audit — real findings (reported to user, NOT changed except docs)
+1. **The Kerr sector is no longer in the live dynamics.** `Spacetime._accel`
+   (Mukhopadhyay force, signed spin, directional ISCO) is DEAD CODE since the
+   EIH round; `_pair_force` (Kerr) survives only inside `_orbit_velocity`
+   (spawn speeds). EIH 1PN has no spin terms, so spin currently affects ONLY
+   r_horizon (capture), the ergosphere ring, the visual twist and the marker
+   phase — not the orbits. Config's long Kerr note + module doc claimed
+   otherwise; I updated the class docstring and interactables.md (also removed
+   the stale "masses are STATIC" and "ST_MAX_DEPTH_PX" claims). Open decision:
+   delete `_accel`, or put spin back via 1.5PN spin-orbit terms.
+2. **Wave clock vs physics clock**: `_sim_t += time_scale*dt_real` but the
+   integrator banks `time_scale*ST_FRAME_DT` per frame. Equal only at 30 fps;
+   at any other rate the retarded lookup samples a skewed history (wave speed
+   != c on screen). One-line fix: advance `_sim_t` by `time_scale*ST_FRAME_DT`.
+3. **`_step` docstring says "half-step velocity"; code evaluates the new accel
+   at the OLD velocity** (no half-kick before `_accelerate()`). Small effect
+   (velocity terms are 1PN-suppressed) but claim != code; either switch to
+   real KDK or fix the docstring.
+4. **Merger + GW mass loss inflates remnant speed ~5%**: p computed with old
+   masses then divided by 0.95*m_tot. Physical: remnant keeps COM velocity
+   (v = p/m_before); the radiated momentum leaves with the waves.
+5. **`ST_PN_VC_WARN` is unimplemented** — config promises "the HUD says so"
+   above v/c 0.3; nothing reads the constant anywhere.
+6. **COM drift**: placements don't balance momentum, so e.g. the Precess
+   preset drifts ~2-3 px/s and would now self-clean via the prune after ~10
+   min idle. Possible improvement: subtract COM velocity on placement.
+7. Micro: `_view_anim` is write-only state; `_drag_frame`'s "px factors cancel
+   to a dimensionless angle" comment is false (the quantity is omega/c, 1/px —
+   harmless, display-only); `omega_horizon` carries a redundant m_geom/m_geom.
+
+### Files changed (uncommitted)
+- `src/ui/interactables.py` (`_prune` + class docstring), `src/config.py`
+  (ST_PRUNE_MARGIN comment), `tests/smoke_scenes.py` (check #8),
+  `documentation/modules/interactables.md` (stale claims fixed, prune noted).
+
+### Next steps
+- User to commit+push when happy (push deploys to the Jetson kiosk in ~60 s).
+- Findings 1-6 above are approved-analysis-only; pick any to implement next.

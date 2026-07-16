@@ -201,8 +201,24 @@ def check_spacetime_physics():
     #    the sheet). Guard against a well-meaning clamp creeping back in.
     assert not hasattr(C, "ST_PITCH_MAX_RAD"), "pitch clamp came back"
     assert not hasattr(C, "ST_PITCH_MIN_RAD"), "pitch clamp came back"
+
+    # 8. A body that leaves the renderable patch is removed — MASSES included
+    #    (an off-screen mass would keep pulling the scene with no visible
+    #    cause), except a grabbed one, which the hand pins on-screen.
+    st = Spacetime(1280, 720)
+    st._place_mass(640.0, 360.0, "sun")
+    far = st._place_mass(840.0, 360.0, "neutron")
+    far.x = 640.0 + 1280 * C.ST_PRUNE_MARGIN * 0.5 + 10.0
+    st._prune()
+    assert [m.kind for m in st.masses] == ["sun"], "off-screen mass not pruned"
+    st._grab_mass = st.masses[0]
+    st.masses[0].x = -9999.0
+    st._prune()
+    assert st.masses, "grabbed mass must never be pruned"
+
     print("  ok    Spacetime physics (tangency / depth / PW limit / GW rate /"
-          " momentum / merger / EIH-vs-GR precession / free pitch)")
+          " momentum / merger / EIH-vs-GR precession / free pitch /"
+          " off-screen prune)")
 
 
 def main():
