@@ -85,6 +85,9 @@
   automatic fallback while the model loads or if it fails; the cv2 puppet is
   the window/stream fallback. Stretch still open: a FaceLandmarker for real
   facial expression, and finger rigging.
+  - *2026-07-16:* the spawn button's on-screen label is now **"Rigged
+    Model"** (was "Vtuber") — internal ids and state types (`spawn.vtuber`,
+    object type `"vtuber"`) are unchanged, so no web contract change.
 
 ## Next up
 
@@ -127,6 +130,68 @@
     inset that highlights where you are — get both without teaching topology.
   - Reuse: the same `_project` + camera + two-hand control as Spacetime; this
     is a 2D diagram, so it may not need the 3D lattice at all.
+
+- [ ] **Time dilation — moving clocks tick slower** *(requested 2026-07-16,
+  from the 07-15 research log; sibling to Spacetime + light-cones)*
+  Spacetime shows gravity bending SPACE; this shows velocity stretching TIME —
+  special relativity's other half, and the cheapest physics of any experiment
+  yet: no field, no integrator to diverge, just `dτ = dt·√(1−v²/c²)` per body.
+  - The exhibit trick: **lower c to exhibit scale** (the Mr Tompkins move —
+    c ≈ 20 m/s in slingshot units) so a hand-launched ball is relativistic:
+    γ readouts go from 1.00 at walking pace to 3-4× near full pull.
+  - Interaction sketch (slingshot muscle memory, zero new gestures):
+    pinch-drag-release launches a "ship" carrying its own CLOCK FACE, while a
+    lab wall clock ticks coordinate time in the corner. Faster ship = visibly
+    slower hands + a live γ readout. The band physically CANNOT launch past c
+    — the same pull buys less speed as γ grows (relativistic momentum), so
+    the speed limit is *felt in the hand*, not stated in a caption.
+  - **Twin preset**: one ship makes a round trip while a stay-home clock
+    waits; they meet again showing different elapsed times, side by side —
+    the twin "paradox" as a 15-second demo.
+  - **Muon bonus**: spawn particles that decay after a fixed PROPER time; the
+    fast ones visibly outrun their classical range — the actual experimental
+    confirmation (cosmic-ray muons reaching the ground).
+  - Rendering: Canvas2D clock faces/labels in both renderers (cv2 arcs +
+    text fallback). Python owns the ships + proper-time integration; the
+    browser draws clocks from the state — the tiniest state payload yet.
+  - Stretch that ties the room together: drop one of these clocks into the
+    Spacetime scene's well — gravitational dilation (deeper = slower) next
+    to velocity dilation, the two halves of "time is local".
+
+- [ ] **Inside the singularity — a hypothesis gallery** *(requested
+  2026-07-16, from the 07-15 research log; pairs with light-cones)*
+  GR does not PREDICT what happens at r=0 — it predicts its own breakdown
+  there (geodesics just END; Penrose 1965). Nobody knows what actually
+  happens, so this scene is honest by construction: a gallery of the leading
+  hypotheses, each labelled *as a hypothesis*, morphing one interior picture.
+  - Interaction sketch: the black hole in cross-section (embedding-sheet
+    view); a palette of hypothesis CARDS; pinch a card and the interior
+    below the horizon morphs into that picture, with a 2-sentence caption +
+    a status tag. Outside the horizon NOTHING changes when you switch —
+    that's Birkhoff, and it's the punchline: no outside observation can
+    currently tell these apart, which is exactly why the question is open.
+  - Candidate cards (each is one interior depth-profile):
+    * **Classical GR** — the funnel runs to a vertical asymptote, curvature
+      → ∞, worldlines end. The baseline, drawn with a "theory breaks down
+      here" hazard band rather than presented as truth.
+    * **Planck star / LQG bounce** (Rovelli & Vidotto) — quantum pressure
+      halts collapse at Planck density: the funnel bottoms out in a tiny
+      bulb. Stretch: animate the bounce (black hole → white hole).
+    * **Fuzzball** (Mathur, string theory) — there IS no interior: the
+      funnel ends at a fuzzy, textured surface at the horizon radius.
+    * **Gravastar** (Mazur & Mottola) — collapse stalls into a thin shell
+      around a dark-energy core: a shallow de Sitter cap inside the shell.
+    * **Regular black holes** (Bardeen / Hayward) — metrics with a de Sitter
+      core: finite curvature everywhere, a smooth rounded bottom.
+    * **Baby universe** (Smolin) — the throat pinches off and opens into a
+      second sheet underneath: a new expanding universe.
+  - Why it's cheap: the Spacetime sheet machinery (`_embed_height` /
+    `_isotropic_radius` / the lattice) already draws exactly this class of
+    shape — each hypothesis is just a different `_depth` profile below r_s,
+    the same way star-interior vs black-hole is already a profile switch.
+    Both renderers inherit it by construction (mind the sync table).
+  - More guided gallery than sandbox — pairs with the light-cones experiment
+    (which explains WHY we can't just look inside and settle it).
 
 ## Backlog
 

@@ -2237,3 +2237,40 @@ remaining hole survives, to_state()/draw() stay healthy incl. the empty scene.
 ### Next steps
 - User to commit+push when happy (push deploys to the Jetson kiosk in ~60 s).
 - Findings 1-6 above are approved-analysis-only; pick any to implement next.
+
+## Update - 2026-07-16 - [Claude (Fable 5)]
+
+### What I did
+- **Renamed the "Vtuber" spawn button to "Rigged Model"** (user TODO from
+  `Logs/research/2026-07-15.md`, now checked off): display label only —
+  `src/ui/manager.py` (`label="Rigged Model"`, `font_scale=0.6` so the longer
+  text fits the same 150 px button; measured 127 px) and the matching mock in
+  `web/scripts/mock_backend.py`. All internal ids and the web contract are
+  UNCHANGED (`spawn.vtuber`, object type `"vtuber"`, `HALL_START_VTUBER`),
+  so nothing under `web/src/` changed and **no `web/dist` rebuild is needed**
+  (the frontend renders `btn.label` straight from the state).
+- **Logged two new experiment concepts in `IDEAS.md` → Next up** (from the
+  user's 07-15 research log):
+  1. *Time dilation — moving clocks tick slower*: velocity-based proper time
+     (`dτ = dt·√(1−v²/c²)`) with c lowered to exhibit scale; slingshot-style
+     launch, per-ship clock faces vs a lab clock, twin preset, muon decay
+     bonus.
+  2. *Inside the singularity — a hypothesis gallery*: pinch hypothesis cards
+     (classical GR / Planck star / fuzzball / gravastar / regular BH / baby
+     universe) that morph the interior depth-profile of the embedding sheet;
+     exterior stays fixed (Birkhoff) as the punchline.
+- Added a dated rename note to the shipped Vtuber entry in `IDEAS.md`.
+
+### Files changed (uncommitted)
+- `src/ui/manager.py`, `web/scripts/mock_backend.py`, `IDEAS.md`,
+  `../Logs/research/2026-07-15.md` (vault, TODO checked off)
+
+### Verification
+- Headless button render (Sphere / Rigged Model / 6 7 Counter row, idle +
+  hovered) inspected — label fits. `compileall` + `python -m isort --check`
+  clean on the touched files. No camera run (per user rule).
+
+### Next steps / unfinished work
+- Both new IDEAS entries are concept-only — nothing built yet.
+- Remember: pushing to `main` deploys to the Jetson kiosk in ~60 s; the
+  label change is safe to ship (no contract change).
