@@ -2286,3 +2286,51 @@ remaining hole survives, to_state()/draw() stay healthy incl. the empty scene.
 
 ### Files changed
 - `IDEAS.md`
+
+## Update - 2026-07-16 (evening) - [Claude (Fable 5)]
+
+### What I did
+- **NEW experiment: Schrodinger's cat** ("Quantum Cat" in the picker, user
+  request). `SchrodingerCat` in `ui/interactables.py` + `SCAT_*` in
+  `config.py`: a four-phase pinch-driven measurement game — grab the cat
+  into the box (owner-latch grab, lid closes) → pinch-pull-release the
+  emitter to fire a quantum particle at the box's detector (slingshot
+  semantics; misses re-fire) → box shows BOTH cats ghost-overlapped
+  (|alive> + |dead>, counter-phase breathing) → pinch the box to look:
+  fair-coin collapse + persistent alive/dead tally (converges to 50/50
+  across runs). Dice roll on the OPEN pinch, not the detector hit.
+- Full web contract: `to_state()` ships ALL geometry (first scene with zero
+  hand-mirrored constants), `SchrodingerObject` in `types.ts`,
+  `drawSchrodinger` + vector cat in `overlay/scene.ts`, cv2 fallback in the
+  class, `schrodinger` scene in `mock_backend.py`, **`web/dist` rebuilt**.
+- Extended `tests/smoke_scenes.py`: scene added to the surface sweep +
+  `check_schrodinger_logic()` (drop-in-box / twitch / miss+refire /
+  detector hit / both collapse branches / tally / all phases
+  serialize+draw). 10/10 scenes ok.
+- IDEAS.md: cat moved to Shipped; new "Where is the electron? — position
+  uncertainty" concept logged in Next up (user wants it as an idea only for
+  now).
+- Docs synced: `documentation/modules/interactables.md` (new section),
+  `CLAUDE.md` scene list.
+
+### Verification
+- Smoke suite 10/10 (includes the new logic walk); browser verified with
+  `mock_backend.py schrodinger` + 5 timed `shot.mjs` screenshots (place /
+  aim / particle / superposed / revealed) — all phases render; cv2 fallback
+  rendered to PNG and inspected (3 phases). No camera used (user rule).
+- Note: `isort` also re-sorted `detection/_zoo/mp_persondet.py` (1-line
+  import hunk, unrelated file — same isort behavior as past sessions).
+
+### Files changed (uncommitted)
+- `src/ui/interactables.py`, `src/ui/manager.py`, `src/config.py`,
+  `tests/smoke_scenes.py`, `web/src/state/types.ts`,
+  `web/src/overlay/scene.ts`, `web/scripts/mock_backend.py`, `web/dist/*`,
+  `IDEAS.md`, `CLAUDE.md`, `documentation/modules/interactables.md`,
+  `src/detection/_zoo/mp_persondet.py` (isort only)
+
+### Next steps / unfinished work
+- Live playtest on camera: pinch reach for the box (it sits centre-right),
+  emitter grab radius, and whether the 24 s of captions read well at kiosk
+  distance.
+- The electron-position idea is concept-only in IDEAS.md — do not build
+  without the user's go.

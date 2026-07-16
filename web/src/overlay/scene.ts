@@ -4,6 +4,7 @@ import type {
   AppState,
   ChargesObject,
   OrbitalsObject,
+  SchrodingerObject,
   SlingshotObject,
   SpacetimeObject,
   SphereObject,
@@ -1269,6 +1270,259 @@ function drawSpacetime(
   }
 }
 
+// ---- Schrodinger's cat --------------------------------------------------
+
+const CAT_BODY = "#f08a2a";
+const CAT_DARK = "#4a2a10";
+const CAT_DEAD_BODY = "#8f9bb0";
+const BOX_FILL = "rgba(146,108,58,0.92)";
+const BOX_EDGE = "#5e4020";
+const BOX_LID = "#a97f44";
+
+/** Vector cat at (x, y), head radius r. "alive" sits up with round eyes;
+ *  "dead" lies down with X eyes. Honors the caller's globalAlpha (ghosts). */
+function drawCat(
+  ctx: CanvasRenderingContext2D,
+  x: number,
+  y: number,
+  r: number,
+  style: "alive" | "dead",
+  body = CAT_BODY,
+) {
+  const ears = (hx: number) => {
+    ctx.beginPath();
+    ctx.moveTo(hx - r, y - r * 0.2);
+    ctx.lineTo(hx - r * 0.9, y - r * 1.4);
+    ctx.lineTo(hx - r * 0.3, y - r * 0.85);
+    ctx.moveTo(hx + r, y - r * 0.2);
+    ctx.lineTo(hx + r * 0.9, y - r * 1.4);
+    ctx.lineTo(hx + r * 0.3, y - r * 0.85);
+    ctx.closePath();
+    ctx.fill();
+  };
+  ctx.fillStyle = body;
+  if (style === "alive") {
+    ctx.beginPath();
+    ctx.ellipse(x, y + r * 1.5, r * 0.9, r * 1.1, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.strokeStyle = body;
+    ctx.lineWidth = r * 0.22;
+    ctx.beginPath();
+    ctx.moveTo(x + r * 0.8, y + r * 2.1);
+    ctx.quadraticCurveTo(x + r * 2.0, y + r * 2.2, x + r * 1.9, y + r * 1.1);
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.arc(x, y, r, 0, Math.PI * 2);
+    ctx.fill();
+    ears(x);
+    ctx.fillStyle = CAT_DARK;
+    const ey = y - r * 0.15;
+    for (const s of [-1, 1]) {
+      ctx.beginPath();
+      ctx.arc(x + s * r * 0.38, ey, r / 7, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.beginPath();
+    ctx.arc(x, y + r * 0.25, r / 10, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.strokeStyle = CAT_DARK;
+    ctx.lineWidth = 1.5;
+    for (const s of [-1, 1]) {
+      for (const w of [-0.05, 0.12]) {
+        ctx.beginPath();
+        ctx.moveTo(x + s * r * 0.45, y + r * 0.22);
+        ctx.lineTo(x + s * r * 1.35, y + r * (w + 0.15));
+        ctx.stroke();
+      }
+    }
+  } else {
+    ctx.beginPath();
+    ctx.ellipse(x, y + r * 0.9, r * 1.6, r * 0.7, 0, 0, Math.PI * 2);
+    ctx.fill();
+    const hx = x - r * 1.3;
+    ctx.beginPath();
+    ctx.arc(hx, y, r, 0, Math.PI * 2);
+    ctx.fill();
+    ears(hx);
+    ctx.strokeStyle = CAT_DARK;
+    ctx.lineWidth = 2.5;
+    for (const s of [-1, 1]) {
+      const ex = hx + s * r * 0.38;
+      const ey = y - r * 0.15;
+      const k = r / 6;
+      ctx.beginPath();
+      ctx.moveTo(ex - k, ey - k);
+      ctx.lineTo(ex + k, ey + k);
+      ctx.moveTo(ex - k, ey + k);
+      ctx.lineTo(ex + k, ey - k);
+      ctx.stroke();
+    }
+  }
+}
+
+function drawSchrodinger(
+  ctx: CanvasRenderingContext2D,
+  o: SchrodingerObject,
+  now: number,
+  fw: number,
+) {
+  const t = now / 1000;
+  const [bx, by, bw, bh] = o.box;
+  const lidOpen = o.phase === "place" || o.phase === "revealed";
+
+  ctx.fillStyle = BOX_FILL;
+  ctx.strokeStyle = BOX_EDGE;
+  ctx.lineWidth = 3;
+  ctx.fillRect(bx, by, bw, bh);
+  ctx.strokeRect(bx, by, bw, bh);
+  if (lidOpen) {
+    // Lid flap hinged on the top edge, swung open.
+    ctx.fillStyle = BOX_LID;
+    ctx.beginPath();
+    ctx.moveTo(bx + bw, by);
+    ctx.lineTo(bx + bw + bw * 0.45, by - bh * 0.35);
+    ctx.lineTo(bx + bw * 0.55, by - bh * 0.35);
+    ctx.lineTo(bx, by);
+    ctx.closePath();
+    ctx.fill();
+    ctx.stroke();
+  } else {
+    ctx.beginPath();
+    ctx.moveTo(bx, by + bh * 0.12);
+    ctx.lineTo(bx + bw, by + bh * 0.12);
+    ctx.stroke();
+  }
+
+  // Detector dish on the left wall; its LED blinks while the trigger is
+  // in the fired-AND-not-fired state.
+  const [dxp, dyp] = o.detector;
+  ctx.fillStyle = "#dfe7ee";
+  ctx.beginPath();
+  ctx.ellipse(dxp, dyp, 14, 26, 0, Math.PI / 2, (3 * Math.PI) / 2);
+  ctx.fill();
+  const ledOn = o.phase !== "superposed" || Math.sin(t * 6) > 0;
+  ctx.fillStyle = ledOn ? "#ffd93c" : "#665c22";
+  ctx.beginPath();
+  ctx.arc(dxp - 8, dyp, 5, 0, Math.PI * 2);
+  ctx.fill();
+
+  if (o.phase === "place") {
+    // Dashed drop target inside the open box.
+    ctx.strokeStyle = "rgba(255,255,255,0.45)";
+    ctx.lineWidth = 2;
+    ctx.setLineDash([6, 6]);
+    ctx.strokeRect(bx + 10, by + 10, bw - 20, bh - 20);
+    ctx.setLineDash([]);
+    drawCat(ctx, o.cat[0], o.cat[1], o.cat_r, "alive");
+    if (o.cat_grabbed) {
+      ctx.strokeStyle = BALL_GRABBED;
+      ctx.lineWidth = 3;
+      ctx.beginPath();
+      ctx.arc(o.cat[0], o.cat[1], o.cat_r + 12, 0, Math.PI * 2);
+      ctx.stroke();
+    }
+  } else if (o.phase === "armed") {
+    const [ex, ey] = o.emitter;
+    ctx.fillStyle = "#3c3c3c";
+    ctx.beginPath();
+    ctx.arc(ex, ey, 22, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.strokeStyle = "#b4b4b4";
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.arc(ex, ey, 22, 0, Math.PI * 2);
+    ctx.stroke();
+    if (o.aiming && o.pull) {
+      const [px, py] = o.pull;
+      ctx.strokeStyle = BAND;
+      ctx.lineWidth = 3;
+      ctx.beginPath();
+      ctx.moveTo(ex, ey);
+      ctx.lineTo(px, py);
+      ctx.stroke();
+      // Fire-direction preview: opposite the pull, slingshot semantics.
+      ctx.strokeStyle = ARC_DOT;
+      ctx.lineWidth = 2;
+      ctx.setLineDash([5, 7]);
+      ctx.beginPath();
+      ctx.moveTo(ex, ey);
+      ctx.lineTo(2 * ex - px, 2 * ey - py);
+      ctx.stroke();
+      ctx.setLineDash([]);
+    }
+    if (o.particle) {
+      // Unobserved = a wave packet, not a dot: ripples ride along.
+      const [qx, qy] = o.particle;
+      ctx.fillStyle = "#dff4ff";
+      ctx.beginPath();
+      ctx.arc(qx, qy, 7, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.strokeStyle = "rgba(140,220,255,0.75)";
+      ctx.lineWidth = 2;
+      for (let k = 0; k < 3; k++) {
+        const rr = 10 + ((t * 55 + k * 12) % 36);
+        ctx.globalAlpha = 1 - rr / 48;
+        ctx.beginPath();
+        ctx.arc(qx, qy, rr, 0, Math.PI * 2);
+        ctx.stroke();
+      }
+      ctx.globalAlpha = 1;
+    }
+  } else if (o.phase === "superposed") {
+    // BOTH cats, ghost-overlapped inside the box, breathing in
+    // counter-phase — the |alive> + |dead> the user came to see.
+    const a = 0.5 + 0.32 * Math.sin(t * 2.2);
+    ctx.globalAlpha = a;
+    drawCat(ctx, bx + bw * 0.5, by + bh * 0.5, o.cat_r, "alive");
+    ctx.globalAlpha = 1 - a;
+    drawCat(ctx, bx + bw * 0.5, by + bh * 0.58, o.cat_r, "dead", CAT_DEAD_BODY);
+    ctx.globalAlpha = 1;
+    ctx.fillStyle = "rgba(190,235,255,0.95)";
+    ctx.font = "600 20px ui-sans-serif, system-ui, sans-serif";
+    ctx.textAlign = "center";
+    ctx.textBaseline = "alphabetic";
+    ctx.fillText("|ψ⟩ = (|alive⟩ + |dead⟩) / √2",
+      bx + bw / 2, by - 18);
+  } else {
+    const alive = o.outcome !== "dead";
+    drawCat(ctx, bx + bw * 0.5, by + bh * (alive ? 0.5 : 0.62), o.cat_r,
+      alive ? "alive" : "dead", alive ? CAT_BODY : CAT_DEAD_BODY);
+    if (o.flash > 0) {
+      const rr = bw * 0.5 + (1 - o.flash) * bw * 0.6;
+      ctx.strokeStyle = alive
+        ? "rgba(120,255,160,0.9)"
+        : "rgba(255,140,140,0.9)";
+      ctx.lineWidth = 3;
+      ctx.globalAlpha = o.flash;
+      ctx.beginPath();
+      ctx.arc(bx + bw / 2, by + bh / 2, rr, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.globalAlpha = 1;
+    }
+  }
+
+  if (o.caption) {
+    ctx.font = "600 20px ui-sans-serif, system-ui, sans-serif";
+    ctx.textAlign = "center";
+    const tw = ctx.measureText(o.caption).width;
+    ctx.fillStyle = UNDER;
+    ctx.fillRect(fw / 2 - tw / 2 - 16, 14, tw + 32, 36);
+    ctx.fillStyle = "#f2f5fa";
+    ctx.textBaseline = "middle";
+    ctx.fillText(o.caption, fw / 2, 32);
+    ctx.textBaseline = "alphabetic";
+  }
+
+  const [na, nd] = o.tally;
+  if (na + nd > 0) {
+    ctx.font = "600 18px ui-sans-serif, system-ui, sans-serif";
+    ctx.textAlign = "center";
+    ctx.fillStyle = "rgba(190,255,200,0.95)";
+    ctx.fillText(`alive ${na}   |   dead ${nd}`, bx + bw / 2, by + bh + 30);
+  }
+  ctx.textAlign = "left";
+}
+
 // ---- dispatch -----------------------------------------------------------
 
 export function drawScene(
@@ -1298,6 +1552,9 @@ export function drawScene(
         break;
       case "vtuber":
         drawPuppet(ctx, state, _now);
+        break;
+      case "schrodinger":
+        drawSchrodinger(ctx, obj, _now, state.frame.w);
         break;
       default:
         break; // sixseven + black_hole render in other layers

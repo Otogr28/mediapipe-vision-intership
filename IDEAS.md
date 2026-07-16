@@ -3,6 +3,25 @@
 
 ## Shipped
 
+- [x] **Schrodinger's cat — quantum measurement game** — SHIPPED 2026-07-16.
+  Experiments → "Quantum Cat". Four pinch-driven phases: grab the cat and
+  drop it in the box (lid closes) → pinch the emitter, pull back, release to
+  fire a quantum particle at the detector on the box (slingshot muscle
+  memory; a miss just re-fires) → the trigger fired AND didn't (nobody
+  looked), so the box shows **both cats ghost-overlapped**, |alive> + |dead>,
+  breathing in counter-phase → pinch the box to LOOK: the state collapses on
+  a fair coin, and a persistent alive/dead tally accumulates across runs so
+  repeating visibly converges to 50/50 — the Born rule as a scoreboard.
+  **Design notes:** the dice roll on the *open* pinch, not the detector hit —
+  the measurement is the look, which is the lesson. No time integration at
+  all (constant-speed particle), so none of the fixed-dt discipline applies.
+  All geometry travels in the state payload — the first scene with ZERO
+  hand-mirrored constants; the ghost-pulse (0.5 ± 0.32 @ 2.2 rad/s) is
+  matched decoration in both renderers. Code: `SchrodingerCat` in
+  `ui/interactables.py`, `SCAT_*` in `config.py`, `drawSchrodinger` in
+  `web/src/overlay/scene.ts`; full-cycle logic test in
+  `tests/smoke_scenes.py`.
+
 - [x] **Charges — electrostatic field** — SHIPPED 2026-07-15. Experiments →
   "Charges". Pinch empty space to drop a point charge (palette -2q/-q/+q/+2q),
   pinch one to drag it and watch the field reorganise live; a "Dipole" preset
@@ -130,6 +149,26 @@
     inset that highlights where you are — get both without teaching topology.
   - Reuse: the same `_project` + camera + two-hand control as Spacetime; this
     is a 2D diagram, so it may not need the 3D lattice at all.
+
+- [ ] **Where is the electron? — position uncertainty** *(requested
+  2026-07-16, together with the Schrodinger cat; the cat shipped first)*
+  The follow-up question the cat begs: superposition isn't just alive/dead —
+  a particle's POSITION is itself not defined until measured. Concept sketch:
+  - Show an electron as a **probability cloud** (|ψ|², an analytic gaussian /
+    orbital shape — a single-pass shader, the Charges trick), not a dot.
+  - **Pinch = measure position**: the cloud collapses to a dot exactly where
+    the Born rule sampled it (weighted by |ψ|², so repeated measurements
+    build the cloud back up as a dot histogram — same punchline mechanic as
+    the cat's tally, and the same dot-accumulation trick as Orbitals trails).
+  - Release / wait → the wavepacket **spreads again** (free evolution:
+    σ(t) grows), so "not defined" is something you watch happen, not a
+    caption.
+  - Natural stretch: squeeze the cloud with two pinches to show the
+    uncertainty trade-off (narrow x → wide p → it spreads FASTER when
+    released) — Heisenberg felt in the hands.
+  - Ties into the shipped cat (measurement collapses a state) and the
+    light-cones idea (what "not defined until measured" does NOT mean:
+    no faster-than-light signalling).
 
 ## Backlog
 

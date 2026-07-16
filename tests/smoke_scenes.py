@@ -30,8 +30,8 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(
 import numpy as np  # noqa: E402
 
 from ui.interactables import (BlackHole, BouncingSphere, Charges,  # noqa: E402
-                              Orbitals, Puppet, SixSevenCounter, Slingshot,
-                              Spacetime, Waves)
+                              Orbitals, Puppet, SchrodingerCat,
+                              SixSevenCounter, Slingshot, Spacetime, Waves)
 
 W, H = 1280, 720
 
@@ -221,6 +221,86 @@ def check_spacetime_physics():
           " off-screen prune)")
 
 
+def check_schrodinger_logic():
+    """Walk the full measurement cycle deterministically (no hands: the owner
+    latch reads pinch_state(<unknown id>) -> released, which is exactly the
+    drop / fire edge)."""
+    import json
+    import math
+    import random
+
+    sc = SchrodingerCat(W, H)
+    assert sc.phase == "place"
+
+    # Drop the cat over the box -> lid closes, phase arms.
+    bx, by, bw, bh = sc.box
+    sc.cat_x, sc.cat_y = bx + bw / 2, by + bh / 2
+    sc._grabbed, sc._grab_hand = True, "ghost-hand"
+    sc.update(None, None)
+    assert sc.phase == "armed" and not sc._grabbed
+
+    # A short pull is a twitch, not a shot.
+    sc.aiming, sc._aim_hand = True, "ghost-hand"
+    sc.pull = (sc.emitter[0] + 5, sc.emitter[1] + 5)
+    sc.update(None, None)
+    assert sc.particle is None and sc.phase == "armed"
+
+    # Fire AWAY from the detector -> the particle leaves and you can re-fire.
+    dx = sc.detector[0] - sc.emitter[0]
+    dy = sc.detector[1] - sc.emitter[1]
+    n = math.hypot(dx, dy)
+    sc.aiming, sc._aim_hand = True, "ghost-hand"
+    sc.pull = (sc.emitter[0] + dx / n * 100, sc.emitter[1] + dy / n * 100)
+    sc.update(None, None)
+    assert sc.particle is not None
+    for _ in range(600):
+        sc.update(None, None)
+        if sc.particle is None:
+            break
+    assert sc.particle is None and sc.phase == "armed", "miss did not clear"
+
+    # Fire AT the detector (pull opposite) -> superposition.
+    sc.aiming, sc._aim_hand = True, "ghost-hand"
+    sc.pull = (sc.emitter[0] - dx / n * 100, sc.emitter[1] - dy / n * 100)
+    sc.update(None, None)
+    for _ in range(600):
+        sc.update(None, None)
+        if sc.phase == "superposed":
+            break
+    assert sc.phase == "superposed", "particle never reached the detector"
+
+    # Collapse both branches of the coin; tally accumulates across runs.
+    real_random = random.random
+    try:
+        random.random = lambda: 0.0        # < p_alive -> alive
+        sc._collapse()
+        assert sc.phase == "revealed" and sc.outcome == "alive"
+        sc._new_run()
+        assert sc.phase == "place" and sc.outcome is None
+        random.random = lambda: 0.999      # >= p_alive -> dead
+        sc._collapse()
+        assert sc.outcome == "dead"
+    finally:
+        random.random = real_random
+    assert sc.tally == {"alive": 1, "dead": 1}
+
+    # Every phase serializes (captions included) and draws.
+    frame_shape = (H, W, 3)
+    for phase, outcome in (("place", None), ("armed", None),
+                           ("superposed", None), ("revealed", "alive"),
+                           ("revealed", "dead")):
+        sc.phase, sc.outcome = phase, outcome
+        state = sc.to_state()
+        json.dumps(state)
+        assert state["caption"], f"no caption in {phase}"
+        frame = np.full(frame_shape, 120, np.uint8)
+        sc.draw(frame)
+
+    print("  ok    SchrodingerCat logic (drop-in-box / twitch / miss+refire /"
+          " detector hit / both collapse branches / tally / all phases"
+          " serialize+draw)")
+
+
 def main():
     cases = []
 
@@ -254,6 +334,7 @@ def main():
     cases.append(("Spacetime", st, (st._toggle_view, st._toggle_top,
                                     st._toggle_top, st._toggle_view)))
 
+    cases.append(("SchrodingerCat", SchrodingerCat(W, H), ()))
     cases.append(("Puppet", Puppet(W, H), ()))
 
     failed = []
@@ -262,6 +343,11 @@ def main():
     except Exception:
         failed.append('Spacetime physics')
         print('  FAIL  Spacetime physics\n' + traceback.format_exc())
+    try:
+        check_schrodinger_logic()
+    except Exception:
+        failed.append('SchrodingerCat logic')
+        print('  FAIL  SchrodingerCat logic\n' + traceback.format_exc())
     for name, obj, toggles in cases:
         try:
             _exercise(name, obj, toggles=toggles)
