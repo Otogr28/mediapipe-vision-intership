@@ -22,9 +22,15 @@ from config import (BH_DEFAULT_POS_FACTOR, BH_DISK_BRIGHTNESS,
                     ORB_MAX_SUBSTEPS, ORB_PHYS_DT, ORB_PREDICT_SAMPLE,
                     ORB_PREDICT_TIME_S, ORB_PRUNE_MARGIN, ORB_RESTITUTION,
                     ORB_SOFTENING_PX, ORB_TIME_SCALES, ORB_TRAIL_LEN,
-                    PUPPET_IDLE_BOB_S, SIXSEVEN_FLASH_FRAMES,
-                    SIXSEVEN_HYSTERESIS, SIXSEVEN_MIN_VISIBILITY,
-                    ST_BACKDROP_ALPHA, ST_BACKDROP_RGB, ST_CAM_PITCH_POS_GAIN,
+                    PUPPET_IDLE_BOB_S, SCAT_BOX_CX_FRAC, SCAT_BOX_CY_FRAC,
+                    SCAT_BOX_H_FRAC, SCAT_BOX_W_FRAC, SCAT_CAT_R_FRAC,
+                    SCAT_CAT_START, SCAT_COLLAPSE_P_ALIVE, SCAT_DETECTOR_R_PX,
+                    SCAT_EMITTER, SCAT_EMITTER_GRAB_PX, SCAT_FLASH_DECAY,
+                    SCAT_FRAME_DT, SCAT_GRAB_PAD_PX, SCAT_MAX_PULL_PX,
+                    SCAT_MIN_PULL_PX, SCAT_PARTICLE_SPEED,
+                    SIXSEVEN_FLASH_FRAMES, SIXSEVEN_HYSTERESIS,
+                    SIXSEVEN_MIN_VISIBILITY, ST_BACKDROP_ALPHA,
+                    ST_BACKDROP_RGB, ST_CAM_PITCH_POS_GAIN,
                     ST_CAM_PITCH_RATE_GAIN, ST_CAM_POS_RADIUS_PX,
                     ST_CAM_RATE_MAX_RAD_S, ST_CAM_SMOOTH, ST_CAM_YAW_POS_GAIN,
                     ST_CAM_YAW_RATE_GAIN, ST_CAPTURE_FLASH_DECAY,
@@ -3953,6 +3959,382 @@ class Spacetime:
                     y = y0 + (y1 - y0) * j / rows
                     polyline([pt(x, y, zs[0] + (zs[-1] - zs[0]) * k / zn)
                               for k in range(zn + 1)], (95, 75, 45))
+
+
+class SchrodingerCat:
+    """Schrodinger's cat, playable.
+
+    Four phases, all advanced by pinches. Python owns the state machine and
+    the Born-rule dice; the renderers only draw the phase:
+
+      place       pinch-grab the cat, drop it into the open box (lid closes)
+      armed       pinch the emitter, pull back, release: fire a quantum
+                  particle at the detector on the box (slingshot muscle
+                  memory). A miss flies off screen and you simply re-fire.
+      superposed  the particle arrived UNOBSERVED: the trigger both fired
+                  and didn't, so the box holds |alive> + |dead> — the
+                  renderers draw BOTH cats, ghost-overlapped, inside the
+                  box. Pinch the box to look.
+      revealed    the measurement collapsed the state (a fair coin,
+                  SCAT_COLLAPSE_P_ALIVE). The alive/dead tally persists
+                  across runs so repeating visibly converges to 50/50.
+                  Pinch the box again for a new run (same tally).
+
+    There is NO time integration (the particle flies at constant speed), so
+    none of the fixed-dt discipline the wave/orbit scenes need applies. All
+    geometry travels in to_state(); this scene has no hand-mirrored
+    constants — the ghost-pulse clocks are renderer-local decoration.
+    """
+
+    CAPTIONS = {
+        "place": "Pinch the cat, drop it in the box",
+        "armed": "Pinch the emitter, pull back, release to fire",
+        "superposed": "Nobody looked: it decayed AND didn't."
+                      " Pinch the box to open it",
+        "revealed_alive": "Measured: ALIVE. Pinch the box to run it again",
+        "revealed_dead": "Measured: DEAD. Pinch the box to run it again",
+    }
+
+    def __init__(self, frame_width, frame_height):
+        self.w = frame_width
+        self.h = frame_height
+        self.phase = "place"
+        bw = SCAT_BOX_W_FRAC * frame_width
+        bh = SCAT_BOX_H_FRAC * frame_height
+        self.box = (SCAT_BOX_CX_FRAC * frame_width - bw / 2.0,
+                    SCAT_BOX_CY_FRAC * frame_height - bh / 2.0, bw, bh)
+        self.cat_x = SCAT_CAT_START[0] * frame_width
+        self.cat_y = SCAT_CAT_START[1] * frame_height
+        self.cat_r = SCAT_CAT_R_FRAC * frame_height
+        self.emitter = (SCAT_EMITTER[0] * frame_width,
+                        SCAT_EMITTER[1] * frame_height)
+        # Detector dish on the box's left wall, facing the emitter.
+        self.detector = (self.box[0], self.box[1] + bh * 0.45)
+        self._grabbed = False
+        self._grab_hand = None       # owner: hand_id that initiated the drag
+        self._grab_off = (0.0, 0.0)
+        self.aiming = False
+        self._aim_hand = None        # owner: hand_id that initiated the aim
+        self.pull = None             # clamped cursor position while aiming
+        self.particle = None         # [x, y, vx, vy] while in flight
+        self.outcome = None          # "alive" | "dead" after a measurement
+        self.tally = {"alive": 0, "dead": 0}
+        self.flash = 0.0             # collapse flash, 1 -> 0
+
+    @property
+    def grabbed(self):
+        # UIManager's interaction detector: dragging the cat or drawing the
+        # emitter both count as "engaged with the experiment".
+        return self._grabbed or self.aiming
+
+    def _in_box(self, x, y, pad=0.0):
+        bx, by, bw, bh = self.box
+        return (bx - pad <= x <= bx + bw + pad
+                and by - pad <= y <= by + bh + pad)
+
+    def update(self, hand_result, pose_landmarks):
+        if self.flash > 0.0:
+            self.flash *= SCAT_FLASH_DECAY
+            if self.flash < 0.02:
+                self.flash = 0.0
+
+        if self.phase == "place":
+            self._update_place(hand_result)
+        elif self.phase == "armed":
+            self._update_armed(hand_result)
+        else:  # "superposed" | "revealed" — only the box responds
+            self._update_box_pinch(hand_result)
+
+    # -- phase: place -----------------------------------------------------
+
+    def _update_place(self, hand_result):
+        if self._grabbed:
+            # Owner latch — same rule as BouncingSphere: only the hand that
+            # initiated the drag may move the cat; releasing over the box
+            # puts it inside and closes the lid.
+            _, held, (mx, my) = pinch_state(self._grab_hand)
+            if held:
+                self.cat_x = mx + self._grab_off[0]
+                self.cat_y = my + self._grab_off[1]
+            else:
+                self._grabbed = False
+                self._grab_hand = None
+                if self._in_box(self.cat_x, self.cat_y, pad=self.cat_r * 0.5):
+                    bx, by, bw, bh = self.box
+                    self.cat_x = bx + bw / 2.0
+                    self.cat_y = by + bh * 0.62
+                    self.phase = "armed"
+            return
+        if hand_result is None:
+            return
+        for i in range(len(hand_result.hand_landmarks)):
+            hid = hand_id(hand_result, i)
+            pinching, _, (mx, my) = pinch_state(hid)
+            if (pinching and math.hypot(self.cat_x - mx, self.cat_y - my)
+                    < self.cat_r + SCAT_GRAB_PAD_PX):
+                self._grabbed = True
+                self._grab_hand = hid
+                self._grab_off = (self.cat_x - mx, self.cat_y - my)
+                break
+
+    # -- phase: armed (fire at the detector) -------------------------------
+
+    def _update_armed(self, hand_result):
+        if self.particle is not None:
+            px, py, vx, vy = self.particle
+            px += vx * SCAT_FRAME_DT
+            py += vy * SCAT_FRAME_DT
+            if (math.hypot(px - self.detector[0], py - self.detector[1])
+                    < SCAT_DETECTOR_R_PX):
+                # The trigger fired AND didn't — nobody looked.
+                self.particle = None
+                self.phase = "superposed"
+                return
+            if -100 <= px <= self.w + 100 and -100 <= py <= self.h + 100:
+                self.particle = [px, py, vx, vy]
+            else:
+                self.particle = None    # missed: off screen, re-fire
+
+        if self.aiming:
+            _, held, (mx, my) = pinch_state(self._aim_hand)
+            if held:
+                dx = mx - self.emitter[0]
+                dy = my - self.emitter[1]
+                dist = math.hypot(dx, dy)
+                if dist > SCAT_MAX_PULL_PX:
+                    dx *= SCAT_MAX_PULL_PX / dist
+                    dy *= SCAT_MAX_PULL_PX / dist
+                self.pull = (self.emitter[0] + dx, self.emitter[1] + dy)
+            else:
+                self._fire()
+            return
+        if hand_result is None or self.particle is not None:
+            return
+        for i in range(len(hand_result.hand_landmarks)):
+            hid = hand_id(hand_result, i)
+            pinching, _, (mx, my) = pinch_state(hid)
+            if (pinching and math.hypot(self.emitter[0] - mx,
+                                        self.emitter[1] - my)
+                    < SCAT_EMITTER_GRAB_PX):
+                self.aiming = True
+                self._aim_hand = hid
+                self.pull = (mx, my)
+                break
+
+    def _fire(self):
+        pull = self.pull
+        self.aiming = False
+        self._aim_hand = None
+        self.pull = None
+        if pull is None:
+            return
+        dx = self.emitter[0] - pull[0]      # fire OPPOSITE the pull
+        dy = self.emitter[1] - pull[1]
+        dist = math.hypot(dx, dy)
+        if dist < SCAT_MIN_PULL_PX:
+            return                          # a twitch, not a shot
+        self.particle = [self.emitter[0], self.emitter[1],
+                         dx / dist * SCAT_PARTICLE_SPEED,
+                         dy / dist * SCAT_PARTICLE_SPEED]
+
+    # -- phases: superposed / revealed --------------------------------------
+
+    def _update_box_pinch(self, hand_result):
+        if hand_result is None:
+            return
+        for i in range(len(hand_result.hand_landmarks)):
+            hid = hand_id(hand_result, i)
+            pinching, _, (mx, my) = pinch_state(hid)
+            if pinching and self._in_box(mx, my, pad=SCAT_GRAB_PAD_PX):
+                if self.phase == "superposed":
+                    self._collapse()
+                else:
+                    self._new_run()
+                break
+
+    def _collapse(self):
+        alive = random.random() < SCAT_COLLAPSE_P_ALIVE
+        self.outcome = "alive" if alive else "dead"
+        self.tally[self.outcome] += 1
+        self.flash = 1.0
+        self.phase = "revealed"
+
+    def _new_run(self):
+        self.outcome = None
+        self.phase = "place"
+        self.cat_x = SCAT_CAT_START[0] * self.w
+        self.cat_y = SCAT_CAT_START[1] * self.h
+
+    def _caption(self):
+        if self.phase == "revealed":
+            return self.CAPTIONS["revealed_" + self.outcome]
+        return self.CAPTIONS[self.phase]
+
+    def to_state(self):
+        """Serializable snapshot for the web frontend. Everything visual is
+        derived from this — geometry included, so nothing is hand-mirrored."""
+        bx, by, bw, bh = self.box
+        return {
+            "type": "schrodinger",
+            "phase": self.phase,
+            "cat": [round(self.cat_x, 1), round(self.cat_y, 1)],
+            "cat_r": round(self.cat_r, 1),
+            "cat_grabbed": self._grabbed,
+            "box": [round(bx, 1), round(by, 1), round(bw, 1), round(bh, 1)],
+            "emitter": [round(self.emitter[0], 1), round(self.emitter[1], 1)],
+            "detector": [round(self.detector[0], 1),
+                         round(self.detector[1], 1)],
+            "detector_r": SCAT_DETECTOR_R_PX,
+            "aiming": self.aiming,
+            "pull": ([round(self.pull[0], 1), round(self.pull[1], 1)]
+                     if self.pull is not None else None),
+            "particle": ([round(self.particle[0], 1),
+                          round(self.particle[1], 1)]
+                         if self.particle is not None else None),
+            "outcome": self.outcome,
+            "flash": round(self.flash, 3),
+            "tally": [self.tally["alive"], self.tally["dead"]],
+            "caption": self._caption(),
+        }
+
+    # -- cv2 fallback renderer (window / stream modes) ----------------------
+
+    def _draw_cat(self, frame, cx, cy, r, style):
+        """Vector cat at (cx, cy), head radius r. `style` is "alive" (sitting
+        up, round eyes) or "dead" (lying down, X eyes)."""
+        cx, cy, r = int(cx), int(cy), int(r)
+        body_col = (60, 130, 230)      # warm orange (BGR)
+        dark = (30, 60, 120)
+        if style == "alive":
+            cv2.ellipse(frame, (cx, cy + int(r * 1.5)), (int(r * 0.9), int(r * 1.1)),
+                        0, 0, 360, body_col, -1)
+            cv2.circle(frame, (cx, cy), r, body_col, -1)
+            pts_l = np.array([[cx - r, cy - int(r * 0.2)],
+                              [cx - int(r * 0.9), cy - int(r * 1.4)],
+                              [cx - int(r * 0.3), cy - int(r * 0.85)]], np.int32)
+            pts_r = np.array([[cx + r, cy - int(r * 0.2)],
+                              [cx + int(r * 0.9), cy - int(r * 1.4)],
+                              [cx + int(r * 0.3), cy - int(r * 0.85)]], np.int32)
+            cv2.fillPoly(frame, [pts_l, pts_r], body_col)
+            eye_y = cy - int(r * 0.15)
+            cv2.circle(frame, (cx - int(r * 0.38), eye_y), max(2, r // 7), dark, -1)
+            cv2.circle(frame, (cx + int(r * 0.38), eye_y), max(2, r // 7), dark, -1)
+            cv2.circle(frame, (cx, cy + int(r * 0.25)), max(2, r // 10), dark, -1)
+        else:
+            cv2.ellipse(frame, (cx, cy + int(r * 0.9)), (int(r * 1.6), int(r * 0.7)),
+                        0, 0, 360, body_col, -1)
+            hx = cx - int(r * 1.3)
+            cv2.circle(frame, (hx, cy), r, body_col, -1)
+            pts_l = np.array([[hx - r, cy - int(r * 0.2)],
+                              [hx - int(r * 0.9), cy - int(r * 1.4)],
+                              [hx - int(r * 0.3), cy - int(r * 0.85)]], np.int32)
+            pts_r = np.array([[hx + r, cy - int(r * 0.2)],
+                              [hx + int(r * 0.9), cy - int(r * 1.4)],
+                              [hx + int(r * 0.3), cy - int(r * 0.85)]], np.int32)
+            cv2.fillPoly(frame, [pts_l, pts_r], body_col)
+            for ex in (hx - int(r * 0.38), hx + int(r * 0.38)):
+                s = max(2, r // 6)
+                ey = cy - int(r * 0.15)
+                cv2.line(frame, (ex - s, ey - s), (ex + s, ey + s), dark, 2)
+                cv2.line(frame, (ex - s, ey + s), (ex + s, ey - s), dark, 2)
+
+    def _draw_box(self, frame, lid_open):
+        bx, by, bw, bh = [int(v) for v in self.box]
+        wall = (60, 110, 160)          # cardboard (BGR)
+        edge = (30, 60, 100)
+        cv2.rectangle(frame, (bx, by), (bx + bw, by + bh), wall, -1)
+        cv2.rectangle(frame, (bx, by), (bx + bw, by + bh), edge, 3)
+        if lid_open:
+            # Lid flap hinged on the box's top-right, swung open.
+            lid = np.array([[bx + bw, by], [bx + bw + int(bw * 0.45), by - int(bh * 0.35)],
+                            [bx + int(bw * 0.55), by - int(bh * 0.35)], [bx, by]], np.int32)
+            cv2.fillPoly(frame, [lid], (80, 140, 190))
+            cv2.polylines(frame, [lid], True, edge, 3)
+        else:
+            cv2.line(frame, (bx, by + int(bh * 0.12)),
+                     (bx + bw, by + int(bh * 0.12)), edge, 3)
+        # Detector dish on the left wall.
+        dx, dy = int(self.detector[0]), int(self.detector[1])
+        cv2.ellipse(frame, (dx, dy), (14, 26), 0, 90, 270, (200, 220, 240), -1)
+        cv2.circle(frame, (dx - 8, dy), 5, (0, 220, 255), -1)
+
+    def _draw_caption(self, frame, text):
+        font = cv2.FONT_HERSHEY_SIMPLEX
+        scale, thick = 0.75, 2
+        (tw, th), _ = cv2.getTextSize(text, font, scale, thick)
+        x = (self.w - tw) // 2
+        y = 30
+        overlay = frame.copy()
+        cv2.rectangle(overlay, (x - 16, y - 6), (x + tw + 16, y + th + 18),
+                      (0, 0, 0), -1)
+        cv2.addWeighted(overlay, 0.55, frame, 0.45, 0, frame)
+        cv2.putText(frame, text, (x, y + th + 4), font, scale,
+                    (255, 255, 255), thick, cv2.LINE_AA)
+
+    def _draw_tally(self, frame):
+        if self.tally["alive"] + self.tally["dead"] == 0:
+            return
+        bx, by, bw, bh = [int(v) for v in self.box]
+        text = f"alive {self.tally['alive']}  |  dead {self.tally['dead']}"
+        font = cv2.FONT_HERSHEY_SIMPLEX
+        (tw, th), _ = cv2.getTextSize(text, font, 0.6, 2)
+        x = bx + (bw - tw) // 2
+        y = by + bh + th + 16
+        cv2.putText(frame, text, (x, y), font, 0.6, (200, 255, 200), 2,
+                    cv2.LINE_AA)
+
+    def draw(self, frame):
+        lid_open = self.phase in ("place", "revealed")
+        self._draw_box(frame, lid_open)
+        bx, by, bw, bh = self.box
+
+        if self.phase == "place":
+            self._draw_cat(frame, self.cat_x, self.cat_y, self.cat_r, "alive")
+            if self._grabbed:
+                cv2.circle(frame, (int(self.cat_x), int(self.cat_y)),
+                           int(self.cat_r + 12), (0, 220, 100), 3)
+
+        elif self.phase == "armed":
+            ex, ey = int(self.emitter[0]), int(self.emitter[1])
+            cv2.circle(frame, (ex, ey), 22, (60, 60, 60), -1)
+            cv2.circle(frame, (ex, ey), 22, (180, 180, 180), 2)
+            if self.aiming and self.pull is not None:
+                px, py = int(self.pull[0]), int(self.pull[1])
+                cv2.line(frame, (ex, ey), (px, py), (60, 200, 255), 3)
+                fx, fy = 2 * ex - px, 2 * ey - py     # fire direction preview
+                cv2.arrowedLine(frame, (ex, ey), (fx, fy), (0, 255, 255), 2,
+                                tipLength=0.12)
+            if self.particle is not None:
+                qx, qy = int(self.particle[0]), int(self.particle[1])
+                cv2.circle(frame, (qx, qy), 8, (255, 240, 160), -1)
+                cv2.circle(frame, (qx, qy), 16, (255, 200, 90), 2)
+
+        elif self.phase == "superposed":
+            # BOTH cats, ghost-overlapped inside the box, breathing in
+            # counter-phase (same 0.5 +- 0.32 @ 2.2 rad/s as the browser).
+            a = 0.5 + 0.32 * math.sin(time.monotonic() * 2.2)
+            ghost = frame.copy()
+            self._draw_cat(ghost, bx + bw * 0.5, by + bh * 0.55,
+                           self.cat_r, "alive")
+            cv2.addWeighted(ghost, a, frame, 1.0 - a, 0, frame)
+            ghost = frame.copy()
+            self._draw_cat(ghost, bx + bw * 0.5, by + bh * 0.62,
+                           self.cat_r, "dead")
+            cv2.addWeighted(ghost, 1.0 - a, frame, a, 0, frame)
+
+        elif self.phase == "revealed":
+            style = self.outcome or "alive"
+            self._draw_cat(frame, bx + bw * 0.5,
+                           by + bh * (0.55 if style == "alive" else 0.65),
+                           self.cat_r, style)
+            if self.flash > 0.0:
+                r = int(bw * 0.5 + (1.0 - self.flash) * bw * 0.6)
+                cx, cy = int(bx + bw / 2), int(by + bh / 2)
+                col = (120, 255, 160) if style == "alive" else (140, 140, 255)
+                cv2.circle(frame, (cx, cy), r, col, 3)
+
+        self._draw_caption(frame, self._caption())
+        self._draw_tally(frame)
 
 
 class Puppet:

@@ -1068,6 +1068,35 @@ ST_BACKDROP_RGB = [6, 8, 18]
 # period of the head's resting bob.
 PUPPET_IDLE_BOB_S = 3.2
 
+# Schrodinger's cat experiment ("Quantum Cat").
+# A four-phase quantum measurement game: drop the cat in the box, fire a
+# quantum particle at the box's detector (slingshot pull), watch the box hold
+# |alive> + |dead> while nobody looks, pinch it open to collapse the state —
+# a fair coin (Born rule), with a persistent alive/dead tally so repeat runs
+# visibly converge to 50/50.
+#
+# There is NO time integration here (the particle flies at constant speed),
+# so this scene has none of the fixed-dt discipline the wave/orbit scenes
+# need. All geometry below travels to the browser inside to_state() — this
+# scene deliberately has NO hand-mirrored constants; the superposition
+# ghost-pulse clocks are renderer-local decoration.
+SCAT_BOX_CX_FRAC = 0.62       # box centre, fraction of frame width
+SCAT_BOX_CY_FRAC = 0.55       # box centre, fraction of frame height
+SCAT_BOX_W_FRAC = 0.24        # box width, fraction of frame width
+SCAT_BOX_H_FRAC = 0.36        # box height, fraction of frame height
+SCAT_CAT_START = (0.28, 0.62)  # cat spawn point, fraction of frame
+SCAT_CAT_R_FRAC = 0.055       # cat head radius, fraction of frame height
+SCAT_GRAB_PAD_PX = 60         # extra pinch-to-cat reach that starts a drag
+SCAT_EMITTER = (0.13, 0.78)   # particle emitter, fraction of frame
+SCAT_EMITTER_GRAB_PX = 90     # pinch distance that starts aiming
+SCAT_MIN_PULL_PX = 30         # releases shorter than this don't fire
+SCAT_MAX_PULL_PX = 240        # aim clamp (bounded hand workspace)
+SCAT_PARTICLE_SPEED = 850.0   # px/s, constant — the pull only aims
+SCAT_FRAME_DT = 1.0 / 30.0    # nominal per-frame particle advance (s)
+SCAT_DETECTOR_R_PX = 46       # hit radius around the detector dish
+SCAT_COLLAPSE_P_ALIVE = 0.5   # Born rule for this box: a fair coin
+SCAT_FLASH_DECAY = 0.90       # collapse flash decay per frame (1 -> 0)
+
 
 if __name__ == "__main__":
     print("config file, not supposed to be run directly")

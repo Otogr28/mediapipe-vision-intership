@@ -145,7 +145,8 @@ The big picture:
 
 Each scene is one class: `BouncingSphere`, `BlackHole`, `SixSevenCounter`, `Slingshot`,
 `Orbitals` (n-body gravity), `Waves` (ripple tank), `Charges` (electrostatic field),
-`Spacetime` (relativistic gravity), `Puppet` (VRM Vtuber). They share one contract, and it
+`Spacetime` (relativistic gravity), `SchrodingerCat` (quantum measurement game),
+`Puppet` (VRM rigged model). They share one contract, and it
 is the thing to understand before adding another:
 
 **Python owns the object list and all logic; the renderer derives every visual from it.**

@@ -9,7 +9,7 @@ Run from the repo root (needs the repo venv for cv2/numpy):
     uv run python web/scripts/mock_backend.py [scene]
 
 Scenes: menu (default), sphere, sixseven, slingshot, blackhole, picker,
-orbitals, orbaim, waves, charges, vtuber.
+orbitals, orbaim, waves, charges, spacetime, vtuber, schrodinger.
 Then point the vite dev server at it:  npm run dev  (same port 8092).
 """
 
@@ -543,6 +543,61 @@ def scene_state(t):
             "gw_hist_s": 2.0,
             "ghost": None,
         }]
+
+    elif SCENE == "schrodinger":
+        # Cycles the four phases every 24 s: cat dragged in (0-6), aim +
+        # particle flight (6-12), superposition ghosts (12-18), collapse
+        # (18-24, outcome alternates per cycle).
+        base["session"]["state"] = "experiments"
+        base["session"]["experiment"] = "schrodinger"
+        base["buttons"] = [
+            btn("reset", "Reset", W - 130 - margin, H - 50 - margin, 130, 50)]
+        bw, bh = 0.24 * W, 0.36 * H
+        bx, by = 0.62 * W - bw / 2, 0.55 * H - bh / 2
+        emitter = [round(0.13 * W, 1), round(0.78 * H, 1)]
+        detector = [round(bx, 1), round(by + bh * 0.45, 1)]
+        cyc = t % 24.0
+        obj = {
+            "type": "schrodinger", "phase": "place",
+            "cat": [round(0.28 * W, 1), round(0.62 * H, 1)],
+            "cat_r": round(0.055 * H, 1), "cat_grabbed": False,
+            "box": [round(bx, 1), round(by, 1), round(bw, 1), round(bh, 1)],
+            "emitter": emitter, "detector": detector, "detector_r": 46,
+            "aiming": False, "pull": None, "particle": None,
+            "outcome": None, "flash": 0.0, "tally": [3, 2], "caption": "",
+        }
+        if cyc < 6.0:
+            f = min(1.0, cyc / 5.0)
+            obj["cat"] = [round(0.28 * W + (bx + bw / 2 - 0.28 * W) * f, 1),
+                          round(0.62 * H + (by + bh / 2 - 0.62 * H) * f, 1)]
+            obj["cat_grabbed"] = f < 0.95
+            obj["caption"] = "Pinch the cat, drop it in the box"
+        elif cyc < 12.0:
+            obj["phase"] = "armed"
+            obj["caption"] = "Pinch the emitter, pull back, release to fire"
+            if cyc < 9.0:
+                ang = 0.5 * math.sin(t * 1.3)
+                obj["aiming"] = True
+                obj["pull"] = [round(emitter[0] - 150 * math.cos(ang), 1),
+                               round(emitter[1] + 150 * math.sin(ang) + 60, 1)]
+            else:
+                f = (cyc - 9.0) / 3.0
+                obj["particle"] = [
+                    round(emitter[0] + (detector[0] - emitter[0]) * f, 1),
+                    round(emitter[1] + (detector[1] - emitter[1]) * f, 1)]
+        elif cyc < 18.0:
+            obj["phase"] = "superposed"
+            obj["caption"] = ("Nobody looked: it decayed AND didn't."
+                              " Pinch the box to open it")
+        else:
+            alive = int(t / 24.0) % 2 == 0
+            obj["phase"] = "revealed"
+            obj["outcome"] = "alive" if alive else "dead"
+            obj["flash"] = round(max(0.0, 1.0 - (cyc - 18.0)), 3)
+            obj["caption"] = (
+                "Measured: ALIVE. Pinch the box to run it again" if alive
+                else "Measured: DEAD. Pinch the box to run it again")
+        base["objects"] = [obj]
 
     elif SCENE == "vtuber":
         base["session"]["state"] = "interactables"

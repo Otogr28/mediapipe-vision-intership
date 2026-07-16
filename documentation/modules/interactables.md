@@ -306,6 +306,41 @@ The `st.view` button swaps the sheet for the lattice and eases the camera to tha
 
 ---
 
+## `SchrodingerCat`
+
+Schrodinger's cat as a playable measurement game ("Quantum Cat" in the
+experiment picker). Python owns a four-phase state machine and the Born-rule
+dice; both renderers only draw the phase. **All geometry travels in
+`to_state()`** — this scene deliberately has no hand-mirrored constants (the
+superposition ghost-pulse is renderer-local decoration: `0.5 ± 0.32` opacity
+at `2.2 rad/s` in both `draw()` and `drawSchrodinger`).
+
+### Phases
+
+| Phase | What happens | Pinch that advances it |
+| --- | --- | --- |
+| `place` | Cat sits outside the open box | Grab the cat (owner-latched, like `BouncingSphere`), release it over the box — the lid closes |
+| `armed` | Emitter appears bottom-left, detector dish on the box's left wall | Pinch the emitter, pull back (clamped to `SCAT_MAX_PULL_PX`), release: a quantum particle flies OPPOSITE the pull at constant `SCAT_PARTICLE_SPEED` (slingshot muscle memory). A miss exits the frame and you re-fire; a hit within `SCAT_DETECTOR_R_PX` means the trigger fired *and didn't* — nobody looked |
+| `superposed` | Both cats drawn ghost-overlapped inside the box (`\|alive> + \|dead>`), breathing in counter-phase | Pinch the box to look inside |
+| `revealed` | The state collapses: a fair coin (`SCAT_COLLAPSE_P_ALIVE`). The alive/dead **tally persists across runs** so repeating converges to 50/50 | Pinch the box again for a new run (same tally) |
+
+### Design notes
+
+- **No time integration.** The particle moves in a straight line at constant
+  speed (`x += v·SCAT_FRAME_DT`), so none of the fixed-dt leapfrog discipline
+  applies — nothing can diverge here.
+- Short pulls (< `SCAT_MIN_PULL_PX`) are treated as a twitch and don't fire,
+  mirroring the slingshot's dead-fire rule.
+- The collapse dice roll on the *open* pinch, not on the detector hit — the
+  measurement is the look, which is the lesson.
+- The caption string is built Python-side (`_caption()`) and shipped in the
+  state, so the two renderers can never disagree on the copy.
+- Covered by `tests/smoke_scenes.py::check_schrodinger_logic` (full cycle:
+  drop-in-box, twitch, miss + re-fire, detector hit, both collapse branches,
+  tally persistence, all phases serialize + draw).
+
+---
+
 ## Adding New Interactables
 
 1. Add a new class to this file following the `update(hand_result, pose_landmarks)` / `draw(frame)` interface.

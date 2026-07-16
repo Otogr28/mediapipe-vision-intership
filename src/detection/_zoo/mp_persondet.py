@@ -8,8 +8,8 @@
 # (resize/copyMakeBorder/NMSBoxes); only the neural-net forward moved to
 # onnxruntime. The 4 detector keypoints are (per upstream): hip center, full-body
 # point, shoulder center, upper-body point — the pose-landmark ROI uses kp 0->1.
-import numpy as np
 import cv2 as cv
+import numpy as np
 
 # onnxruntime is imported lazily inside __init__ so the default MediaPipe
 # inference path never requires it to be installed.

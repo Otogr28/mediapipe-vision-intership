@@ -318,6 +318,41 @@ export interface VtuberObject {
   mouth: number;
 }
 
+/**
+ * Schrodinger's cat measurement game. The backend owns the phase machine and
+ * the Born-rule dice; ALL geometry travels here (nothing hand-mirrored). The
+ * superposition ghost-pulse is renderer-local decoration on the `now` clock.
+ */
+export interface SchrodingerObject {
+  type: "schrodinger";
+  phase: "place" | "armed" | "superposed" | "revealed";
+  /** cat position while outside the box (place phase) */
+  cat: Vec2;
+  /** cat head radius (px) — the scene's size unit */
+  cat_r: number;
+  cat_grabbed: boolean;
+  /** box rect [x, y, w, h] */
+  box: [number, number, number, number];
+  /** particle emitter (armed phase) */
+  emitter: Vec2;
+  /** detector dish on the box's left wall */
+  detector: Vec2;
+  detector_r: number;
+  aiming: boolean;
+  /** clamped pinch position while aiming, else null */
+  pull: Vec2 | null;
+  /** quantum particle in flight, else null */
+  particle: Vec2 | null;
+  /** collapse result (revealed phase), else null */
+  outcome: "alive" | "dead" | null;
+  /** collapse flash 1 → 0 */
+  flash: number;
+  /** [alive, dead] measurement counts across runs — converges to 50/50 */
+  tally: [number, number];
+  /** phase caption, ready to draw */
+  caption: string;
+}
+
 export type SceneObject =
   | SphereObject
   | SixSevenObject
@@ -327,7 +362,8 @@ export type SceneObject =
   | WavesObject
   | ChargesObject
   | SpacetimeObject
-  | VtuberObject;
+  | VtuberObject
+  | SchrodingerObject;
 
 export interface DebugState {
   render_fps: number;
@@ -355,6 +391,7 @@ export interface AppState {
       | "waves"
       | "charges"
       | "spacetime"
+      | "schrodinger"
       | null;
     hint: { visible: boolean };
     /** vtuber "Points" toggle — hide the avatar + draw the raw skeleton */
