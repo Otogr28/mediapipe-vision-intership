@@ -309,34 +309,53 @@ The `st.view` button swaps the sheet for the lattice and eases the camera to tha
 ## `SchrodingerCat`
 
 Schrodinger's cat as a playable measurement game ("Quantum Cat" in the
-experiment picker). Python owns a four-phase state machine and the Born-rule
-dice; both renderers only draw the phase. **All geometry travels in
-`to_state()`** — this scene deliberately has no hand-mirrored constants (the
-superposition ghost-pulse is renderer-local decoration: `0.5 ± 0.32` opacity
-at `2.2 rad/s` in both `draw()` and `drawSchrodinger`).
+experiment picker), staged as the **1935 apparatus** from Schrodinger's paper:
+a steel chamber holding a Geiger counter, a relay hammer and an HCN flask,
+with the "tiny bit of radioactive substance" promoted to a visible
+**alpha-particle gun** whose text-labelled FIRE button is the interaction
+(v2 — the v1 pinch-pull-release slingshot emitter was judged unintuitive and
+removed). Python owns a four-phase state machine and the Born-rule dice; both
+renderers only draw the phase. **All geometry travels in `to_state()`** —
+this scene deliberately has no hand-mirrored constants (ghost-pulse, HCN gas
+wisps and the Geiger LED blink are renderer-local decoration; the ghost pulse
+is `0.5 ± 0.32` opacity at `2.2 rad/s` in both `draw()` and
+`drawSchrodinger`).
+
+### Sprites (CC0)
+
+Both renderers draw the same PNG sprite set from `SCAT_SPRITE_DIR`
+(`web/src/assets/schrodinger/` — sources and licenses in its `CREDITS.md`):
+`cat_alive`, `cat_dead`, `gun`, `device` (radiation sign + relay hammer),
+`flask`, `flask_tipped`. The web side imports them through Vite; the cv2 side
+loads the same files via `_scat_sprite()` (scaled + cached per width) and
+`_scat_blit()` (alpha blend). Missing PNGs degrade to the old vector-drawn
+cat — a partial deploy must not blank the scene. `.gitignore` re-includes
+`web/src/assets/**` and `web/dist/**` past the global `*.png` rule so the art
+reaches the Jetson through git.
 
 ### Phases
 
 | Phase | What happens | Pinch that advances it |
 | --- | --- | --- |
-| `place` | Cat sits outside the open box | Grab the cat (owner-latched, like `BouncingSphere`), release it over the box — the lid closes |
-| `armed` | Emitter appears bottom-left, detector dish on the box's left wall | Pinch the emitter, pull back (clamped to `SCAT_MAX_PULL_PX`), release: a quantum particle flies OPPOSITE the pull at constant `SCAT_PARTICLE_SPEED` (slingshot muscle memory). A miss exits the frame and you re-fire; a hit within `SCAT_DETECTOR_R_PX` means the trigger fired *and didn't* — nobody looked |
-| `superposed` | Both cats drawn ghost-overlapped inside the box (`\|alive> + \|dead>`), breathing in counter-phase | Pinch the box to look inside |
-| `revealed` | The state collapses: a fair coin (`SCAT_COLLAPSE_P_ALIVE`). The alive/dead **tally persists across runs** so repeating converges to 50/50 | Pinch the box again for a new run (same tally) |
+| `place` | Cat sits outside the open chamber; hammer + flask visible inside | Grab the cat (owner-latched, like `BouncingSphere`), release it over the box — the lid closes |
+| `armed` | The alpha gun sits muzzle-level with the Geiger tube on the chamber's left wall | Pinch the **FIRE** button (`SCAT_TRIGGER_R_PX`): one particle flies muzzle → tube at constant `SCAT_PARTICLE_SPEED`; recoil + muzzle flash decay by `SCAT_RECOIL_DECAY`. The gun is pre-aimed — no aiming, no misses. Arrival within `SCAT_DETECTOR_R_PX` means the Geiger clicked *and didn't* — nobody looked |
+| `superposed` | Cutaway: BOTH branches ghost-overlapped in counter-phase — alive cat + intact flask vs dead cat + knocked-over flask | Pinch the box to look inside |
+| `revealed` | The state collapses: a fair coin (`SCAT_COLLAPSE_P_ALIVE`). Alive = intact flask; dead = tipped flask + rising HCN wisps. The alive/dead **tally persists across runs** so repeating converges to 50/50 | Pinch the box again for a new run (same tally) |
 
 ### Design notes
 
 - **No time integration.** The particle moves in a straight line at constant
   speed (`x += v·SCAT_FRAME_DT`), so none of the fixed-dt leapfrog discipline
   applies — nothing can diverge here.
-- Short pulls (< `SCAT_MIN_PULL_PX`) are treated as a twitch and don't fire,
-  mirroring the slingshot's dead-fire rule.
-- The collapse dice roll on the *open* pinch, not on the detector hit — the
+- The collapse dice roll on the *open* pinch, not on the Geiger hit — the
   measurement is the look, which is the lesson.
+- The gun muzzle takes its y from the Geiger tube, so the shot is horizontal
+  by construction; only `SCAT_GUN_MUZZLE_X_FRAC` places it (well inside the
+  frame per the `EDGE_MARGIN_FRAC` rule, trigger included).
 - The caption string is built Python-side (`_caption()`) and shipped in the
   state, so the two renderers can never disagree on the copy.
 - Covered by `tests/smoke_scenes.py::check_schrodinger_logic` (full cycle:
-  drop-in-box, twitch, miss + re-fire, detector hit, both collapse branches,
+  drop-in-box, trigger fire + recoil, Geiger hit, both collapse branches,
   tally persistence, all phases serialize + draw).
 
 ---

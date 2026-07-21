@@ -16,13 +16,28 @@ headless MJPEG feed for watching the camera from the laptop.
 
 ## Deploy
 
-From the laptop:
+**Appliance mode (the normal path):** the Jetson auto-updates from `origin/main`
+every ~60 s, so deploying = pushing. `hallpush` wraps the whole flow from the
+laptop — add + commit + pull-rebase + push, then `synca` so the parent vault
+records the new submodule pointer:
+
+```bash
+hallpush fixed the cat scene     # commit message = your words (or auto if none)
+hallpush -w ...                  # also wait until the Jetson reports the commit
+hallpush -n ...                  # skip the synca step
+hallpush --dry-run               # show what it would do
+# install after a fresh clone:
+ln -sfn "$PWD/deploy/hall-app/hallpush" ~/.local/bin/hallpush
+```
+
+**Manual rsync (no git churn, e.g. trying uncommitted code):**
 
 ```bash
 deploy/hall-app/deploy.sh          # rsync code+models, install launcher + moderngl
 ```
 
 Override the target with `JETSON_HOST=jetson@<ip> deploy/hall-app/deploy.sh`.
+Note the updater will overwrite rsync'd code on the next push to `main`.
 
 ## Run
 

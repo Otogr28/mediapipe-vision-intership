@@ -2354,3 +2354,88 @@ remaining hole survives, to_state()/draw() stay healthy incl. the empty scene.
 ### Files changed (uncommitted)
 - `src/config.py`, `src/ui/interactables.py`, `web/src/overlay/scene.ts`,
   `web/scripts/mock_backend.py`, `web/dist/*`, `CLAUDE.md`
+
+## Update - 2026-07-21 11:37 - [Claude (Fable 5)]
+
+### What I did
+- Created **`changes.md`** for this repo — the same hook-enforced chronological
+  change log the vault root and CircuitsSimulations use, with a status
+  vocabulary adapted here (VERIFIED HEADLESS (mock) · SMOKE OK · DIST
+  REBUILT/NOT REBUILT · PUSHED/NOT PUSHED · VERIFIED ON JETSON · PENDING
+  JETSON TEST) and reminders for the hand-mirrored contracts.
+- Adapted both hooks into `.claude/hooks/` (`changes-reminder.sh` PostToolUse
+  + `changes-stop-gate.sh` Stop) and wired them in `.claude/settings.json`.
+  Exercised with simulated payloads: 9/9 cases pass. Enforcement starts next
+  session (hooks snapshot at startup).
+- **Fixed the SessionStart hook's stale path**: it looked for SHARED.md at
+  `/home/oto/Intership2026/HalLMediaPipe` (the repo's old location), so every
+  session was told "SHARED.md not found". Now uses `$CLAUDE_PROJECT_DIR`.
+
+### Files changed
+- `changes.md` (new), `.claude/hooks/changes-reminder.sh` (new),
+  `.claude/hooks/changes-stop-gate.sh` (new), `.claude/settings.json`
+
+### Important context for the other agent
+- From now on, log each batch of work in **both** places: a `changes.md` entry
+  (chronological, template + status vocabulary, top of Entries) **and** a
+  SHARED.md update (hand-off context). Editing `changes.md` is what clears the
+  Stop gate; SHARED.md does not.
+
+### Next steps / unfinished work
+- Next session: confirm the gate blocks once when stopping with unlogged
+  changes, and that SHARED.md now loads into context at session start.
+
+## Update - 2026-07-21 12:21 - [Claude (Fable 5)]
+
+### What I did
+Quantum Cat v2 (user request: real assets + no slingshot + closer to the
+original 1935 experiment). Full detail in `changes.md` (12:21 entry); the
+short version:
+- Researched Schrodinger 1935 + existing sims; restaged the scene as the
+  paper's apparatus: steel chamber, Geiger tube, relay hammer, HCN flask.
+- Replaced the pinch-pull-release emitter with a CC0 ray-gun + text-labelled
+  **FIRE α** button (pinch = shoot, pre-aimed, no misses). State contract
+  changed on BOTH sides (`to_state()` ↔ `types.ts`): gun/trigger/geiger/
+  recoil replace emitter/detector/aiming/pull.
+- CC0 sprites (Wikimedia Commons, Christian Schirm; FreeSVG raygun) under
+  `web/src/assets/schrodinger/` + CREDITS.md, drawn by both renderers with
+  cv2 vector fallback. `.gitignore` gained `!web/src/assets/**` and
+  `!web/dist/**` (the `*.png` rule was about to eat the art, dist included).
+
+### Verification
+- `tests/smoke_scenes.py` 10/10 (schrodinger walk rewritten for the trigger).
+- mock_backend + shot.mjs (`?nointro=1`): all 4 phases + alive AND dead
+  outcomes screenshot-inspected, no console errors. SSE-synced the shots to
+  the mock's phase edges (the mock's clock starts after slow imports — don't
+  trust wall-clock offsets).
+- `npm run build` done, new dist committed-ready (hashed PNGs in dist/assets).
+
+### Important context for the other agent
+- Sprite extraction pipeline lives only in this chat's scratchpad; the
+  repo keeps final PNGs. Re-deriving: hi-res rsvg render → crop → corner
+  floodfill / luminance key → trim (sources in CREDITS.md).
+- cv2 trigger label is ASCII ("FIRE alpha") — Hershey fonts have no α; the
+  web label says "FIRE α particle". Renderer-local, intentional.
+
+### Next steps / unfinished work
+- Live on-camera pass (trigger reach, grab feel), then push → kiosk.
+- `HALL_OUTPUT=window` spot-check of the cv2 sprite path.
+
+## Update - 2026-07-21 12:37 - [Claude (Fable 5)]
+
+### What I did
+- New **`hallpush`** command (`deploy/hall-app/hallpush`, symlinked at
+  `~/.local/bin/hallpush`): the user's one-shot deploy — add + commit
+  (message from args or synca-style auto) + pull --rebase + push `main`
+  (kiosk self-updates in ~60 s) + `synca` for the vault submodule pointer.
+  Flags: `-w` wait for the Jetson to report the commit (+`/healthz` probe),
+  `-n` skip synca, `--dry-run`. Never forces; aborts a conflicted rebase
+  clean; refuses off-main. README Deploy section updated around it.
+
+### Important context for the other agent
+- Only `--dry-run`/`-h` were executed — the real path is untested because
+  running it would push the pending Quantum Cat v2 batch to the exhibit.
+  The user's first `hallpush` doubles as its live test.
+
+### Next steps / unfinished work
+- First real `hallpush -w` run (deploys Quantum Cat v2).

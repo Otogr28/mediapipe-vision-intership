@@ -239,35 +239,25 @@ def check_schrodinger_logic():
     sc.update(None, None)
     assert sc.phase == "armed" and not sc._grabbed
 
-    # A short pull is a twitch, not a shot.
-    sc.aiming, sc._aim_hand = True, "ghost-hand"
-    sc.pull = (sc.emitter[0] + 5, sc.emitter[1] + 5)
-    sc.update(None, None)
-    assert sc.particle is None and sc.phase == "armed"
+    # The gun is pre-aimed: muzzle level with the Geiger tube, horizontal
+    # shot. Pulling the trigger fires exactly one particle + the recoil kick.
+    assert abs(sc.muzzle[1] - sc.geiger[1]) < 1e-6
+    sc._fire()
+    assert sc.particle is not None and sc.recoil == 1.0
+    vx, vy = sc.particle[2], sc.particle[3]
+    assert vx > 0 and abs(vy) < 1e-6, "shot is not horizontal at the tube"
 
-    # Fire AWAY from the detector -> the particle leaves and you can re-fire.
-    dx = sc.detector[0] - sc.emitter[0]
-    dy = sc.detector[1] - sc.emitter[1]
-    n = math.hypot(dx, dy)
-    sc.aiming, sc._aim_hand = True, "ghost-hand"
-    sc.pull = (sc.emitter[0] + dx / n * 100, sc.emitter[1] + dy / n * 100)
-    sc.update(None, None)
-    assert sc.particle is not None
-    for _ in range(600):
-        sc.update(None, None)
-        if sc.particle is None:
-            break
-    assert sc.particle is None and sc.phase == "armed", "miss did not clear"
-
-    # Fire AT the detector (pull opposite) -> superposition.
-    sc.aiming, sc._aim_hand = True, "ghost-hand"
-    sc.pull = (sc.emitter[0] - dx / n * 100, sc.emitter[1] - dy / n * 100)
-    sc.update(None, None)
+    # The particle flies muzzle -> Geiger and arming ignores re-triggers
+    # while it is in flight; arrival = superposition (nobody looked).
     for _ in range(600):
         sc.update(None, None)
         if sc.phase == "superposed":
             break
-    assert sc.phase == "superposed", "particle never reached the detector"
+    assert sc.phase == "superposed", "particle never reached the Geiger tube"
+    assert sc.particle is None
+    for _ in range(80):                    # recoil decays back to zero
+        sc.update(None, None)
+    assert sc.recoil == 0.0
 
     # Collapse both branches of the coin; tally accumulates across runs.
     real_random = random.random
@@ -296,8 +286,8 @@ def check_schrodinger_logic():
         frame = np.full(frame_shape, 120, np.uint8)
         sc.draw(frame)
 
-    print("  ok    SchrodingerCat logic (drop-in-box / twitch / miss+refire /"
-          " detector hit / both collapse branches / tally / all phases"
+    print("  ok    SchrodingerCat logic (drop-in-box / trigger fire+recoil /"
+          " Geiger hit / both collapse branches / tally / all phases"
           " serialize+draw)")
 
 

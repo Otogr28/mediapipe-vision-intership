@@ -1,5 +1,11 @@
 import { isVrmReady } from "../gl/vrmState";
 import { isSkeletonView } from "./debugView";
+import scatCatAliveUrl from "../assets/schrodinger/cat_alive.png";
+import scatCatDeadUrl from "../assets/schrodinger/cat_dead.png";
+import scatGunUrl from "../assets/schrodinger/gun.png";
+import scatDeviceUrl from "../assets/schrodinger/device.png";
+import scatFlaskUrl from "../assets/schrodinger/flask.png";
+import scatFlaskTippedUrl from "../assets/schrodinger/flask_tipped.png";
 import type {
   AppState,
   ChargesObject,
@@ -1275,9 +1281,47 @@ function drawSpacetime(
 const CAT_BODY = "#f08a2a";
 const CAT_DARK = "#4a2a10";
 const CAT_DEAD_BODY = "#8f9bb0";
-const BOX_FILL = "rgba(146,108,58,0.92)";
-const BOX_EDGE = "#5e4020";
-const BOX_LID = "#a97f44";
+// Steel chamber (RGB ports of the BGR constants in ui/interactables.py).
+const BOX_FILL = "rgba(152,170,185,0.92)";
+const BOX_EDGE = "#42505f";
+const BOX_LID = "#acbecd";
+const SCAT_ACCENT = "#8cdcff"; // BGR (255,220,120)-ish trigger/halo accent
+
+// CC0 sprite set shared with the cv2 fallback (web/src/assets/schrodinger/
+// CREDITS.md). Loaded once at module scope; every draw call falls back to
+// the vector cat until the browser has decoded them.
+function scatImg(url: string): HTMLImageElement {
+  const im = new Image();
+  im.src = url;
+  return im;
+}
+const SCAT_IMGS = {
+  cat_alive: scatImg(scatCatAliveUrl),
+  cat_dead: scatImg(scatCatDeadUrl),
+  gun: scatImg(scatGunUrl),
+  device: scatImg(scatDeviceUrl),
+  flask: scatImg(scatFlaskUrl),
+  flask_tipped: scatImg(scatFlaskTippedUrl),
+};
+
+/** drawImage centred at (cx, cy), scaled to `w` px wide, extra `alpha` on
+ *  top of the caller's globalAlpha. False = not decoded yet (fall back). */
+function drawScatSprite(
+  ctx: CanvasRenderingContext2D,
+  im: HTMLImageElement,
+  cx: number,
+  cy: number,
+  w: number,
+  alpha = 1,
+): boolean {
+  if (!im.complete || !im.naturalWidth) return false;
+  const h = (im.naturalHeight / im.naturalWidth) * w;
+  const prev = ctx.globalAlpha;
+  ctx.globalAlpha = prev * alpha;
+  ctx.drawImage(im, cx - w / 2, cy - h / 2, w, h);
+  ctx.globalAlpha = prev;
+  return true;
+}
 
 /** Vector cat at (x, y), head radius r. "alive" sits up with round eyes;
  *  "dead" lies down with X eyes. Honors the caller's globalAlpha (ghosts). */
@@ -1360,6 +1404,46 @@ function drawCat(
   }
 }
 
+/** Sprite cat with the vector cat as fallback until the PNGs decode. */
+function drawScatCat(
+  ctx: CanvasRenderingContext2D,
+  o: SchrodingerObject,
+  cx: number,
+  cy: number,
+  style: "alive" | "dead",
+  alpha = 1,
+) {
+  const im = style === "alive" ? SCAT_IMGS.cat_alive : SCAT_IMGS.cat_dead;
+  const w = style === "alive" ? o.cat_r * 3.2 : o.cat_r * 5.0;
+  if (!drawScatSprite(ctx, im, cx, cy, w, alpha)) {
+    const prev = ctx.globalAlpha;
+    ctx.globalAlpha = prev * alpha;
+    drawCat(ctx, cx, cy, o.cat_r, style,
+      style === "alive" ? CAT_BODY : CAT_DEAD_BODY);
+    ctx.globalAlpha = prev;
+  }
+}
+
+/** Interior apparatus: relay hammer under the radiation sign, HCN flask
+ *  beneath it — intact or knocked over. Same layout as the cv2 fallback. */
+function drawScatFixtures(
+  ctx: CanvasRenderingContext2D,
+  box: [number, number, number, number],
+  broken: boolean,
+  alpha = 1,
+) {
+  const [bx, by, bw, bh] = box;
+  drawScatSprite(ctx, SCAT_IMGS.device, bx + bw * 0.72, by + bh * 0.28,
+    bw * 0.34, alpha);
+  if (broken) {
+    drawScatSprite(ctx, SCAT_IMGS.flask_tipped, bx + bw * 0.76,
+      by + bh * 0.80, bw * 0.22, alpha);
+  } else {
+    drawScatSprite(ctx, SCAT_IMGS.flask, bx + bw * 0.72, by + bh * 0.78,
+      bw * 0.18, alpha);
+  }
+}
+
 function drawSchrodinger(
   ctx: CanvasRenderingContext2D,
   o: SchrodingerObject,
@@ -1370,11 +1454,21 @@ function drawSchrodinger(
   const [bx, by, bw, bh] = o.box;
   const lidOpen = o.phase === "place" || o.phase === "revealed";
 
+  // Steel chamber of the 1935 paper — riveted gray, not cardboard.
   ctx.fillStyle = BOX_FILL;
   ctx.strokeStyle = BOX_EDGE;
   ctx.lineWidth = 3;
   ctx.fillRect(bx, by, bw, bh);
   ctx.strokeRect(bx, by, bw, bh);
+  ctx.fillStyle = BOX_EDGE;
+  for (let i = 0; i < 5; i++) {
+    const rx = bx + bw * (0.1 + 0.2 * i);
+    for (const ry of [by + 10, by + bh - 10]) {
+      ctx.beginPath();
+      ctx.arc(rx, ry, 4, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  }
   if (lidOpen) {
     // Lid flap hinged on the top edge, swung open.
     ctx.fillStyle = BOX_LID;
@@ -1393,27 +1487,33 @@ function drawSchrodinger(
     ctx.stroke();
   }
 
-  // Detector dish on the left wall; its LED blinks while the trigger is
-  // in the fired-AND-not-fired state.
-  const [dxp, dyp] = o.detector;
-  ctx.fillStyle = "#dfe7ee";
-  ctx.beginPath();
-  ctx.ellipse(dxp, dyp, 14, 26, 0, Math.PI / 2, (3 * Math.PI) / 2);
-  ctx.fill();
+  // Geiger tube on the left wall; its LED blinks while the state is
+  // unobserved (the tube clicked AND didn't).
+  const [gx, gy] = o.geiger;
+  ctx.fillStyle = "#d7dde2";
+  ctx.fillRect(gx - 36, gy - 15, 42, 30);
+  ctx.strokeStyle = BOX_EDGE;
+  ctx.lineWidth = 2;
+  ctx.strokeRect(gx - 36, gy - 15, 42, 30);
   const ledOn = o.phase !== "superposed" || Math.sin(t * 6) > 0;
-  ctx.fillStyle = ledOn ? "#ffd93c" : "#665c22";
+  ctx.fillStyle = ledOn ? "#ffd93c" : "#5a6066";
   ctx.beginPath();
-  ctx.arc(dxp - 8, dyp, 5, 0, Math.PI * 2);
+  ctx.arc(gx - 26, gy, 5, 0, Math.PI * 2);
   ctx.fill();
+  ctx.fillStyle = "#e8edf2";
+  ctx.font = "600 11px ui-sans-serif, system-ui, sans-serif";
+  ctx.textAlign = "center";
+  ctx.fillText("GEIGER", gx - 15, gy + 30);
 
   if (o.phase === "place") {
-    // Dashed drop target inside the open box.
+    // The diabolical device is visible before the lid closes.
+    drawScatFixtures(ctx, o.box, false);
     ctx.strokeStyle = "rgba(255,255,255,0.45)";
     ctx.lineWidth = 2;
     ctx.setLineDash([6, 6]);
-    ctx.strokeRect(bx + 10, by + 10, bw - 20, bh - 20);
+    ctx.strokeRect(bx + 10, by + 10, bw * 0.6 - 10, bh - 20);
     ctx.setLineDash([]);
-    drawCat(ctx, o.cat[0], o.cat[1], o.cat_r, "alive");
+    drawScatCat(ctx, o, o.cat[0], o.cat[1], "alive");
     if (o.cat_grabbed) {
       ctx.strokeStyle = BALL_GRABBED;
       ctx.lineWidth = 3;
@@ -1422,54 +1522,65 @@ function drawSchrodinger(
       ctx.stroke();
     }
   } else if (o.phase === "armed") {
-    const [ex, ey] = o.emitter;
-    // Barrel stub aimed at the detector, so the ball reads as an emitter
-    // and the shot direction is pre-suggested.
-    const ddx = dxp - ex;
-    const ddy = dyp - ey;
-    const dn = Math.hypot(ddx, ddy) || 1;
-    ctx.strokeStyle = "#3c3c3c";
-    ctx.lineWidth = 14;
-    ctx.beginPath();
-    ctx.moveTo(ex, ey);
-    ctx.lineTo(ex + (ddx / dn) * 40, ey + (ddy / dn) * 40);
-    ctx.stroke();
-    ctx.fillStyle = "#3c3c3c";
-    ctx.beginPath();
-    ctx.arc(ex, ey, 22, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.strokeStyle = "#b4b4b4";
-    ctx.lineWidth = 2;
-    ctx.beginPath();
-    ctx.arc(ex, ey, 22, 0, Math.PI * 2);
-    ctx.stroke();
-    if (!o.aiming && !o.particle) {
-      // Idle affordance: a slow-breathing halo says "pinch me".
+    const [mx, my] = o.gun;
+    const gw = o.gun_w;
+    const kick = o.recoil * 0.06 * gw;
+    if (!drawScatSprite(ctx, SCAT_IMGS.gun, mx - gw * 0.46 - kick,
+      my + gw * 0.1, gw)) {
+      // Vector fallback: barrel + body, pre-aimed at the tube.
+      ctx.strokeStyle = "#3c3c3c";
+      ctx.lineWidth = 14;
+      ctx.beginPath();
+      ctx.moveTo(mx - gw * 0.8, my);
+      ctx.lineTo(mx, my);
+      ctx.stroke();
+      ctx.fillStyle = "#3c3c3c";
+      ctx.beginPath();
+      ctx.arc(mx - gw * 0.6, my, 22, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    if (o.recoil > 0.55) {
+      // Muzzle flash on the shot frame(s).
+      const fr = 10 + 26 * (1 - o.recoil);
+      ctx.fillStyle = "rgba(255,235,120,0.95)";
+      ctx.beginPath();
+      ctx.arc(mx, my, fr, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.strokeStyle = "rgba(255,235,120,0.95)";
+      ctx.lineWidth = 2;
+      for (let k = 0; k < 4; k++) {
+        const ang = (k * Math.PI) / 4 - Math.PI / 8;
+        ctx.beginPath();
+        ctx.moveTo(mx, my);
+        ctx.lineTo(mx + Math.cos(ang) * fr * 2.2,
+          my - Math.sin(ang) * fr * 2.2);
+        ctx.stroke();
+      }
+    }
+    // The FIRE trigger: the label IS the button.
+    const [tx, ty] = o.trigger;
+    const tw = Math.max(120, gw * 0.66);
+    const th = 46;
+    if (!o.particle && o.recoil === 0) {
       const pulse = 0.5 + 0.5 * Math.sin(t * 2.5);
       ctx.strokeStyle = "rgba(140,220,255,0.8)";
       ctx.lineWidth = 2;
       ctx.beginPath();
-      ctx.arc(ex, ey, 28 + 10 * pulse, 0, Math.PI * 2);
+      ctx.ellipse(tx, ty, tw / 2 + 10 + 8 * pulse, th / 2 + 8 + 8 * pulse,
+        0, 0, Math.PI * 2);
       ctx.stroke();
     }
-    if (o.aiming && o.pull) {
-      const [px, py] = o.pull;
-      ctx.strokeStyle = BAND;
-      ctx.lineWidth = 3;
-      ctx.beginPath();
-      ctx.moveTo(ex, ey);
-      ctx.lineTo(px, py);
-      ctx.stroke();
-      // Fire-direction preview: opposite the pull, slingshot semantics.
-      ctx.strokeStyle = ARC_DOT;
-      ctx.lineWidth = 2;
-      ctx.setLineDash([5, 7]);
-      ctx.beginPath();
-      ctx.moveTo(ex, ey);
-      ctx.lineTo(2 * ex - px, 2 * ey - py);
-      ctx.stroke();
-      ctx.setLineDash([]);
-    }
+    ctx.fillStyle = "rgba(36,40,46,0.95)";
+    ctx.fillRect(tx - tw / 2, ty - th / 2, tw, th);
+    ctx.strokeStyle = SCAT_ACCENT;
+    ctx.lineWidth = 2;
+    ctx.strokeRect(tx - tw / 2, ty - th / 2, tw, th);
+    ctx.fillStyle = SCAT_ACCENT;
+    ctx.font = "700 17px ui-sans-serif, system-ui, sans-serif";
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.fillText("FIRE α particle", tx, ty + 1);
+    ctx.textBaseline = "alphabetic";
     if (o.particle) {
       // Unobserved = a wave packet, not a dot: ripples ride along.
       const [qx, qy] = o.particle;
@@ -1487,16 +1598,22 @@ function drawSchrodinger(
         ctx.stroke();
       }
       ctx.globalAlpha = 1;
+      ctx.fillStyle = "#dff4ff";
+      ctx.font = "600 14px ui-sans-serif, system-ui, sans-serif";
+      ctx.textAlign = "center";
+      ctx.fillText("α", qx, qy - 16);
     }
   } else if (o.phase === "superposed") {
-    // BOTH cats, ghost-overlapped inside the box, breathing in
-    // counter-phase — the |alive> + |dead> the user came to see.
+    // Cutaway: darken the chamber, then BOTH branches ghost-overlapped in
+    // counter-phase — the |alive> + |dead> the user came to see: alive cat
+    // + intact flask vs dead cat + knocked-over flask.
+    ctx.fillStyle = "rgba(20,16,12,0.4)";
+    ctx.fillRect(bx, by, bw, bh);
     const a = 0.5 + 0.32 * Math.sin(t * 2.2);
-    ctx.globalAlpha = a;
-    drawCat(ctx, bx + bw * 0.5, by + bh * 0.5, o.cat_r, "alive");
-    ctx.globalAlpha = 1 - a;
-    drawCat(ctx, bx + bw * 0.5, by + bh * 0.58, o.cat_r, "dead", CAT_DEAD_BODY);
-    ctx.globalAlpha = 1;
+    drawScatFixtures(ctx, o.box, false, a);
+    drawScatFixtures(ctx, o.box, true, 1 - a);
+    drawScatCat(ctx, o, bx + bw * 0.38, by + bh * 0.55, "alive", a);
+    drawScatCat(ctx, o, bx + bw * 0.38, by + bh * 0.82, "dead", 1 - a);
     ctx.fillStyle = "rgba(190,235,255,0.95)";
     ctx.font = "600 20px ui-sans-serif, system-ui, sans-serif";
     ctx.textAlign = "center";
@@ -1505,8 +1622,23 @@ function drawSchrodinger(
       bx + bw / 2, by - 18);
   } else {
     const alive = o.outcome !== "dead";
-    drawCat(ctx, bx + bw * 0.5, by + bh * (alive ? 0.5 : 0.62), o.cat_r,
-      alive ? "alive" : "dead", alive ? CAT_BODY : CAT_DEAD_BODY);
+    drawScatFixtures(ctx, o.box, !alive);
+    if (alive) {
+      drawScatCat(ctx, o, bx + bw * 0.38, by + bh * 0.55, "alive");
+    } else {
+      drawScatCat(ctx, o, bx + bw * 0.38, by + bh * 0.82, "dead");
+      // HCN wisps rising from the smashed flask.
+      ctx.strokeStyle = "rgba(160,235,140,0.8)";
+      ctx.lineWidth = 2;
+      for (let k = 0; k < 3; k++) {
+        const ph = (t * 0.5 + k / 3) % 1;
+        const wx = bx + bw * (0.74 + 0.05 * Math.sin(t * 2 + k));
+        const wy = by + bh * (0.72 - 0.45 * ph);
+        ctx.beginPath();
+        ctx.arc(wx, wy, 6 + 10 * ph, 0, Math.PI * 2);
+        ctx.stroke();
+      }
+    }
     if (o.flash > 0) {
       const rr = bw * 0.5 + (1 - o.flash) * bw * 0.6;
       ctx.strokeStyle = alive

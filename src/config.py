@@ -1087,19 +1087,27 @@ SCAT_BOX_H_FRAC = 0.36        # box height, fraction of frame height
 SCAT_CAT_START = (0.28, 0.62)  # cat spawn point, fraction of frame
 SCAT_CAT_R_FRAC = 0.055       # cat head radius, fraction of frame height
 SCAT_GRAB_PAD_PX = 60         # extra pinch-to-cat reach that starts a drag
-# Emitter placement: level with the detector dish (a horizontal shot is the
-# obvious one) and well inside the frame — interactables NEVER sit near the
-# border (EDGE_MARGIN_FRAC rule: landmarks degrade there, and a pull-back
-# gesture needs room on the far side too).
-SCAT_EMITTER = (0.35, 0.53)   # particle emitter, fraction of frame
-SCAT_EMITTER_GRAB_PX = 90     # pinch distance that starts aiming
-SCAT_MIN_PULL_PX = 30         # releases shorter than this don't fire
-SCAT_MAX_PULL_PX = 240        # aim clamp (bounded hand workspace)
-SCAT_PARTICLE_SPEED = 550.0   # px/s, constant — the pull only aims
+# The alpha gun replaces the old slingshot emitter (v1 pinch-pull-release was
+# judged unintuitive): a labelled trigger button fires one particle at the
+# Geiger tube on the chamber wall — Schrodinger's 1935 apparatus (Geiger
+# counter + relay hammer + HCN flask) with the "tiny bit of radioactive
+# substance" promoted to a visible gun. Gun placement: muzzle level with the
+# Geiger tube (the y comes from the tube) and well inside the frame
+# (EDGE_MARGIN_FRAC rule: landmarks degrade near the border).
+SCAT_GUN_MUZZLE_X_FRAC = 0.35  # muzzle tip, fraction of frame width
+SCAT_GUN_W_FRAC = 0.13        # gun sprite width, fraction of frame width
+SCAT_TRIGGER_R_PX = 70        # pinch distance that pulls the trigger
+SCAT_RECOIL_DECAY = 0.85      # gun kick + muzzle flash decay per frame
+SCAT_PARTICLE_SPEED = 550.0   # px/s, constant, straight at the Geiger tube
 SCAT_FRAME_DT = 1.0 / 30.0    # nominal per-frame particle advance (s)
-SCAT_DETECTOR_R_PX = 46       # hit radius around the detector dish
+SCAT_DETECTOR_R_PX = 46       # hit radius around the Geiger tube
 SCAT_COLLAPSE_P_ALIVE = 0.5   # Born rule for this box: a fair coin
 SCAT_FLASH_DECAY = 0.90       # collapse flash decay per frame (1 -> 0)
+# Sprite art shared by BOTH renderers (CC0 — web/src/assets/schrodinger/
+# CREDITS.md). The cv2 fallback loads the same PNGs the frontend bundles;
+# path is repo-root relative like the model paths. Missing files degrade to
+# the old vector-drawn cat, so a partial deploy still renders.
+SCAT_SPRITE_DIR = "web/src/assets/schrodinger"
 
 
 if __name__ == "__main__":

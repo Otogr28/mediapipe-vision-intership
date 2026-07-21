@@ -319,9 +319,11 @@ export interface VtuberObject {
 }
 
 /**
- * Schrodinger's cat measurement game. The backend owns the phase machine and
- * the Born-rule dice; ALL geometry travels here (nothing hand-mirrored). The
- * superposition ghost-pulse is renderer-local decoration on the `now` clock.
+ * Schrodinger's cat measurement game, staged as the 1935 apparatus: an alpha
+ * gun fires at the Geiger tube on the steel chamber; hammer + HCN flask live
+ * inside. The backend owns the phase machine and the Born-rule dice; ALL
+ * geometry travels here (nothing hand-mirrored). Ghost-pulse/gas/LED clocks
+ * are renderer-local decoration on the `now` clock.
  */
 export interface SchrodingerObject {
   type: "schrodinger";
@@ -333,15 +335,19 @@ export interface SchrodingerObject {
   cat_grabbed: boolean;
   /** box rect [x, y, w, h] */
   box: [number, number, number, number];
-  /** particle emitter (armed phase) */
-  emitter: Vec2;
-  /** detector dish on the box's left wall */
-  detector: Vec2;
-  detector_r: number;
-  aiming: boolean;
-  /** clamped pinch position while aiming, else null */
-  pull: Vec2 | null;
-  /** quantum particle in flight, else null */
+  /** alpha-gun muzzle tip, level with the Geiger tube (armed phase) */
+  gun: Vec2;
+  /** gun sprite width (px) — trigger/flash sizes derive from it */
+  gun_w: number;
+  /** centre of the text-labelled FIRE button (pinch = shoot) */
+  trigger: Vec2;
+  trigger_r: number;
+  /** Geiger tube on the box's left wall */
+  geiger: Vec2;
+  geiger_r: number;
+  /** gun kick + muzzle flash 1 → 0 */
+  recoil: number;
+  /** alpha particle in flight, else null */
   particle: Vec2 | null;
   /** collapse result (revealed phase), else null */
   outcome: "alive" | "dead" | null;

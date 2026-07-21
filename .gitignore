@@ -82,3 +82,9 @@ dist/
 # (web/.gitignore documents the same intent; the rule here was silently
 # dropping it, so frontend changes never reached the device via git).
 !web/dist/
+!web/dist/**
+
+# Schrodinger scene sprites (CC0, see web/src/assets/schrodinger/CREDITS.md):
+# committed on purpose past the *.png rule — the cv2 fallback reads them from
+# this path and the Jetson only receives what git carries.
+!web/src/assets/**
