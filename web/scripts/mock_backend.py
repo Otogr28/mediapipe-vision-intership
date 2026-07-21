@@ -34,11 +34,12 @@ START = time.monotonic()
 
 def _bg_photo():
     """HALL_MOCK_BG=<image path>: use a real photograph as the fake camera
-    frame (cover-cropped to WxH, slightly dimmed so overlays read). Used
-    for the exhibit-site screenshots, where the synthetic test card would
-    look wrong; e.g. NASA's public-domain Webb "Cosmic Cliffs"
-    (images-assets.nasa.gov/image/carina_nebula). Returns None to fall
-    back to the synthetic card."""
+    frame (cover-cropped to WxH). HALL_MOCK_BG_ALPHA (default 0.85) sets
+    the photo's opacity over the site's dark navy, so the overlays stay
+    the protagonists. Used for the exhibit-site screenshots, where the
+    synthetic test card would look wrong; e.g. NASA's public-domain Webb
+    "Cosmic Cliffs" (images-assets.nasa.gov/image/carina_nebula). Returns
+    None to fall back to the synthetic card."""
     path = os.environ.get("HALL_MOCK_BG")
     if not path:
         return None
@@ -52,7 +53,10 @@ def _bg_photo():
                      interpolation=cv2.INTER_AREA)
     y0 = (img.shape[0] - H) // 2
     x0 = (img.shape[1] - W) // 2
-    return (img[y0:y0 + H, x0:x0 + W].astype(np.float32) * 0.85).astype(np.uint8)
+    alpha = float(os.environ.get("HALL_MOCK_BG_ALPHA", "0.85"))
+    navy = np.array([36, 23, 10], np.float32)  # docs/ --navy #0A1724 (BGR)
+    crop = img[y0:y0 + H, x0:x0 + W].astype(np.float32)
+    return (crop * alpha + navy * (1.0 - alpha)).astype(np.uint8)
 
 
 def test_card():
