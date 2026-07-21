@@ -60,6 +60,27 @@ History older than this file lives in `git log` and `SHARED.md`.
 
 ## Entries
 
+### 2026-07-21 13:13 EDT — Quantum Cat copy pass + big ALIVE/DEAD verdict banner
+**Area:** src/ui (SchrodingerCat captions + revealed draw), web/src/overlay/scene.ts, web/scripts/mock_backend.py
+**Status:** SMOKE OK (10/10) · VERIFIED HEADLESS (mock) — armed + revealed-alive screenshots inspected, captions confirmed via SSE · DIST REBUILT · NOT PUSHED  ·  **Artifact:** `src/ui/interactables.py`, `web/src/overlay/scene.ts`, `web/scripts/mock_backend.py`, `web/dist/*`
+**Problem:** RESOLVED — a stale mock_backend from an earlier verification round kept port 8092 and served old captions, making the new copy look unapplied; killed by PID (pkill's exit-144 self-match had skipped it — see the shell-gotchas memory) and re-verified fresh.
+
+**Changes:**
+- **Captions rewritten in plain language** (operator: the post-drop text was
+  hard to understand). One instruction per phase, physics jargon out:
+  "Now pinch the FIRE button: shoot the alpha particle at the box",
+  "Closed box: the cat is alive AND dead at the same time. Pinch it to
+  look", etc. Python `CAPTIONS` + mock mirrors.
+- **Verdict banner** (operator request): big **ALIVE** in green /
+  **DEAD** in red drawn above the box in the revealed phase, dark outline
+  for contrast on any camera background, slight pop while the collapse
+  flash decays. Implemented in BOTH renderers (cv2 + canvas), placed above
+  the open lid flap so nothing overlaps it.
+
+**Tests to run:**
+- [ ] On-camera: banner legibility against a real busy background.
+- [ ] Kiosk distance check of the new caption copy once pushed.
+
 ### 2026-07-21 12:37 EDT — `hallpush`: one command to deploy to the Jetson (add + commit + pull-rebase + push + synca)
 **Area:** deploy/hall-app (`hallpush` NEW, README), `~/.local/bin/hallpush` symlink (laptop-local)
 **Status:** DONE (`--dry-run` and `-h` exercised from fish; the mutating path deliberately NOT run — the repo holds the unpushed Quantum Cat v2 batch and pushing deploys) · NOT PUSHED  ·  **Artifact:** `deploy/hall-app/hallpush`, `deploy/hall-app/README.md`

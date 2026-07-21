@@ -1651,6 +1651,19 @@ function drawSchrodinger(
       ctx.stroke();
       ctx.globalAlpha = 1;
     }
+    // Big verdict banner over the box — green ALIVE / red DEAD, dark
+    // outline so it reads on any camera background; pops with the flash.
+    const size = Math.round(44 + 14 * o.flash);
+    ctx.font = `800 ${size}px ui-sans-serif, system-ui, sans-serif`;
+    ctx.textAlign = "center";
+    ctx.textBaseline = "alphabetic";
+    const ly = by - bh * 0.35 - 18; // clear of the open lid flap
+    ctx.lineWidth = 8;
+    ctx.lineJoin = "round";
+    ctx.strokeStyle = "rgba(8,10,15,0.85)";
+    ctx.strokeText(alive ? "ALIVE" : "DEAD", bx + bw / 2, ly);
+    ctx.fillStyle = alive ? "#3fdc82" : "#ff5252";
+    ctx.fillText(alive ? "ALIVE" : "DEAD", bx + bw / 2, ly);
   }
 
   if (o.caption) {

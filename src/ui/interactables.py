@@ -4041,16 +4041,19 @@ class SchrodingerCat:
     path falls back to the old vector cat if the PNGs are missing.
     """
 
+    # Exhibit copy: one plain instruction per phase (the operator flagged the
+    # earlier physics-speak as hard to parse). The big ALIVE/DEAD banner over
+    # the box carries the outcome; captions just say what to do next.
     CAPTIONS = {
-        "place": "Pinch the cat, put it in the steel chamber",
-        "armed": "Pinch the FIRE trigger: one alpha particle"
-                 " at the Geiger counter",
-        "superposed": "Unobserved, it decayed AND didn't: alive AND dead."
-                      " Pinch the box to look",
-        "revealed_alive": "ALIVE - no decay, the flask is intact."
-                          " Pinch the box to rerun",
-        "revealed_dead": "DEAD - the hammer smashed the flask."
-                         " Pinch the box to rerun",
+        "place": "Pinch to grab the cat, drop it inside the box",
+        "armed": "Now pinch the FIRE button: shoot the alpha particle"
+                 " at the box",
+        "superposed": "Closed box: the cat is alive AND dead at the same"
+                      " time. Pinch it to look",
+        "revealed_alive": "It's ALIVE - the poison never broke."
+                          " Pinch the box to play again",
+        "revealed_dead": "It's DEAD - the hammer smashed the poison."
+                         " Pinch the box to play again",
     }
 
     def __init__(self, frame_width, frame_height):
@@ -4481,6 +4484,20 @@ class SchrodingerCat:
                 cx, cy = int(bx + bw / 2), int(by + bh / 2)
                 col = (120, 255, 160) if alive else (140, 140, 255)
                 cv2.circle(frame, (cx, cy), r, col, 3)
+            # Big verdict banner over the box — green ALIVE / red DEAD, with
+            # a dark outline so it reads on any camera background. It pops
+            # slightly while the collapse flash decays.
+            label = "ALIVE" if alive else "DEAD"
+            col = (120, 255, 160) if alive else (80, 80, 255)
+            scale = 1.8 + 0.5 * self.flash
+            font = cv2.FONT_HERSHEY_SIMPLEX
+            (tw, _), _ = cv2.getTextSize(label, font, scale, 5)
+            lx = int(bx + bw / 2 - tw / 2)
+            ly = int(by - bh * 0.35 - 18)   # clear of the open lid flap
+            cv2.putText(frame, label, (lx, ly), font, scale, (10, 10, 10),
+                        10, cv2.LINE_AA)
+            cv2.putText(frame, label, (lx, ly), font, scale, col, 5,
+                        cv2.LINE_AA)
 
         self._draw_caption(frame, self._caption())
         self._draw_tally(frame)

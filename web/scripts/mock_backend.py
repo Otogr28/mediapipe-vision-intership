@@ -577,11 +577,11 @@ def scene_state(t):
             obj["cat"] = [round(0.28 * W + (bx + bw / 2 - 0.28 * W) * f, 1),
                           round(0.62 * H + (by + bh / 2 - 0.62 * H) * f, 1)]
             obj["cat_grabbed"] = f < 0.95
-            obj["caption"] = "Pinch the cat, put it in the steel chamber"
+            obj["caption"] = "Pinch to grab the cat, drop it inside the box"
         elif cyc < 12.0:
             obj["phase"] = "armed"
-            obj["caption"] = ("Pinch the FIRE trigger: one alpha particle"
-                             " at the Geiger counter")
+            obj["caption"] = ("Now pinch the FIRE button: shoot the alpha"
+                             " particle at the box")
             if cyc >= 9.0:
                 f = (cyc - 9.0) / 3.0
                 obj["recoil"] = round(max(0.0, 1.0 - f * 4.0), 3)
@@ -590,18 +590,18 @@ def scene_state(t):
                     round(gun[1] + (geiger[1] - gun[1]) * f, 1)]
         elif cyc < 18.0:
             obj["phase"] = "superposed"
-            obj["caption"] = ("Unobserved, it decayed AND didn't: alive AND"
-                              " dead. Pinch the box to look")
+            obj["caption"] = ("Closed box: the cat is alive AND dead at the"
+                              " same time. Pinch it to look")
         else:
             alive = int(t / 24.0) % 2 == 0
             obj["phase"] = "revealed"
             obj["outcome"] = "alive" if alive else "dead"
             obj["flash"] = round(max(0.0, 1.0 - (cyc - 18.0)), 3)
             obj["caption"] = (
-                "ALIVE - no decay, the flask is intact."
-                " Pinch the box to rerun" if alive
-                else "DEAD - the hammer smashed the flask."
-                " Pinch the box to rerun")
+                "It's ALIVE - the poison never broke."
+                " Pinch the box to play again" if alive
+                else "It's DEAD - the hammer smashed the poison."
+                " Pinch the box to play again")
         base["objects"] = [obj]
 
     elif SCENE == "vtuber":

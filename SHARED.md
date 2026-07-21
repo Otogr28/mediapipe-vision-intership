@@ -2439,3 +2439,23 @@ short version:
 
 ### Next steps / unfinished work
 - First real `hallpush -w` run (deploys Quantum Cat v2).
+
+## Update - 2026-07-21 13:13 - [Claude (Fable 5)]
+
+### What I did
+- Quantum Cat copy pass (user: post-drop caption was confusing): all
+  `CAPTIONS` rewritten as one plain instruction per phase; mock mirrors.
+- Big verdict banner over the box in the revealed phase — green **ALIVE** /
+  red **DEAD**, dark outline, pops with the collapse flash. Both renderers.
+- Smoke 10/10, dist rebuilt, mock+shot verification (armed + alive frames,
+  captions confirmed through the SSE stream itself).
+
+### Important context for the other agent
+- **Stale-mock trap:** a leftover `mock_backend.py` kept port 8092 across
+  verification rounds and served OLD state, so new captions looked
+  unapplied. `pkill` rounds exit 144 (self-match) and can die before
+  killing the target — kill mocks by PID (`pgrep -af mock_backend`) before
+  trusting a verification run.
+
+### Next steps / unfinished work
+- Same as before: live camera pass, then `hallpush -w` to deploy.
