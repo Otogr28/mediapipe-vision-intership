@@ -2334,3 +2334,23 @@ remaining hole survives, to_state()/draw() stay healthy incl. the empty scene.
   distance.
 - The electron-position idea is concept-only in IDEAS.md — do not build
   without the user's go.
+
+## Update - 2026-07-16 (night) - [Claude (Fable 5)]
+
+### What I did (user feedback on the shipped cat)
+- **Moved the emitter off the frame border**: `SCAT_EMITTER` (0.13, 0.78) →
+  **(0.35, 0.53)** — next to the box, level with the detector dish, so the
+  obvious shot is horizontal and the pull-back hand stays well inside the
+  frame. The user reminded: **interactables NEVER sit near the border**
+  (EDGE_MARGIN_FRAC is a scene-wide rule, not a buttons-only rule) — now
+  stated explicitly in CLAUDE.md ("No interactables near the frame border").
+- **Emitter affordance** (the user asked "is the black ball the thing you
+  shoot?"): added a barrel stub aimed at the detector + a slow-breathing
+  halo while idle (both renderers), and slowed the particle 850 → 550 px/s
+  so the shorter flight still reads.
+- `mock_backend.py` mirrors the new position; `web/dist` rebuilt; smoke
+  suite still 10/10; armed-phase screenshot inspected.
+
+### Files changed (uncommitted)
+- `src/config.py`, `src/ui/interactables.py`, `web/src/overlay/scene.ts`,
+  `web/scripts/mock_backend.py`, `web/dist/*`, `CLAUDE.md`

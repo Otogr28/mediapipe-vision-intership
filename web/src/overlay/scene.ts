@@ -1423,6 +1423,17 @@ function drawSchrodinger(
     }
   } else if (o.phase === "armed") {
     const [ex, ey] = o.emitter;
+    // Barrel stub aimed at the detector, so the ball reads as an emitter
+    // and the shot direction is pre-suggested.
+    const ddx = dxp - ex;
+    const ddy = dyp - ey;
+    const dn = Math.hypot(ddx, ddy) || 1;
+    ctx.strokeStyle = "#3c3c3c";
+    ctx.lineWidth = 14;
+    ctx.beginPath();
+    ctx.moveTo(ex, ey);
+    ctx.lineTo(ex + (ddx / dn) * 40, ey + (ddy / dn) * 40);
+    ctx.stroke();
     ctx.fillStyle = "#3c3c3c";
     ctx.beginPath();
     ctx.arc(ex, ey, 22, 0, Math.PI * 2);
@@ -1432,6 +1443,15 @@ function drawSchrodinger(
     ctx.beginPath();
     ctx.arc(ex, ey, 22, 0, Math.PI * 2);
     ctx.stroke();
+    if (!o.aiming && !o.particle) {
+      // Idle affordance: a slow-breathing halo says "pinch me".
+      const pulse = 0.5 + 0.5 * Math.sin(t * 2.5);
+      ctx.strokeStyle = "rgba(140,220,255,0.8)";
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.arc(ex, ey, 28 + 10 * pulse, 0, Math.PI * 2);
+      ctx.stroke();
+    }
     if (o.aiming && o.pull) {
       const [px, py] = o.pull;
       ctx.strokeStyle = BAND;

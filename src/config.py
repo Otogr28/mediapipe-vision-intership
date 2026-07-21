@@ -1087,11 +1087,15 @@ SCAT_BOX_H_FRAC = 0.36        # box height, fraction of frame height
 SCAT_CAT_START = (0.28, 0.62)  # cat spawn point, fraction of frame
 SCAT_CAT_R_FRAC = 0.055       # cat head radius, fraction of frame height
 SCAT_GRAB_PAD_PX = 60         # extra pinch-to-cat reach that starts a drag
-SCAT_EMITTER = (0.13, 0.78)   # particle emitter, fraction of frame
+# Emitter placement: level with the detector dish (a horizontal shot is the
+# obvious one) and well inside the frame — interactables NEVER sit near the
+# border (EDGE_MARGIN_FRAC rule: landmarks degrade there, and a pull-back
+# gesture needs room on the far side too).
+SCAT_EMITTER = (0.35, 0.53)   # particle emitter, fraction of frame
 SCAT_EMITTER_GRAB_PX = 90     # pinch distance that starts aiming
 SCAT_MIN_PULL_PX = 30         # releases shorter than this don't fire
 SCAT_MAX_PULL_PX = 240        # aim clamp (bounded hand workspace)
-SCAT_PARTICLE_SPEED = 850.0   # px/s, constant — the pull only aims
+SCAT_PARTICLE_SPEED = 550.0   # px/s, constant — the pull only aims
 SCAT_FRAME_DT = 1.0 / 30.0    # nominal per-frame particle advance (s)
 SCAT_DETECTOR_R_PX = 46       # hit radius around the detector dish
 SCAT_COLLAPSE_P_ALIVE = 0.5   # Born rule for this box: a fair coin

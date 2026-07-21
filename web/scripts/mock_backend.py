@@ -554,7 +554,7 @@ def scene_state(t):
             btn("reset", "Reset", W - 130 - margin, H - 50 - margin, 130, 50)]
         bw, bh = 0.24 * W, 0.36 * H
         bx, by = 0.62 * W - bw / 2, 0.55 * H - bh / 2
-        emitter = [round(0.13 * W, 1), round(0.78 * H, 1)]
+        emitter = [round(0.35 * W, 1), round(0.53 * H, 1)]
         detector = [round(bx, 1), round(by + bh * 0.45, 1)]
         cyc = t % 24.0
         obj = {

@@ -4296,8 +4296,21 @@ class SchrodingerCat:
 
         elif self.phase == "armed":
             ex, ey = int(self.emitter[0]), int(self.emitter[1])
+            # Barrel stub aimed at the detector, so the ball reads as an
+            # emitter and the shot direction is pre-suggested.
+            ddx = self.detector[0] - self.emitter[0]
+            ddy = self.detector[1] - self.emitter[1]
+            dn = math.hypot(ddx, ddy) or 1.0
+            bx2 = int(ex + ddx / dn * 40)
+            by2 = int(ey + ddy / dn * 40)
+            cv2.line(frame, (ex, ey), (bx2, by2), (60, 60, 60), 14)
             cv2.circle(frame, (ex, ey), 22, (60, 60, 60), -1)
             cv2.circle(frame, (ex, ey), 22, (180, 180, 180), 2)
+            if not self.aiming and self.particle is None:
+                # Idle affordance: a slow-breathing halo says "pinch me".
+                pulse = 0.5 + 0.5 * math.sin(time.monotonic() * 2.5)
+                cv2.circle(frame, (ex, ey), 28 + int(10 * pulse),
+                           (120, 220, 255), 2)
             if self.aiming and self.pull is not None:
                 px, py = int(self.pull[0]), int(self.pull[1])
                 cv2.line(frame, (ex, ey), (px, py), (60, 200, 255), 3)

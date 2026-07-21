@@ -190,6 +190,12 @@ every star as a black hole — that was the bug. By Birkhoff the far field can't
 apart; only compactness can. `tests/smoke_scenes.py` asserts the tangency and the depth
 ordering.
 
+**No interactables near the frame border.** `EDGE_MARGIN_FRAC` is not just for
+buttons: any pinch target a scene places (emitter, grabbable, drop zone) stays well
+inside the frame — the landmark model degrades on a half-visible hand, and pull-back
+gestures need workspace on the far side of the target too. Check where the hand ends
+up mid-gesture, not just where it starts.
+
 **Two-hand gestures.** `Spacetime` is the first scene to use both hands at once: two
 simultaneous pinches drive the camera and *supersede* place/drag, the way a two-finger
 gesture supersedes a one-finger pan. That is why it places on RELEASE rather than on the
