@@ -32,9 +32,42 @@ MOCK_YAW = os.environ.get("HALL_MOCK_YAW", "1") == "1"
 START = time.monotonic()
 
 
+def _bg_photo():
+    """HALL_MOCK_BG=<image path>: use a real photograph as the fake camera
+    frame (cover-cropped to WxH, slightly dimmed so overlays read). Used
+    for the exhibit-site screenshots, where the synthetic test card would
+    look wrong; e.g. NASA's public-domain Webb "Cosmic Cliffs"
+    (images-assets.nasa.gov/image/carina_nebula). Returns None to fall
+    back to the synthetic card."""
+    path = os.environ.get("HALL_MOCK_BG")
+    if not path:
+        return None
+    img = cv2.imread(path)
+    if img is None:
+        print(f"HALL_MOCK_BG: cannot read {path}; using the test card")
+        return None
+    ih, iw = img.shape[:2]
+    s = max(W / iw, H / ih)
+    img = cv2.resize(img, (int(round(iw * s)), int(round(ih * s))),
+                     interpolation=cv2.INTER_AREA)
+    y0 = (img.shape[0] - H) // 2
+    x0 = (img.shape[1] - W) // 2
+    return (img[y0:y0 + H, x0:x0 + W].astype(np.float32) * 0.85).astype(np.uint8)
+
+
 def test_card():
     """Synthetic background: gradient + grid + circles — enough structure
-    to judge overlays and (crucially) the black-hole lensing distortion."""
+    to judge overlays and (crucially) the black-hole lensing distortion.
+    HALL_MOCK_BG swaps it for a real photo (see _bg_photo)."""
+    photo = _bg_photo()
+    if photo is not None:
+        frame = photo
+        if os.environ.get("HALL_MOCK_LABEL", "1") == "1":
+            cv2.putText(frame, "MOCK", (W // 2 - 90, H - 40),
+                        cv2.FONT_HERSHEY_SIMPLEX, 1.6, (230, 230, 230), 3)
+        ok, jpg = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 88])
+        assert ok
+        return jpg.tobytes()
     yy, xx = np.mgrid[0:H, 0:W].astype(np.float32)
     frame = np.zeros((H, W, 3), np.uint8)
     frame[..., 0] = (40 + 60 * xx / W).astype(np.uint8)   # B

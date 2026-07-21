@@ -60,6 +60,38 @@ History older than this file lives in `git log` and `SHARED.md`.
 
 ## Entries
 
+### 2026-07-21 16:03 EDT — Site v2: book prose (no em dashes/arrows), real phone-first responsive, NASA photo replaces the synthetic mock background
+**Area:** docs/ (all pages + style.css), web/scripts/mock_backend.py (`HALL_MOCK_BG`), docs/img/*.jpg regenerated
+**Status:** VERIFIED HEADLESS — every scene reshot through vite+mock with the new background, 0 console errors; site checked at 1600px and 360px (0 px horizontal overflow, measured); grep confirms 0 em dashes/arrows across docs/ · NOT PUSHED  ·  **Artifact:** `docs/**`, `web/scripts/mock_backend.py`
+**Problem:** RESOLVED — `.exp-head > div` (0,1,1) also matched the `.exp-anim` div and its `min-width: min(30rem,100%)` crushed the 84px mobile width, blowing the header SVG up to full-bleed on phones; fixed with `:not(.exp-anim)`. Caught by measuring `getBoundingClientRect` at 360px, not by eyeballing.
+
+**Changes (three operator requests):**
+- **Copy rewritten as popular-science book prose.** Em dashes and arrow
+  glyphs are BANNED from the site (operator rule, keep it that way):
+  sentences restructured with periods, colons and commas; "RELATED →"
+  became a "KEEP EXPLORING:" sentence; "← All experiments" became "Back
+  to all experiments"; the schrodinger chain reads "the Geiger tube trips
+  the hammer, the hammer tips the flask, and the flask decides the cat".
+  Verify with `grep -c "—\|→\|←" docs/...` = 0 (CSS comments included).
+- **Responsive overhaul, phones first** (QR arrivals): fluid type via
+  clamp() on body/h1/h2/lede/captions, auto-fit grids with
+  `minmax(min(100%, Xrem), 1fr)` (howto + cards stack without media
+  queries), fluid paddings, `color-scheme: dark`, `theme-color` meta,
+  text-wrap balance; ≤720px the experiment-header SVG becomes an 84px
+  chapter vignette above the title (flex column-reverse).
+- **Mock background is now a real open-licensed photo** (operator: no
+  self-made test card in site imagery): new `HALL_MOCK_BG=<path>` in
+  mock_backend.py cover-crops any photo to the frame (dimmed 0.85, MOCK
+  label still gated by `HALL_MOCK_LABEL`). Site images use NASA/STScI's
+  public-domain Webb "Cosmic Cliffs" (images.nasa.gov `carina_nebula`,
+  1920x1111 `~large.jpg`); credit line added to the index footer. All 7
+  docs/img JPEGs regenerated (~260-295 KB each).
+
+**Tests to run:**
+- [ ] After the next hallpush: reload the live Pages site on a real phone
+      (the QR path) and sanity-check type sizes + the 84px vignettes.
+- [ ] Still pending: on-site phone scan of the plates.
+
 ### 2026-07-21 15:02 EDT — Site verified LIVE + Pillow CVE batch fixed (post-hallpush follow-up)
 **Area:** uv.lock (Pillow bump), verification only otherwise
 **Status:** VERIFIED LIVE — Pages build `built` on bd34c85 in 20 s; index, experiment pages, style.css and images all HTTP 200 at https://otogr28.github.io/mediapipe-vision-intership/ (including the exact `/experiments/<key>.html` URLs baked into the QRs); kiosk `/healthz` 200 over Tailscale after the push · SMOKE OK (10/10) · NOT PUSHED (the uv.lock commit rides the next hallpush — kiosk-irrelevant, Jetson doesn't use uv)  ·  **Artifact:** `uv.lock`
