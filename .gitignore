@@ -92,3 +92,10 @@ dist/
 # The exhibit website (GitHub Pages serves docs/ from main): its screenshots
 # (docs/img/*.jpg) must survive the global image rules above.
 !docs/**
+
+# Internal notes, logs and Claude-harness files are local-only: the public
+# repo keeps only code, assets and READMEs. (Last rule wins: this also
+# overrides the asset negations above for .md files, e.g. CREDITS.md.)
+*.md
+!README.md
+.claude/
