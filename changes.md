@@ -60,6 +60,25 @@ History older than this file lives in `git log` and `SHARED.md`.
 
 ## Entries
 
+### 2026-07-21 15:02 EDT — Site verified LIVE + Pillow CVE batch fixed (post-hallpush follow-up)
+**Area:** uv.lock (Pillow bump), verification only otherwise
+**Status:** VERIFIED LIVE — Pages build `built` on bd34c85 in 20 s; index, experiment pages, style.css and images all HTTP 200 at https://otogr28.github.io/mediapipe-vision-intership/ (including the exact `/experiments/<key>.html` URLs baked into the QRs); kiosk `/healthz` 200 over Tailscale after the push · SMOKE OK (10/10) · NOT PUSHED (the uv.lock commit rides the next hallpush — kiosk-irrelevant, Jetson doesn't use uv)  ·  **Artifact:** `uv.lock`
+**Problem:** RESOLVED (×2) —
+1. GitHub flagged **13 Dependabot alerts, ALL Pillow < 12.3.0** (10 high,
+   CVE-2026-54058…59205, a June-2026 batch). `uv lock --upgrade-package
+   pillow` → 12.3.0 clears every one. Laptop dev env only.
+2. **Plain `uv sync` silently strips the `gpu` dependency group** (PEP 735
+   `[dependency-groups] gpu = [onnxruntime]` in pyproject.toml — NOT
+   installed by default): my sync for the Pillow bump pruned
+   onnxruntime AND its protobuf, breaking `import google.protobuf`
+   (mediapipe 0.10.35 imports fine without it, so smoke 10/10 masked it).
+   Restored with **`uv sync --group gpu`** — use that form on the laptop,
+   not bare `uv sync` (CLAUDE.md's command predates the gpu group).
+
+**Tests to run:**
+- [ ] Still pending from 14:49: on-site phone scan of the plates at
+      visitor distance; `HALL_OUTPUT=window` cv2 QR spot-check.
+
 ### 2026-07-21 14:49 EDT — Exhibit website live in docs/ + real QR codes on the plates (executes the 14:07 plan)
 **Area:** docs/ (NEW: the exhibit site), web/scripts (gen_qr.py NEW, mock_backend.py), src/ui/manager.py, src/config.py, web/src/overlay/scene.ts, web/src/assets/qr/ (NEW), .gitignore
 **Status:** SMOKE OK (10/10) · VERIFIED HEADLESS (mock) — the QR decodes **from the rendered frames of BOTH renderers** (cv2: `cv2.QRCodeDetector` reads the correct per-experiment URL off a synthetic-frame `UIManager.draw()` at 720p, waves AND slingshot keys; web: every scene screenshotted through vite+mock, 0 console errors, waves QR decoded from the screenshot) · DIST REBUILT · NOT PUSHED · **GitHub Pages ENABLED** (gh api: legacy build, `main` `/docs` — builds on the next push)  ·  **Artifact:** `docs/**` (index + 7 experiment pages + style.css + img/*.jpg + .nojekyll), `web/scripts/gen_qr.py`, `web/src/assets/qr/*.png`, `src/ui/manager.py` (`_experiment_qr`/`_draw_qr_plate`), `src/config.py` (`QR_DIR`), `web/src/overlay/scene.ts` (`drawQrPlate`), `web/dist/*`

@@ -2533,3 +2533,26 @@ short version:
 ### Next steps / unfinished work
 - User runs `hallpush` → verify Pages build + kiosk plates, then the
   on-site phone scan test (bump QR_BOX_FRAC both sides if it won't lock).
+
+## Update - 2026-07-21 15:04 - [Claude (Fable 5)]
+
+### What I did
+- Post-hallpush verification: Pages build `built` on bd34c85; the site and
+  every QR target URL return 200; kiosk /healthz 200 over Tailscale.
+- Fixed all 13 Dependabot alerts (one cause: Pillow < 12.3.0) with
+  `uv lock --upgrade-package pillow`; committed uv.lock (unpushed).
+
+### Important context for the other agent
+- **Do NOT run bare `uv sync` on the laptop — it uninstalls the `gpu`
+  dependency group** (onnxruntime + protobuf; PEP 735 groups are not
+  default-installed). Use `uv sync --group gpu`. Bare sync broke
+  `import google.protobuf` here and smoke_scenes did NOT catch it
+  (mediapipe 0.10.35 imports without protobuf).
+- Jetson SSH over Tailscale hung in BatchMode this session (check-mode
+  ACL likely wants a browser re-approval); the kiosk's HTTP endpoints
+  answered fine, so use those for health checks when SSH stalls.
+
+### Next steps / unfinished work
+- uv.lock commit rides the next hallpush (kiosk-irrelevant).
+- Still open: on-site phone scan test of the QR plates; window-mode cv2
+  QR spot-check.
