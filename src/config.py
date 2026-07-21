@@ -1109,6 +1109,16 @@ SCAT_FLASH_DECAY = 0.90       # collapse flash decay per frame (1 -> 0)
 # the old vector-drawn cat, so a partial deploy still renders.
 SCAT_SPRITE_DIR = "web/src/assets/schrodinger"
 
+# ---------------------------------------------------------------------------
+# QR plate: every RUNNING experiment shows a white square bottom-left where a
+# per-experiment QR code (link to its info page) will go. Placeholder until
+# the codes land: dashed inner square + "QR". Not a pinch target, so it may
+# sit closer to the border than EDGE_MARGIN_FRAC allows for interactables.
+# Geometry is hand-mirrored — keep in sync with web/src/overlay/scene.ts
+# (QR_BOX_FRAC / QR_MARGIN_FRAC beside drawQrPlaceholder).
+QR_BOX_FRAC = 0.16     # plate side, fraction of frame height
+QR_MARGIN_FRAC = 0.03  # gap to the bottom-left corner, fraction of height
+
 
 if __name__ == "__main__":
     print("config file, not supposed to be run directly")

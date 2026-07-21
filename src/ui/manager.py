@@ -1,6 +1,7 @@
 import cv2
 
-from config import DEBUG_HUD, POSE_ENABLED, START_VTUBER
+from config import (DEBUG_HUD, POSE_ENABLED, QR_BOX_FRAC, QR_MARGIN_FRAC,
+                    START_VTUBER)
 from detection.gestures import update_pinches
 from rendering.gl_lensing import LensingRenderer
 from ui.button import Button
@@ -475,6 +476,38 @@ class UIManager:
         cv2.putText(frame, text, (x + (w - tw) // 2, y + (h + th) // 2),
                     font, scale, (0, 255, 255), thick, cv2.LINE_AA)
 
+    def _draw_qr_placeholder(self, frame):
+        """White plate bottom-left of every RUNNING experiment — the spot a
+        per-experiment QR code (link to its info page) will occupy. Obvious
+        placeholder until the codes land: dashed inner square + "QR".
+        Geometry mirrored by hand in web/src/overlay/scene.ts
+        (drawQrPlaceholder)."""
+        side = int(self.frame_h * QR_BOX_FRAC)
+        m = int(self.frame_h * QR_MARGIN_FRAC)
+        x0, y0 = m, self.frame_h - m - side
+        cv2.rectangle(frame, (x0, y0), (x0 + side, y0 + side),
+                      (255, 255, 255), -1)
+        cv2.rectangle(frame, (x0, y0), (x0 + side, y0 + side),
+                      (60, 60, 60), 2)
+        # Dashed inner square (cv2 has no dash pattern: short segments).
+        pad = int(side * 0.12)
+        ix0, iy0, ix1, iy1 = x0 + pad, y0 + pad, x0 + side - pad, y0 + side - pad
+        gray = (168, 160, 150)
+        for a in range(ix0, ix1, 13):
+            b = min(a + 7, ix1)
+            cv2.line(frame, (a, iy0), (b, iy0), gray, 2)
+            cv2.line(frame, (a, iy1), (b, iy1), gray, 2)
+        for a in range(iy0, iy1, 13):
+            b = min(a + 7, iy1)
+            cv2.line(frame, (ix0, a), (ix0, b), gray, 2)
+            cv2.line(frame, (ix1, a), (ix1, b), gray, 2)
+        scale = side / 110.0
+        (tw, th), _ = cv2.getTextSize("QR", cv2.FONT_HERSHEY_SIMPLEX,
+                                      scale, 2)
+        cv2.putText(frame, "QR", (x0 + (side - tw) // 2,
+                    y0 + (side + th) // 2), cv2.FONT_HERSHEY_SIMPLEX,
+                    scale, (122, 128, 136), 2, cv2.LINE_AA)
+
     def draw(self, frame):
         if self.state == "menu":
             self._menu_interactables_btn.draw(frame)
@@ -501,6 +534,7 @@ class UIManager:
             # distortion) so the picker/reset buttons stay readable on top.
             if self._active_experiment is not None:
                 self._active_experiment.draw(frame)
+                self._draw_qr_placeholder(frame)
                 if self._speed_control_active():
                     self._speed_minus_btn.draw(frame)
                     self._speed_plus_btn.draw(frame)

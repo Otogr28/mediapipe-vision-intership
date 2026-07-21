@@ -1725,4 +1725,41 @@ export function drawScene(
         break; // sixseven + black_hole render in other layers
     }
   }
+  // Every running experiment gets the QR plate (black hole included — its
+  // visual lives in the GL layer, but this overlay sits above it).
+  if (state.session.state === "experiments" && state.session.experiment) {
+    drawQrPlaceholder(ctx, state.frame.h);
+  }
+}
+
+// Keep in sync with QR_BOX_FRAC / QR_MARGIN_FRAC in src/config.py — the
+// cv2 renderer (UIManager._draw_qr_placeholder) draws the same plate.
+const QR_BOX_FRAC = 0.16;
+const QR_MARGIN_FRAC = 0.03;
+
+/** White square bottom-left of every running experiment: the spot its
+ *  per-experiment QR code (info-page link) will occupy. Obvious placeholder
+ *  until the codes land: dashed inner square + "QR". */
+function drawQrPlaceholder(ctx: CanvasRenderingContext2D, fh: number) {
+  const side = fh * QR_BOX_FRAC;
+  const m = fh * QR_MARGIN_FRAC;
+  const x = m;
+  const y = fh - m - side;
+  ctx.fillStyle = "#ffffff";
+  ctx.fillRect(x, y, side, side);
+  ctx.strokeStyle = "#3c3c3c";
+  ctx.lineWidth = 2;
+  ctx.strokeRect(x, y, side, side);
+  const pad = side * 0.12;
+  ctx.strokeStyle = "#96a0a8";
+  ctx.setLineDash([7, 6]);
+  ctx.strokeRect(x + pad, y + pad, side - 2 * pad, side - 2 * pad);
+  ctx.setLineDash([]);
+  ctx.fillStyle = "#888078";
+  ctx.font = `700 ${Math.round(side * 0.3)}px ui-sans-serif, system-ui, sans-serif`;
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.fillText("QR", x + side / 2, y + side / 2);
+  ctx.textBaseline = "alphabetic";
+  ctx.textAlign = "left";
 }

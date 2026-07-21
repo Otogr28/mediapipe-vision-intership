@@ -2459,3 +2459,23 @@ short version:
 
 ### Next steps / unfinished work
 - Same as before: live camera pass, then `hallpush -w` to deploy.
+
+## Update - 2026-07-21 13:44 - [Claude (Fable 5)]
+
+### What I did
+- QR-code placeholder (user request): white plate with dashed square +
+  "QR", bottom-left, on EVERY running experiment. One implementation per
+  renderer (UIManager `_draw_qr_placeholder` / scene.ts
+  `drawQrPlaceholder` gated on session.experiment), NOT per scene class.
+  New mirrored constants `QR_BOX_FRAC`/`QR_MARGIN_FRAC` (config.py ↔
+  scene.ts). Smoke 10/10, both paths screenshot-verified, dist rebuilt.
+
+### Important context for the other agent
+- The plate is where the per-experiment QR (Curiosity-Gallery info page
+  link) will go. What's still missing for the real thing: an
+  experiment→URL map and either pre-rendered QR assets or a client-side
+  generator. `session.experiment` already names the running experiment, so
+  the map can key on it directly.
+
+### Next steps / unfinished work
+- Generate the real QR codes once the exhibit info pages have URLs.

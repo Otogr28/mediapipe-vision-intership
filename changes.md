@@ -60,6 +60,33 @@ History older than this file lives in `git log` and `SHARED.md`.
 
 ## Entries
 
+### 2026-07-21 13:44 EDT — QR-code placeholder plate, bottom-left of every running experiment
+**Area:** src/ui/manager.py, src/config.py (QR_* consts), web/src/overlay/scene.ts
+**Status:** SMOKE OK (10/10) · VERIFIED HEADLESS — cv2 path via synthetic-frame UIManager render, web path via mock waves screenshot, plates match · DIST REBUILT · NOT PUSHED  ·  **Artifact:** `src/ui/manager.py` (`_draw_qr_placeholder`), `src/config.py` (`QR_BOX_FRAC`/`QR_MARGIN_FRAC`), `web/src/overlay/scene.ts` (`drawQrPlaceholder`), `web/dist/*`
+
+**Changes:**
+- White square plate bottom-left whenever an experiment is RUNNING — the
+  spot each experiment's QR code (link to its info page) will occupy.
+  Placeholder look until the codes land: white plate, dark border, dashed
+  inner square, "QR" centred.
+- Implemented ONCE per renderer instead of per scene: cv2 in
+  `UIManager.draw()` (experiments branch, right after the experiment so
+  buttons/cursor stay on top), web in `drawScene()` gated on
+  `session.state === "experiments" && session.experiment` — covers all
+  seven experiments including the black hole (GL layer sits below the
+  overlay canvas). Picker screen and interactables/vtuber don't show it.
+- New hand-mirrored pair `QR_BOX_FRAC = 0.16` / `QR_MARGIN_FRAC = 0.03`
+  (config.py ↔ scene.ts, both sides carry the keep-in-sync comment). The
+  plate is not a pinch target, so it may sit nearer the border than
+  `EDGE_MARGIN_FRAC` allows for interactables.
+
+**Tests to run:**
+- [ ] When the real QR codes exist: swap the dashed placeholder for the
+      per-experiment code (needs an experiment→URL map + a QR asset or
+      client-side generator) and re-check contrast at kiosk distance.
+- [ ] Waves/Charges: confirm a source placed near the bottom-left corner
+      still reads under the plate (the plate draws over scene pixels).
+
 ### 2026-07-21 13:13 EDT — Quantum Cat copy pass + big ALIVE/DEAD verdict banner
 **Area:** src/ui (SchrodingerCat captions + revealed draw), web/src/overlay/scene.ts, web/scripts/mock_backend.py
 **Status:** SMOKE OK (10/10) · VERIFIED HEADLESS (mock) — armed + revealed-alive screenshots inspected, captions confirmed via SSE · DIST REBUILT · NOT PUSHED  ·  **Artifact:** `src/ui/interactables.py`, `web/src/overlay/scene.ts`, `web/scripts/mock_backend.py`, `web/dist/*`
