@@ -1,0 +1,156 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>HalL — physics you can pinch</title>
+<meta name="description" content="The interactive display in the Gordon College physics hall: seven physics experiments you steer with bare hands, tracked by a camera. What they show and how they work, in plain language.">
+<meta property="og:title" content="HalL — physics you can pinch">
+<meta property="og:description" content="Seven physics experiments you steer with bare hands. No touchscreen, no controllers.">
+<meta property="og:image" content="https://otogr28.github.io/mediapipe-vision-intership/img/black_hole.jpg">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ccircle cx='16' cy='16' r='13' fill='none' stroke='%2300B0DC' stroke-width='3'/%3E%3Ccircle cx='16' cy='16' r='5' fill='%23FFB84D'/%3E%3C/svg%3E">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600&family=Space+Grotesk:wght@500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<header class="wrap mast">
+  <a href="index.html" class="brand">HalL<span class="dot">.</span></a>
+  <span class="dept">Gordon College · Physics Hall</span>
+</header>
+
+<main class="wrap">
+
+  <section class="hero">
+    <p class="eyebrow">Interactive display · hand-tracked</p>
+    <h1>Physics you can pinch.</h1>
+    <p class="lede">A camera on the display tracks your bare hands in real
+    time. Pinch your fingers together in the air and you can grab, throw
+    and steer seven small experiments — no touchscreen, no controllers.</p>
+
+    <div class="howto" aria-label="How to use the display">
+      <div>
+        <div class="pinch" aria-hidden="true"></div>
+        <b>Pinch</b>
+        <small>Touch your index finger to your thumb: that's a click.
+        Every button on the screen answers to it.</small>
+      </div>
+      <div>
+        <b>Pinch + hold</b>
+        <small>Keep the pinch closed to grab things — drag planets,
+        stretch the slingshot, carry the cat.</small>
+      </div>
+      <div>
+        <b>Release</b>
+        <small>Open your fingers to let go. Whatever you were holding
+        follows the physics from there.</small>
+      </div>
+    </div>
+
+    <figure class="hero-shot">
+      <img src="img/black_hole.jpg" width="1600" height="900"
+           alt="The display's black hole experiment: the camera image bent into a bright ring around a black disc, with colored spheres floating nearby.">
+      <figcaption class="shot-cap">LIVE VIEW · THE BLACK HOLE EXPERIMENT —
+      LIGHT FROM THE CAMERA, BENT BY SIMULATED GRAVITY</figcaption>
+    </figure>
+  </section>
+
+  <section>
+    <h2>The seven experiments</h2>
+    <p>Each one runs real physics, computed live while you play with it.
+    Scan the QR code on any running experiment — or tap a card — for the
+    story behind it.</p>
+
+    <div class="grid">
+      <a class="card" href="experiments/black_hole.html">
+        <img src="img/black_hole.jpg" alt="" loading="lazy">
+        <div class="card-body">
+          <span class="eyebrow">General relativity</span>
+          <h3>Black hole</h3>
+          <p>The camera feed, bent around a black hole the way real
+          starlight bends.</p>
+        </div>
+      </a>
+      <a class="card" href="experiments/slingshot.html">
+        <img src="img/slingshot.jpg" alt="" loading="lazy">
+        <div class="card-body">
+          <span class="eyebrow">Mechanics</span>
+          <h3>Slingshot</h3>
+          <p>Stretch a band, launch a ball, and watch three real forces
+          fight over it.</p>
+        </div>
+      </a>
+      <a class="card" href="experiments/orbitals.html">
+        <img src="img/orbitals.jpg" alt="" loading="lazy">
+        <div class="card-body">
+          <span class="eyebrow">Gravity</span>
+          <h3>Orbitals</h3>
+          <p>Drop stars, planets and comets into space and see what
+          gravity builds — or wrecks.</p>
+        </div>
+      </a>
+      <a class="card" href="experiments/waves.html">
+        <img src="img/waves.jpg" alt="" loading="lazy">
+        <div class="card-body">
+          <span class="eyebrow">Waves &amp; interference</span>
+          <h3>Waves</h3>
+          <p>A ripple tank: place sources, watch circular waves add up or
+          cancel out.</p>
+        </div>
+      </a>
+      <a class="card" href="experiments/charges.html">
+        <img src="img/charges.jpg" alt="" loading="lazy">
+        <div class="card-body">
+          <span class="eyebrow">Electrostatics</span>
+          <h3>Charges</h3>
+          <p>Sprinkle + and − charges and the invisible electric field
+          appears around them.</p>
+        </div>
+      </a>
+      <a class="card" href="experiments/spacetime.html">
+        <img src="img/spacetime.jpg" alt="" loading="lazy">
+        <div class="card-body">
+          <span class="eyebrow">General relativity</span>
+          <h3>Spacetime</h3>
+          <p>The stretched-sheet picture of gravity, drawn to scale —
+          stars are bowls, black holes are funnels.</p>
+        </div>
+      </a>
+      <a class="card" href="experiments/schrodinger.html">
+        <img src="img/schrodinger.jpg" alt="" loading="lazy">
+        <div class="card-body">
+          <span class="eyebrow">Quantum mechanics</span>
+          <h3>Schrödinger's cat</h3>
+          <p>Run the famous 1935 thought experiment yourself: while the
+          box is closed, the cat is both.</p>
+        </div>
+      </a>
+    </div>
+  </section>
+
+  <section>
+    <h2>Behind the screen</h2>
+    <p>A small computer (an NVIDIA Jetson) watches the camera and finds
+    <strong>21 landmarks on each of your hands</strong>, 30 times a
+    second, using a neural network. The distance between your fingertip
+    and thumb tells it when you've pinched; the physics — orbits, ripples,
+    curved spacetime — is computed live in the same box and drawn over the
+    camera image.</p>
+    <p><strong>Nothing is recorded.</strong> The camera feed is processed
+    inside the display and never stored or sent anywhere — by the time you
+    walk away, the frames are already gone.</p>
+  </section>
+
+</main>
+
+<footer>
+  <div class="wrap">
+    <p>Built during a Physics Department summer internship at Gordon College.</p>
+    <p><a href="https://github.com/Otogr28/mediapipe-vision-intership">Source code on GitHub</a></p>
+  </div>
+</footer>
+
+</body>
+</html>

@@ -60,6 +60,110 @@ History older than this file lives in `git log` and `SHARED.md`.
 
 ## Entries
 
+### 2026-07-21 14:49 EDT — Exhibit website live in docs/ + real QR codes on the plates (executes the 14:07 plan)
+**Area:** docs/ (NEW: the exhibit site), web/scripts (gen_qr.py NEW, mock_backend.py), src/ui/manager.py, src/config.py, web/src/overlay/scene.ts, web/src/assets/qr/ (NEW), .gitignore
+**Status:** SMOKE OK (10/10) · VERIFIED HEADLESS (mock) — the QR decodes **from the rendered frames of BOTH renderers** (cv2: `cv2.QRCodeDetector` reads the correct per-experiment URL off a synthetic-frame `UIManager.draw()` at 720p, waves AND slingshot keys; web: every scene screenshotted through vite+mock, 0 console errors, waves QR decoded from the screenshot) · DIST REBUILT · NOT PUSHED · **GitHub Pages ENABLED** (gh api: legacy build, `main` `/docs` — builds on the next push)  ·  **Artifact:** `docs/**` (index + 7 experiment pages + style.css + img/*.jpg + .nojekyll), `web/scripts/gen_qr.py`, `web/src/assets/qr/*.png`, `src/ui/manager.py` (`_experiment_qr`/`_draw_qr_plate`), `src/config.py` (`QR_DIR`), `web/src/overlay/scene.ts` (`drawQrPlate`), `web/dist/*`
+
+**Changes:**
+- **Real QR codes replace the dashed placeholder.** `web/scripts/gen_qr.py`
+  (PEP 723 inline deps → `uv run`, segno never touches the app lockfile)
+  renders one PNG per `session.experiment` key → `web/src/assets/qr/` :
+  `<base>/experiments/<key>.html`, EC M, byte mode, v5, navy-on-white.
+- **Both renderers wired, placeholder kept as fallback** (missing PNG →
+  old dashed plate). cv2: `_experiment_qr` caches per (key, side) like
+  `_scat_sprite`, key read once per activation via `to_state()["type"]`;
+  new `QR_DIR` in config.py. Web: 7 Vite imports (inlined as data URIs,
+  <4 kB each) + `QR_IMGS`; `drawQrPlaceholder` renamed **`drawQrPlate`**
+  both sides. Quiet zone = plate pad 0.06·side + the PNG's 2-module
+  border (comment mirrored in both files).
+- **Exhibit site under `docs/`** (static hand-written HTML+CSS, no build
+  step; Pages serves it raw; kiosk ignores it): index (what the display
+  is, pinch/hold/release how-to, 7-experiment card grid, behind-the-scenes
+  + nothing-is-recorded note) + one plain-language page per experiment
+  (kiosk verbs, the physics, a "worth knowing" fact, hand-picked related
+  links, one inline SVG animation each). Gordon-family theme (navy
+  `#0A1724` / cyan `#00B0DC` / white; Space Grotesk + IBM Plex Mono =
+  the kiosk HUD voice; signature element = the exhibit's own pinch cursor
+  as CSS animation). Responsive (mobile-checked at 390px), reduced-motion
+  respected, no Gordon logo/wordmark used.
+- Site images = mock screenshots (new `HALL_MOCK_LABEL=0` knob hides the
+  MOCK watermark), JPEG q86 → `docs/img/`, ~870 kB total.
+- `.gitignore`: `!docs/**` (the global `*.png`/`*.jpg` rules would have
+  eaten the site images — same failure class as the dist rule).
+- **GitHub Pages enabled NOW** via
+  `gh api repos/Otogr28/mediapipe-vision-intership/pages` (main, /docs).
+  The remote doesn't have docs/ yet → first real build happens on push.
+
+**Notes:**
+- At 480p the plate (~76 px) is below cv2's QR-decode threshold — the
+  kiosk captures at 720p (~115 px plate) where it decodes cleanly; phones
+  are better detectors than cv2. If the on-site scan test still fails,
+  bump `QR_BOX_FRAC` (BOTH sides).
+- Mock's `picker` scene only stages 3 experiment buttons (predates the
+  7-experiment lineup) — cosmetic, not used for the site.
+
+**Tests to run:**
+- [ ] `hallpush` (user) → check the Pages build goes green and
+      `https://otogr28.github.io/mediapipe-vision-intership/` serves; then
+      confirm the kiosk plates show the codes.
+- [ ] **Phone scan test at visitor distance** (the 14:07 checklist's last
+      open item): scan each experiment's plate off the kiosk screen; if it
+      won't lock, bump `QR_BOX_FRAC` in config.py ↔ scene.ts.
+- [ ] `HALL_OUTPUT=window` spot-check of the cv2 QR blit on-device.
+
+### 2026-07-21 14:07 EDT — CONTINUE HERE: exhibit website on GitHub Pages + real QR codes in the plates
+**Area:** planning (no code changed — this entry IS the deliverable: the continue plan)
+**Status:** NOT STARTED · groundwork verified (repo is PUBLIC → free Pages works; Gordon palette captured)  ·  **Artifact:** this entry + the SHARED.md 14:07 update
+
+**The plan (operator's spec):** replace the QR placeholder plates with REAL
+QR codes pointing at a website hosted from THIS repo on GitHub Pages. The
+site is the exhibit's public face: a main page explaining the interactive
+display, linking to one sub-page per experiment with an explanation written
+for people who don't know much physics, with images and animations. Visual
+theme: same family as gordon.edu.
+
+**Facts already verified (don't re-derive):**
+- Remote is `Otogr28/mediapipe-vision-intership` and it is **PUBLIC**, so
+  free GitHub Pages works. Site base URL will be
+  `https://otogr28.github.io/mediapipe-vision-intership/`.
+- Gordon College brand palette (teamcolorcodes.com; official guide at
+  gordon.edu/styleguide): **Dark Navy `#0A1724`** (PMS 296), **Cyan
+  `#00B0DC`** (PMS 638), **White**. Design language: clean modern academic,
+  image-heavy hero + card grid, strong call-to-action buttons. Use the
+  palette/feel only — do NOT copy the Gordon logo/wordmark.
+- The 7 experiment keys (`session.experiment` in the state contract):
+  `black_hole, slingshot, orbitals, waves, charges, spacetime, schrodinger`.
+- `.gitignore` already re-includes `web/src/assets/**` + `web/dist/**`, so
+  QR PNGs travel to the Jetson with no further gitignore work.
+- The plate geometry to fill: `QR_BOX_FRAC = 0.16` / `QR_MARGIN_FRAC =
+  0.03` (config.py ↔ scene.ts), white plate = the QR quiet zone.
+
+**Next (CONTINUE HERE):**
+- [ ] **Site skeleton in `docs/`** (static hand-written HTML+CSS, no build
+      step — Pages serves it raw; the kiosk ignores `docs/` entirely):
+      `docs/index.html` (what the display is, how pinch gestures work, card
+      grid linking the 7 experiments) + `docs/experiments/<key>.html` × 7
+      (plain-language physics, images, CSS/SVG animations). Screenshots can
+      come from the mock (`mock_backend.py <scene>` + `shot.mjs`).
+- [ ] **Theme**: navy/cyan/white per the palette above, shared
+      `docs/style.css`, responsive (phones — people arrive via QR).
+- [ ] **Enable Pages** (one-time): repo Settings → Pages → deploy from
+      `main` `/docs`, or
+      `gh api repos/Otogr28/mediapipe-vision-intership/pages -f build_type=legacy -f "source[branch]=main" -f "source[path]=/docs"`.
+- [ ] **QR generation**: script `web/scripts/gen_qr.py` (add `segno` or
+      `qrcode[pil]` as a dev dep) mapping each experiment key →
+      `<base>/experiments/<key>.html`, output
+      `web/src/assets/qr/<key>.png` (error correction M, white border for
+      the quiet zone).
+- [ ] **Wire the plates**: cv2 `UIManager._draw_qr_placeholder` blits the
+      active experiment's QR (it knows the key via
+      `_active_experiment.to_state()["type"]`); web `drawQrPlaceholder`
+      takes `session.experiment` and drawImages the imported PNG. Keep the
+      dashed placeholder as fallback when the asset is missing.
+- [ ] **Scan test**: at 720p the plate is ~115 px — verify a phone scans it
+      from visitor distance; if not, bump `QR_BOX_FRAC` (both sides!).
+- [ ] Rebuild + commit `web/dist`, then `hallpush` when ready.
+
 ### 2026-07-21 13:44 EDT — QR-code placeholder plate, bottom-left of every running experiment
 **Area:** src/ui/manager.py, src/config.py (QR_* consts), web/src/overlay/scene.ts
 **Status:** SMOKE OK (10/10) · VERIFIED HEADLESS — cv2 path via synthetic-frame UIManager render, web path via mock waves screenshot, plates match · DIST REBUILT · NOT PUSHED  ·  **Artifact:** `src/ui/manager.py` (`_draw_qr_placeholder`), `src/config.py` (`QR_BOX_FRAC`/`QR_MARGIN_FRAC`), `web/src/overlay/scene.ts` (`drawQrPlaceholder`), `web/dist/*`

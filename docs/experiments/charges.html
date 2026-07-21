@@ -1,0 +1,115 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Charges — HalL</title>
+<meta name="description" content="The charges experiment on the physics hall display: electric fields, field lines and Coulomb's law, explained in plain language.">
+<meta property="og:title" content="Charges — HalL">
+<meta property="og:description" content="Sprinkle + and − charges and the invisible electric field appears around them.">
+<meta property="og:image" content="https://otogr28.github.io/mediapipe-vision-intership/img/charges.jpg">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ccircle cx='16' cy='16' r='13' fill='none' stroke='%2300B0DC' stroke-width='3'/%3E%3Ccircle cx='16' cy='16' r='5' fill='%23FFB84D'/%3E%3C/svg%3E">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600&family=Space+Grotesk:wght@500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="../style.css">
+</head>
+<body>
+
+<header class="wrap mast">
+  <a href="../index.html" class="brand">HalL<span class="dot">.</span></a>
+  <span class="dept">Gordon College · Physics Hall</span>
+</header>
+
+<main class="wrap">
+
+  <section class="exp-head">
+    <div>
+      <p class="eyebrow">Electrostatics · fields</p>
+      <h1>Charges</h1>
+      <p class="lede">Electric charge fills the space around it with a
+      field. You can't see it, you can't touch it — but it's there, and
+      this experiment draws it.</p>
+    </div>
+    <div class="exp-anim" aria-hidden="true">
+      <svg viewBox="0 0 128 128">
+        <path d="M 36,64 C 52,34 76,34 92,64" fill="none" stroke="#00b0dc"
+              stroke-width="1.6" stroke-dasharray="4 5" opacity="0.8">
+          <animate attributeName="stroke-dashoffset" values="18;0" dur="1.2s" repeatCount="indefinite"/>
+        </path>
+        <path d="M 36,64 C 52,94 76,94 92,64" fill="none" stroke="#00b0dc"
+              stroke-width="1.6" stroke-dasharray="4 5" opacity="0.8">
+          <animate attributeName="stroke-dashoffset" values="18;0" dur="1.2s" repeatCount="indefinite"/>
+        </path>
+        <path d="M 36,64 L 92,64" fill="none" stroke="#00b0dc"
+              stroke-width="1.6" stroke-dasharray="4 5" opacity="0.5">
+          <animate attributeName="stroke-dashoffset" values="18;0" dur="1.2s" repeatCount="indefinite"/>
+        </path>
+        <circle cx="36" cy="64" r="11" fill="#e0484f"/>
+        <path d="M 31,64 h10 M 36,59 v10" stroke="#fff" stroke-width="2.4"/>
+        <circle cx="92" cy="64" r="11" fill="#2f7fd6"/>
+        <path d="M 87,64 h10" stroke="#fff" stroke-width="2.4"/>
+      </svg>
+    </div>
+  </section>
+
+  <figure class="shot">
+    <img src="../img/charges.jpg" width="1600" height="900"
+         alt="The charges experiment: red positive and blue negative charges with white field lines and arrows curving between them.">
+    <figcaption>THREE CHARGES AND THEIR FIELD — EVERY ARROW SHOWS THE PUSH
+    A TINY POSITIVE TEST CHARGE WOULD FEEL THERE</figcaption>
+  </figure>
+
+  <h2>At the display</h2>
+  <ul class="do">
+    <li><strong>Pick a charge from the palette</strong> (−2Q to +2Q) and
+    pinch to place it. The field around it appears instantly.</li>
+    <li><strong>Drag a charge around</strong> and watch every line in the
+    picture re-arrange itself to the new layout.</li>
+    <li><strong>Try DIPOLE</strong> — one + and one −, the pair that runs
+    chemistry: it's the field shape of a water molecule, writ large.</li>
+  </ul>
+
+  <h2>What's really happening</h2>
+  <p>Two rules you've felt since childhood — <strong>likes repel,
+  opposites attract</strong>, and both fade with distance (double the
+  distance, a quarter the force: Coulomb's law). The interesting part is
+  <em>how</em> the force reaches across empty space.</p>
+  <p>Physics answers with the idea this experiment paints: a charge
+  changes the space around it, creating an <strong>electric
+  field</strong>. Every arrow you see answers one question: "if I parked
+  a tiny positive charge right here, which way would it be shoved, and
+  how hard?" Field lines bundle those answers into threads — they pour
+  out of positive charges and dive into negative ones, never crossing.</p>
+  <p>The charges here stay where you put them on purpose. Freed, they'd
+  just crash together and the picture would be over; pinned, you can
+  study the thing that actually does the work — the field. It's the same
+  invisible machinery behind static cling, lightning, and every signal in
+  every wire around you.</p>
+
+  <aside class="fact">
+    <p><strong>Worth knowing:</strong> lightning is this picture at
+    planetary scale — a storm cloud and the ground become the two plates
+    of a giant charge pair, and when the field between them reaches about
+    three million volts per meter, the air itself rips apart and
+    conducts.</p>
+  </aside>
+
+  <div class="related">
+    <p>RELATED ON THE DISPLAY → <a href="orbitals.html">Orbitals</a> runs
+    on gravity, the other inverse-square force — but gravity only ever
+    attracts · <a href="waves.html">Waves</a> shows what fields do when
+    they wiggle</p>
+  </div>
+
+</main>
+
+<footer>
+  <div class="wrap">
+    <p><a href="../index.html">← All experiments</a></p>
+    <p>Built during a Physics Department summer internship at Gordon College.</p>
+  </div>
+</footer>
+
+</body>
+</html>

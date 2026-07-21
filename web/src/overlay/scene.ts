@@ -6,6 +6,13 @@ import scatGunUrl from "../assets/schrodinger/gun.png";
 import scatDeviceUrl from "../assets/schrodinger/device.png";
 import scatFlaskUrl from "../assets/schrodinger/flask.png";
 import scatFlaskTippedUrl from "../assets/schrodinger/flask_tipped.png";
+import qrBlackHoleUrl from "../assets/qr/black_hole.png";
+import qrSlingshotUrl from "../assets/qr/slingshot.png";
+import qrOrbitalsUrl from "../assets/qr/orbitals.png";
+import qrWavesUrl from "../assets/qr/waves.png";
+import qrChargesUrl from "../assets/qr/charges.png";
+import qrSpacetimeUrl from "../assets/qr/spacetime.png";
+import qrSchrodingerUrl from "../assets/qr/schrodinger.png";
 import type {
   AppState,
   ChargesObject,
@@ -1728,19 +1735,35 @@ export function drawScene(
   // Every running experiment gets the QR plate (black hole included — its
   // visual lives in the GL layer, but this overlay sits above it).
   if (state.session.state === "experiments" && state.session.experiment) {
-    drawQrPlaceholder(ctx, state.frame.h);
+    drawQrPlate(ctx, state.frame.h, state.session.experiment);
   }
 }
 
 // Keep in sync with QR_BOX_FRAC / QR_MARGIN_FRAC in src/config.py — the
-// cv2 renderer (UIManager._draw_qr_placeholder) draws the same plate.
+// cv2 renderer (UIManager._draw_qr_plate) draws the same plate.
 const QR_BOX_FRAC = 0.16;
 const QR_MARGIN_FRAC = 0.03;
 
-/** White square bottom-left of every running experiment: the spot its
- *  per-experiment QR code (info-page link) will occupy. Obvious placeholder
- *  until the codes land: dashed inner square + "QR". */
-function drawQrPlaceholder(ctx: CanvasRenderingContext2D, fh: number) {
+// Per-experiment QR codes (links to the experiment pages of the exhibit
+// site under docs/), rendered by web/scripts/gen_qr.py. Keyed by
+// session.experiment.
+const QR_IMGS: Record<string, HTMLImageElement> = {
+  black_hole: scatImg(qrBlackHoleUrl),
+  slingshot: scatImg(qrSlingshotUrl),
+  orbitals: scatImg(qrOrbitalsUrl),
+  waves: scatImg(qrWavesUrl),
+  charges: scatImg(qrChargesUrl),
+  spacetime: scatImg(qrSpacetimeUrl),
+  schrodinger: scatImg(qrSchrodingerUrl),
+};
+
+/** White plate bottom-left of every running experiment carrying its QR
+ *  code (link to the experiment's page on the exhibit site). The plate's
+ *  white padding doubles as the QR quiet zone (pad 0.06·side + the PNG's
+ *  own 2-module border ≈ the 4-module ISO quiet zone — keep in sync with
+ *  UIManager._draw_qr_plate). Dashed "QR" placeholder while the image is
+ *  missing/loading. */
+function drawQrPlate(ctx: CanvasRenderingContext2D, fh: number, key: string) {
   const side = fh * QR_BOX_FRAC;
   const m = fh * QR_MARGIN_FRAC;
   const x = m;
@@ -1750,6 +1773,12 @@ function drawQrPlaceholder(ctx: CanvasRenderingContext2D, fh: number) {
   ctx.strokeStyle = "#3c3c3c";
   ctx.lineWidth = 2;
   ctx.strokeRect(x, y, side, side);
+  const img = QR_IMGS[key];
+  if (img && img.complete && img.naturalWidth > 0) {
+    const qpad = side * 0.06;
+    ctx.drawImage(img, x + qpad, y + qpad, side - 2 * qpad, side - 2 * qpad);
+    return;
+  }
   const pad = side * 0.12;
   ctx.strokeStyle = "#96a0a8";
   ctx.setLineDash([7, 6]);

@@ -1110,14 +1110,19 @@ SCAT_FLASH_DECAY = 0.90       # collapse flash decay per frame (1 -> 0)
 SCAT_SPRITE_DIR = "web/src/assets/schrodinger"
 
 # ---------------------------------------------------------------------------
-# QR plate: every RUNNING experiment shows a white square bottom-left where a
-# per-experiment QR code (link to its info page) will go. Placeholder until
-# the codes land: dashed inner square + "QR". Not a pinch target, so it may
-# sit closer to the border than EDGE_MARGIN_FRAC allows for interactables.
-# Geometry is hand-mirrored — keep in sync with web/src/overlay/scene.ts
-# (QR_BOX_FRAC / QR_MARGIN_FRAC beside drawQrPlaceholder).
+# QR plate: every RUNNING experiment shows a white plate bottom-left with its
+# QR code — a link to the experiment's page on the exhibit website
+# (docs/ on GitHub Pages; codes rendered by web/scripts/gen_qr.py into
+# QR_DIR, one PNG per `session.experiment` key). If a PNG is missing the
+# plate degrades to the old dashed "QR" placeholder. Not a pinch target, so
+# it may sit closer to the border than EDGE_MARGIN_FRAC allows for
+# interactables. Geometry is hand-mirrored — keep in sync with
+# web/src/overlay/scene.ts (QR_BOX_FRAC / QR_MARGIN_FRAC beside drawQrPlate).
 QR_BOX_FRAC = 0.16     # plate side, fraction of frame height
 QR_MARGIN_FRAC = 0.03  # gap to the bottom-left corner, fraction of height
+# Same both-renderers path convention as SCAT_SPRITE_DIR (repo-root
+# relative): the cv2 path imreads the PNGs the frontend bundles via Vite.
+QR_DIR = "web/src/assets/qr"
 
 
 if __name__ == "__main__":

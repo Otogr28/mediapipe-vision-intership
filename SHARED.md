@@ -2479,3 +2479,57 @@ short version:
 
 ### Next steps / unfinished work
 - Generate the real QR codes once the exhibit info pages have URLs.
+
+## Update - 2026-07-21 14:07 - [Claude (Fable 5)]
+
+### What I did
+- Wrote the **CONTINUE HERE** plan (top entry of `changes.md`, 14:07) for
+  the next work session: an exhibit website on GitHub Pages served from
+  `docs/` in THIS repo (main page explaining the display + one
+  plain-language sub-page per experiment, with images/animations), themed
+  after gordon.edu, and real QR codes replacing the placeholder plates.
+- Groundwork verified and recorded in that entry: repo
+  `Otogr28/mediapipe-vision-intership` is PUBLIC (free Pages OK, base URL
+  `https://otogr28.github.io/mediapipe-vision-intership/`), Gordon palette
+  is Dark Navy `#0A1724` / Cyan `#00B0DC` / White, and the 7 experiment
+  keys + plate geometry + gitignore negations are already in place.
+
+### Next steps / unfinished work
+- Execute the checklist in the `changes.md` 14:07 CONTINUE HERE entry.
+
+## Update - 2026-07-21 14:52 - [Claude (Fable 5)]
+
+### What I did
+- Executed the 14:07 CONTINUE HERE plan end-to-end: exhibit website in
+  `docs/` (index + 7 plain-language experiment pages, Gordon navy/cyan
+  theme, mock-screenshot imagery) + REAL QR codes on the kiosk plates,
+  both renderers (`_draw_qr_plate` cv2 blit / `drawQrPlate` canvas
+  drawImage; dashed placeholder is now the missing-PNG fallback).
+- `web/scripts/gen_qr.py` (PEP 723 + segno) → `web/src/assets/qr/<key>.png`
+  keyed by `session.experiment`; URLs point at
+  https://otogr28.github.io/mediapipe-vision-intership/experiments/<key>.html
+- **GitHub Pages is already ENABLED** (gh api, legacy build, main /docs) —
+  the first build fires when docs/ reaches origin/main.
+
+### Verification
+- Smoke 10/10; isort clean; dist rebuilt (QR PNGs inline as data URIs).
+- cv2 path: cv2.QRCodeDetector decodes the correct per-experiment URL
+  straight off a synthetic-frame UIManager render at 720p (fails at 480p —
+  plate too small for cv2's detector; kiosk runs 720p, phones do better).
+- Web path: all 7 scenes screenshotted via vite dev + mock, 0 console
+  errors, QR decoded from the waves screenshot.
+- Site: desktop + 390px mobile screenshots inspected; fonts/animations OK.
+
+### Important context for the other agent
+- The QR PNG pipeline: rerun `uv run web/scripts/gen_qr.py` if BASE_URL
+  or the experiment set changes; keys must match `to_state()["type"]`.
+- `.gitignore` now carries `!docs/**` — docs/img JPEGs would otherwise be
+  eaten by the global `*.jpg` rule (same class as the old dist bug).
+- `HALL_MOCK_LABEL=0` hides the mock's MOCK watermark (used for site
+  screenshots).
+- Mock's `picker` scene still stages only 3 experiment buttons (stale,
+  cosmetic).
+
+### Next steps / unfinished work
+- User runs `hallpush` → verify Pages build + kiosk plates, then the
+  on-site phone scan test (bump QR_BOX_FRAC both sides if it won't lock).

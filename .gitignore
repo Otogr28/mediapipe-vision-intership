@@ -88,3 +88,7 @@ dist/
 # committed on purpose past the *.png rule — the cv2 fallback reads them from
 # this path and the Jetson only receives what git carries.
 !web/src/assets/**
+
+# The exhibit website (GitHub Pages serves docs/ from main): its screenshots
+# (docs/img/*.jpg) must survive the global image rules above.
+!docs/**

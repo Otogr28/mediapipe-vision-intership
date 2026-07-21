@@ -49,8 +49,11 @@ def test_card():
                            (700, 300, 40, (90, 220, 130))]:
         cv2.circle(frame, (cx, cy), r, col, -1)
         cv2.circle(frame, (cx, cy), r, (240, 240, 240), 2)
-    cv2.putText(frame, "MOCK", (W // 2 - 90, H - 40),
-                cv2.FONT_HERSHEY_SIMPLEX, 1.6, (230, 230, 230), 3)
+    # HALL_MOCK_LABEL=0 hides the watermark — for screenshots that feed the
+    # exhibit website (docs/), where a "MOCK" stamp would read as an error.
+    if os.environ.get("HALL_MOCK_LABEL", "1") == "1":
+        cv2.putText(frame, "MOCK", (W // 2 - 90, H - 40),
+                    cv2.FONT_HERSHEY_SIMPLEX, 1.6, (230, 230, 230), 3)
     ok, jpg = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 85])
     assert ok
     return jpg.tobytes()

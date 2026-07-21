@@ -1,0 +1,108 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Slingshot — HalL</title>
+<meta name="description" content="The slingshot experiment on the physics hall display: elastic energy, gravity and air drag, explained in plain language.">
+<meta property="og:title" content="Slingshot — HalL">
+<meta property="og:description" content="Stretch a band, launch a ball, and watch three real forces fight over it.">
+<meta property="og:image" content="https://otogr28.github.io/mediapipe-vision-intership/img/slingshot.jpg">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ccircle cx='16' cy='16' r='13' fill='none' stroke='%2300B0DC' stroke-width='3'/%3E%3Ccircle cx='16' cy='16' r='5' fill='%23FFB84D'/%3E%3C/svg%3E">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600&family=Space+Grotesk:wght@500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="../style.css">
+</head>
+<body>
+
+<header class="wrap mast">
+  <a href="../index.html" class="brand">HalL<span class="dot">.</span></a>
+  <span class="dept">Gordon College · Physics Hall</span>
+</header>
+
+<main class="wrap">
+
+  <section class="exp-head">
+    <div>
+      <p class="eyebrow">Mechanics · forces &amp; energy</p>
+      <h1>Slingshot</h1>
+      <p class="lede">Pull back, let go. Between your fingers and the
+      floor, three forces do all the work — and the display draws every
+      one of them, to scale, while the ball flies.</p>
+    </div>
+    <div class="exp-anim" aria-hidden="true">
+      <svg viewBox="0 0 128 128">
+        <path d="M 14,110 Q 56,10 118,74" fill="none" stroke="#00b0dc"
+              stroke-width="1.5" stroke-dasharray="2 6" opacity="0.6"/>
+        <circle cx="14" cy="110" r="5" fill="#5a6a78"/>
+        <circle r="7" fill="#ffb84d">
+          <animateMotion dur="2.6s" repeatCount="indefinite"
+            path="M 14,110 Q 56,10 118,74"/>
+        </circle>
+      </svg>
+    </div>
+  </section>
+
+  <figure class="shot">
+    <img src="../img/slingshot.jpg" width="1600" height="900"
+         alt="The slingshot experiment mid-aim: a stretched band, a dotted predicted arc, a force legend and a readout of angle, speed and energy.">
+    <figcaption>MID-AIM — THE READOUT SHOWS DRAW FORCE, STORED ENERGY AND
+    THE KINETIC ENERGY THE BALL WILL LEAVE WITH</figcaption>
+  </figure>
+
+  <h2>At the display</h2>
+  <ul class="do">
+    <li><strong>Pinch the ball and pull.</strong> The further you stretch,
+    the more energy the band stores — watch the joules climb in the
+    readout.</li>
+    <li><strong>Let go.</strong> Stored energy becomes speed. The dotted
+    arc showed the plan; now watch how the real flight follows it.</li>
+    <li><strong>Read the arrows on the flying ball:</strong> yellow is
+    weight pulling down, blue is air drag pushing back, and the dashed
+    white arrow is everything summed — the only thing the ball actually
+    feels.</li>
+  </ul>
+
+  <h2>What's really happening</h2>
+  <p>A slingshot is an energy converter. Stretching the band stores
+  <strong>elastic energy</strong> in it, like winding a spring; release
+  turns that into <strong>kinetic energy</strong> — motion. The readout
+  does the bookkeeping honestly: some energy never makes it into the ball
+  (real bands waste some as heat), which is why the launch number is a bit
+  smaller than the draw number.</p>
+  <p>In flight, only two forces remain. Gravity pulls the same amount the
+  whole time. Air drag is sneakier — it grows with the <em>square</em> of
+  speed, so a ball going twice as fast fights four times the drag. That's
+  why the flight path isn't the perfect textbook parabola: it leans over,
+  steeper on the way down than the way up.</p>
+  <p>There is no simple formula for a flight with air drag — not because
+  physicists are lazy, but because none exists. The display does what real
+  simulations do: it recomputes all the forces and nudges the ball forward
+  120 times every second.</p>
+
+  <aside class="fact">
+    <p><strong>Worth knowing:</strong> this is centuries-old headache.
+    Gunners in the 1700s carried books of firing tables because no formula
+    could handle drag — those tables were computed by hand, one trajectory
+    at a time. You're watching the modern version of that computation run
+    live.</p>
+  </aside>
+
+  <div class="related">
+    <p>RELATED ON THE DISPLAY → <a href="orbitals.html">Orbitals</a> is
+    what throwing looks like once you remove the floor ·
+    <a href="spacetime.html">Spacetime</a> is why gravity pulls at all</p>
+  </div>
+
+</main>
+
+<footer>
+  <div class="wrap">
+    <p><a href="../index.html">← All experiments</a></p>
+    <p>Built during a Physics Department summer internship at Gordon College.</p>
+  </div>
+</footer>
+
+</body>
+</html>

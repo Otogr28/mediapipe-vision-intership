@@ -1,7 +1,9 @@
+import os
+
 import cv2
 
-from config import (DEBUG_HUD, POSE_ENABLED, QR_BOX_FRAC, QR_MARGIN_FRAC,
-                    START_VTUBER)
+from config import (DEBUG_HUD, POSE_ENABLED, QR_BOX_FRAC, QR_DIR,
+                    QR_MARGIN_FRAC, START_VTUBER)
 from detection.gestures import update_pinches
 from rendering.gl_lensing import LensingRenderer
 from ui.button import Button
@@ -46,6 +48,11 @@ class UIManager:
         # (a BlackHole, Slingshot, Orbitals, …), or None while its picker is
         # shown. Only one experiment is active at a time.
         self._active_experiment = None
+        # QR plate sprites (_experiment_qr): resized per (key, side), key
+        # re-read only when the active experiment instance changes.
+        self._qr_cache = {}
+        self._qr_exp = None
+        self._qr_key = None
         self._sixseven = None
         # The vtuber puppet, live only while the user spawns it in the
         # "interactables" state (None otherwise).
@@ -476,12 +483,32 @@ class UIManager:
         cv2.putText(frame, text, (x + (w - tw) // 2, y + (h + th) // 2),
                     font, scale, (0, 255, 255), thick, cv2.LINE_AA)
 
-    def _draw_qr_placeholder(self, frame):
-        """White plate bottom-left of every RUNNING experiment — the spot a
-        per-experiment QR code (link to its info page) will occupy. Obvious
-        placeholder until the codes land: dashed inner square + "QR".
-        Geometry mirrored by hand in web/src/overlay/scene.ts
-        (drawQrPlaceholder)."""
+    def _experiment_qr(self, side):
+        """QR sprite for the active experiment, resized to `side` px square,
+        or None (missing PNG → the caller keeps the dashed placeholder).
+        The experiment key is read once per activation via to_state()["type"]
+        (== session.experiment); the resized sprite is cached per (key, side)
+        like _scat_sprite — the plate redraws every frame."""
+        exp = self._active_experiment
+        if exp is not self._qr_exp:
+            self._qr_exp = exp
+            self._qr_key = None if exp is None else exp.to_state()["type"]
+        if self._qr_key is None:
+            return None
+        key = (self._qr_key, side)
+        if key not in self._qr_cache:
+            img = cv2.imread(os.path.join(QR_DIR, self._qr_key + ".png"))
+            self._qr_cache[key] = None if img is None else cv2.resize(
+                img, (side, side), interpolation=cv2.INTER_AREA)
+        return self._qr_cache[key]
+
+    def _draw_qr_plate(self, frame):
+        """White plate bottom-left of every RUNNING experiment carrying its
+        QR code — the link to the experiment's page on the exhibit site
+        (web/scripts/gen_qr.py renders the codes into QR_DIR). The plate's
+        white padding doubles as the QR quiet zone. Falls back to the dashed
+        "QR" placeholder when the PNG is missing. Geometry mirrored by hand
+        in web/src/overlay/scene.ts (drawQrPlate)."""
         side = int(self.frame_h * QR_BOX_FRAC)
         m = int(self.frame_h * QR_MARGIN_FRAC)
         x0, y0 = m, self.frame_h - m - side
@@ -489,6 +516,14 @@ class UIManager:
                       (255, 255, 255), -1)
         cv2.rectangle(frame, (x0, y0), (x0 + side, y0 + side),
                       (60, 60, 60), 2)
+        # Keep in sync with scene.ts: pad 0.06·side + the PNG's own 2-module
+        # border ≈ the 4-module ISO quiet zone at plate scale.
+        qpad = int(side * 0.06)
+        qr = self._experiment_qr(side - 2 * qpad)
+        if qr is not None:
+            frame[y0 + qpad:y0 + qpad + qr.shape[0],
+                  x0 + qpad:x0 + qpad + qr.shape[1]] = qr
+            return
         # Dashed inner square (cv2 has no dash pattern: short segments).
         pad = int(side * 0.12)
         ix0, iy0, ix1, iy1 = x0 + pad, y0 + pad, x0 + side - pad, y0 + side - pad
@@ -534,7 +569,7 @@ class UIManager:
             # distortion) so the picker/reset buttons stay readable on top.
             if self._active_experiment is not None:
                 self._active_experiment.draw(frame)
-                self._draw_qr_placeholder(frame)
+                self._draw_qr_plate(frame)
                 if self._speed_control_active():
                     self._speed_minus_btn.draw(frame)
                     self._speed_plus_btn.draw(frame)

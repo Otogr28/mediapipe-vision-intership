@@ -1,0 +1,105 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Black hole — HalL</title>
+<meta name="description" content="The black hole experiment on the physics hall display: the live camera image bent by simulated gravity, explained in plain language.">
+<meta property="og:title" content="Black hole — HalL">
+<meta property="og:description" content="The camera feed, bent around a black hole the way real starlight bends.">
+<meta property="og:image" content="https://otogr28.github.io/mediapipe-vision-intership/img/black_hole.jpg">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ccircle cx='16' cy='16' r='13' fill='none' stroke='%2300B0DC' stroke-width='3'/%3E%3Ccircle cx='16' cy='16' r='5' fill='%23FFB84D'/%3E%3C/svg%3E">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600&family=Space+Grotesk:wght@500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="../style.css">
+</head>
+<body>
+
+<header class="wrap mast">
+  <a href="../index.html" class="brand">HalL<span class="dot">.</span></a>
+  <span class="dept">Gordon College · Physics Hall</span>
+</header>
+
+<main class="wrap">
+
+  <section class="exp-head">
+    <div>
+      <p class="eyebrow">General relativity · gravitational lensing</p>
+      <h1>Black hole</h1>
+      <p class="lede">The dark disc in the middle isn't drawn on top of the
+      camera image — it's <em>made from it</em>. Every pixel around it is
+      the camera feed, bent.</p>
+    </div>
+    <div class="exp-anim" aria-hidden="true">
+      <svg viewBox="0 0 128 128">
+        <circle cx="64" cy="64" r="22" fill="#000" stroke="#ffdf9e" stroke-width="3"/>
+        <ellipse cx="64" cy="64" rx="44" ry="30" fill="none" stroke="#00b0dc" stroke-width="1.5" opacity="0.5"/>
+        <circle r="4" fill="#ffb84d">
+          <animateMotion dur="4s" repeatCount="indefinite"
+            path="M 8,88 C 40,96 96,88 120,40"/>
+        </circle>
+      </svg>
+    </div>
+  </section>
+
+  <figure class="shot">
+    <img src="../img/black_hole.jpg" width="1600" height="900"
+         alt="The black hole experiment: a bright ring of bent light around a black disc, drawn over the camera image, with a warped grid behind it.">
+    <figcaption>THE DISPLAY, RUNNING THIS EXPERIMENT — THE GRID BEHIND THE
+    HOLE IS THE CAMERA IMAGE, STRETCHED BY THE LENS</figcaption>
+  </figure>
+
+  <h2>At the display</h2>
+  <ul class="do">
+    <li><strong>Stand behind it.</strong> Your own image smears into an arc
+    around the disc — you are being gravitationally lensed.</li>
+    <li><strong>Move something colorful behind the hole</strong> and watch
+    it appear twice, once on each side. A lens with gravity makes double
+    images.</li>
+    <li><strong>Find the thin bright ring</strong> hugging the disc: that's
+    light which circled the hole — sometimes more than once — before
+    escaping to the camera.</li>
+  </ul>
+
+  <h2>What's really happening</h2>
+  <p>A black hole is what's left when so much mass is squeezed into so
+  little space that, inside a boundary called the <strong>event
+  horizon</strong>, nothing — not even light — moves outward again. The
+  black disc you see is that boundary: a region of the picture from which
+  no light reaches you.</p>
+  <p>Around it, Einstein's rule takes over: <strong>mass bends the space
+  light travels through</strong>. Light still takes the straightest path
+  available — but near the hole, "straight" is curved. Rays that would
+  have missed your eye get folded toward it, so you see things that are
+  actually hidden behind the hole, stretched into arcs and rings.</p>
+  <p>The display isn't faking the look. For every pixel, it traces the
+  light ray backwards past the hole using the same equations
+  (Schwarzschild's solution) astronomers use for real black holes, and
+  asks: where in the camera image did this ray come from?</p>
+
+  <aside class="fact">
+    <p><strong>Worth knowing:</strong> the first real picture of a black
+    hole — M87*, photographed in 2019 by a telescope the size of the Earth
+    — shows exactly the kind of bright ring you're making here. That one
+    weighs six and a half billion Suns.</p>
+  </aside>
+
+  <div class="related">
+    <p>RELATED ON THE DISPLAY → <a href="spacetime.html">Spacetime</a>
+    shows this same bending from the side ·
+    <a href="orbitals.html">Orbitals</a> is gravity with the training
+    wheels on</p>
+  </div>
+
+</main>
+
+<footer>
+  <div class="wrap">
+    <p><a href="../index.html">← All experiments</a></p>
+    <p>Built during a Physics Department summer internship at Gordon College.</p>
+  </div>
+</footer>
+
+</body>
+</html>

@@ -1,0 +1,116 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Orbitals — HalL</title>
+<meta name="description" content="The orbitals experiment on the physics hall display: n-body gravity, Kepler orbits and three-body chaos, explained in plain language.">
+<meta property="og:title" content="Orbitals — HalL">
+<meta property="og:description" content="Drop stars, planets and comets into space and see what gravity builds — or wrecks.">
+<meta property="og:image" content="https://otogr28.github.io/mediapipe-vision-intership/img/orbitals.jpg">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ccircle cx='16' cy='16' r='13' fill='none' stroke='%2300B0DC' stroke-width='3'/%3E%3Ccircle cx='16' cy='16' r='5' fill='%23FFB84D'/%3E%3C/svg%3E">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600&family=Space+Grotesk:wght@500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="../style.css">
+</head>
+<body>
+
+<header class="wrap mast">
+  <a href="../index.html" class="brand">HalL<span class="dot">.</span></a>
+  <span class="dept">Gordon College · Physics Hall</span>
+</header>
+
+<main class="wrap">
+
+  <section class="exp-head">
+    <div>
+      <p class="eyebrow">Gravity · n-body motion</p>
+      <h1>Orbitals</h1>
+      <p class="lede">Every body you drop pulls on every other one, all
+      the time. Two bodies make clockwork. Three make chaos.</p>
+    </div>
+    <div class="exp-anim" aria-hidden="true">
+      <svg viewBox="0 0 128 128">
+        <circle cx="64" cy="64" r="10" fill="#ffdf9e"/>
+        <ellipse cx="64" cy="64" rx="46" ry="34" fill="none"
+                 stroke="#00b0dc" stroke-width="1" opacity="0.45"/>
+        <g>
+          <circle cx="110" cy="64" r="5" fill="#00b0dc"/>
+          <animateTransform attributeName="transform" type="rotate"
+            from="0 64 64" to="360 64 64" dur="5s" repeatCount="indefinite"/>
+        </g>
+        <g>
+          <circle cx="26" cy="64" r="3" fill="#ffb84d"/>
+          <animateTransform attributeName="transform" type="rotate"
+            from="360 64 64" to="0 64 64" dur="9s" repeatCount="indefinite"/>
+        </g>
+      </svg>
+    </div>
+  </section>
+
+  <figure class="shot">
+    <img src="../img/orbitals.jpg" width="1600" height="900"
+         alt="The orbitals experiment: a glowing star, planets with trailing orbits, and a palette of body types to place.">
+    <figcaption>A SMALL SYSTEM MID-BUILD — THE FADING TRAILS ARE EACH
+    BODY'S RECENT PATH</figcaption>
+  </figure>
+
+  <h2>At the display</h2>
+  <ul class="do">
+    <li><strong>Pick a body from the palette</strong> — star, planet,
+    moon, comet — and pinch in empty space to place it. New bodies join
+    the dance immediately.</li>
+    <li><strong>Try the presets.</strong> SOLAR builds a tiny solar
+    system; BINARY sets two stars waltzing; FIGURE&nbsp;8 stages a famous
+    three-body choreography that took mathematicians centuries to
+    find.</li>
+    <li><strong>Watch a comet's trail.</strong> Long, stretched loops that
+    speed up near the star and crawl far away — then one close pass can
+    fling it out of the system for good.</li>
+  </ul>
+
+  <h2>What's really happening</h2>
+  <p>One rule runs this whole scene: <strong>every mass pulls on every
+  other</strong>, harder when closer, along the line between them. That's
+  Newton's law of universal gravitation — "universal" because it's the
+  same rule for a falling apple, the Moon, and everything you're placing
+  here.</p>
+  <p>With just two bodies the rule is tame: they trace perfect repeating
+  ellipses, the ones Kepler read out of planet tables four hundred years
+  ago. Add a third body and something remarkable breaks —
+  <strong>no formula exists</strong> for where everything will be. Tiny
+  differences in the start grow into completely different futures. That's
+  chaos, and it's why the display, like NASA, simulates: it sums the pulls
+  on every body and steps time forward, thousands of small steps per
+  second.</p>
+  <p>Slingshots aren't just mishaps here. When a light body swings close
+  past a heavy one, it can steal a little of the heavy one's motion and
+  leave faster than it came — the same gravity-assist trick real space
+  probes use to reach the outer planets.</p>
+
+  <aside class="fact">
+    <p><strong>Worth knowing:</strong> the FIGURE&nbsp;8 preset is a real
+    mathematical discovery — three equal masses chasing each other along
+    one shared figure-eight, found by computer in the 1990s. No one has
+    spotted three stars doing it in the wild, but the math says they
+    could.</p>
+  </aside>
+
+  <div class="related">
+    <p>RELATED ON THE DISPLAY → <a href="slingshot.html">Slingshot</a> is
+    the same forces with a floor and air ·
+    <a href="spacetime.html">Spacetime</a> shows what gravity really is</p>
+  </div>
+
+</main>
+
+<footer>
+  <div class="wrap">
+    <p><a href="../index.html">← All experiments</a></p>
+    <p>Built during a Physics Department summer internship at Gordon College.</p>
+  </div>
+</footer>
+
+</body>
+</html>
