@@ -272,8 +272,18 @@ def check_magnets_physics():
     away = sweep(-12)
     assert abs(toward) > 0.1, f"approach induced ~nothing ({toward})"
     assert toward * away < 0, f"no Lenz sign flip ({toward} vs {away})"
+
+    # Real-unit readout: Ohm's law must hold between the reported pair,
+    # and the pair must be the calibrated linear map of the smoothed EMF.
+    from config import MAG_CIRCUIT_OHM, MAG_EMF_TO_V
+    s = m.to_state()
+    assert abs(s["emf_mv"] - m._emf_disp * MAG_EMF_TO_V * 1e3) < 5e-3
+    if abs(s["emf_mv"]) > 1e-3:
+        ratio = s["current_ma"] / s["emf_mv"]
+        assert abs(ratio - 1.0 / MAG_CIRCUIT_OHM) < 0.5, \
+            f"readout breaks Ohm's law (I/V = {ratio})"
     print("  ok    Magnets physics (far field = 2D dipole / axis Bx sign /"
-          " rest EMF ~ 0 / Lenz sign flip)")
+          " rest EMF ~ 0 / Lenz sign flip / real-unit readout)")
 
 
 def check_schrodinger_logic():

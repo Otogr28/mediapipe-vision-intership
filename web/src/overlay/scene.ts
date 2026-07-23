@@ -889,6 +889,27 @@ function drawMagnets(ctx: CanvasRenderingContext2D, o: MagnetsObject) {
   ctx.lineTo(gx + 30 * Math.cos(na), gy + 30 * Math.sin(na));
   ctx.stroke();
 
+  // Real-unit readout (magnitudes; the needle carries the sign). The
+  // values are computed backend-side from the declared calibration — see
+  // config.py's MAG_EMF_TO_V note.
+  const ma = Math.abs(o.current_ma);
+  const curTxt = ma >= 1000 ? `${(ma / 1000).toFixed(2)} A` : `${ma.toFixed(0)} mA`;
+  const mv = Math.abs(o.emf_mv);
+  const emfTxt = mv < 10 ? `${mv.toFixed(2)} mV` : `${mv.toFixed(1)} mV`;
+  ctx.textAlign = "center";
+  ctx.textBaseline = "alphabetic";
+  ctx.lineJoin = "round";
+  ctx.strokeStyle = "rgba(10,14,20,0.85)";
+  ctx.lineWidth = 4;
+  ctx.font = "700 20px ui-sans-serif, system-ui, sans-serif";
+  ctx.strokeText(curTxt, gx, gy + 44);
+  ctx.fillStyle = "#ffffff";
+  ctx.fillText(curTxt, gx, gy + 44);
+  ctx.font = "500 14px ui-sans-serif, system-ui, sans-serif";
+  ctx.strokeText(emfTxt, gx, gy + 64);
+  ctx.fillStyle = "rgba(220,220,220,0.95)";
+  ctx.fillText(emfTxt, gx, gy + 64);
+
   // Magnet bars on top: blue S half, red N half, white letters.
   const a = o.half_len;
   const b = o.half_h;

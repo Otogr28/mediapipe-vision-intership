@@ -15,24 +15,25 @@ from config import (BH_DEFAULT_POS_FACTOR, BH_DISK_BRIGHTNESS,
                     CHG_ARROW_SPEED_PX_S, CHG_DEFAULT_KIND, CHG_EQUIPOT_STEP,
                     CHG_GRAB_PAD_PX, CHG_GRID_PX, CHG_K, CHG_LINE_MAX_STEPS,
                     CHG_LINE_STEP_PX, CHG_LINES_PER_Q, CHG_MAX, CHG_SOFTEN_PX,
-                    CHG_TYPES, MAG_B_REF, MAG_COIL_LOOPS, MAG_COIL_R_PX,
-                    MAG_COIL_SAMPLES, MAG_COIL_X_FRAC, MAG_COIL_Y_FRAC,
-                    MAG_CUR_SMOOTH_S, MAG_DEFAULT_KIND, MAG_EDGE_SMOOTH_PX,
-                    MAG_EMF_REF, MAG_GRAB_PAD_PX, MAG_HALF_H_PX,
-                    MAG_HALF_LEN_PX, MAG_MAX, MAG_NEEDLE_LEN_PX,
-                    MAG_NEEDLE_SPACING_PX, MAG_TYPES, ORB_BODY_TYPES,
-                    ORB_COLLISION_SLOP, ORB_DEFAULT_KIND, ORB_FLASH_DECAY,
-                    ORB_FRAG_COUNT, ORB_FRAG_LR_FRACTION, ORB_FRAG_MIN_MASS,
-                    ORB_FRAG_SPEED, ORB_FRAG_VESC_FACTOR, ORB_FRAME_DT, ORB_G,
-                    ORB_GRAB_PAD_PX, ORB_LAUNCH_GAIN, ORB_MAX_BODIES,
-                    ORB_MAX_PULL_PX, ORB_MAX_SUBSTEPS, ORB_PHYS_DT,
-                    ORB_PREDICT_SAMPLE, ORB_PREDICT_TIME_S, ORB_PRUNE_MARGIN,
-                    ORB_RESTITUTION, ORB_SOFTENING_PX, ORB_TIME_SCALES,
-                    ORB_TRAIL_LEN, PUPPET_IDLE_BOB_S, SCAT_BOX_CX_FRAC,
-                    SCAT_BOX_CY_FRAC, SCAT_BOX_H_FRAC, SCAT_BOX_W_FRAC,
-                    SCAT_CAT_R_FRAC, SCAT_CAT_START, SCAT_COLLAPSE_P_ALIVE,
-                    SCAT_DETECTOR_R_PX, SCAT_FLASH_DECAY, SCAT_FRAME_DT,
-                    SCAT_GRAB_PAD_PX, SCAT_GUN_MUZZLE_X_FRAC, SCAT_GUN_W_FRAC,
+                    CHG_TYPES, MAG_B_REF, MAG_CIRCUIT_OHM, MAG_COIL_LOOPS,
+                    MAG_COIL_R_PX, MAG_COIL_SAMPLES, MAG_COIL_X_FRAC,
+                    MAG_COIL_Y_FRAC, MAG_CUR_SMOOTH_S, MAG_DEFAULT_KIND,
+                    MAG_EDGE_SMOOTH_PX, MAG_EMF_REF, MAG_EMF_TO_V,
+                    MAG_GRAB_PAD_PX, MAG_HALF_H_PX, MAG_HALF_LEN_PX, MAG_MAX,
+                    MAG_NEEDLE_LEN_PX, MAG_NEEDLE_SPACING_PX, MAG_TYPES,
+                    ORB_BODY_TYPES, ORB_COLLISION_SLOP, ORB_DEFAULT_KIND,
+                    ORB_FLASH_DECAY, ORB_FRAG_COUNT, ORB_FRAG_LR_FRACTION,
+                    ORB_FRAG_MIN_MASS, ORB_FRAG_SPEED, ORB_FRAG_VESC_FACTOR,
+                    ORB_FRAME_DT, ORB_G, ORB_GRAB_PAD_PX, ORB_LAUNCH_GAIN,
+                    ORB_MAX_BODIES, ORB_MAX_PULL_PX, ORB_MAX_SUBSTEPS,
+                    ORB_PHYS_DT, ORB_PREDICT_SAMPLE, ORB_PREDICT_TIME_S,
+                    ORB_PRUNE_MARGIN, ORB_RESTITUTION, ORB_SOFTENING_PX,
+                    ORB_TIME_SCALES, ORB_TRAIL_LEN, PUPPET_IDLE_BOB_S,
+                    SCAT_BOX_CX_FRAC, SCAT_BOX_CY_FRAC, SCAT_BOX_H_FRAC,
+                    SCAT_BOX_W_FRAC, SCAT_CAT_R_FRAC, SCAT_CAT_START,
+                    SCAT_COLLAPSE_P_ALIVE, SCAT_DETECTOR_R_PX,
+                    SCAT_FLASH_DECAY, SCAT_FRAME_DT, SCAT_GRAB_PAD_PX,
+                    SCAT_GUN_MUZZLE_X_FRAC, SCAT_GUN_W_FRAC,
                     SCAT_PARTICLE_SPEED, SCAT_RECOIL_DECAY, SCAT_SPRITE_DIR,
                     SCAT_TRIGGER_R_PX, SIXSEVEN_FLASH_FRAMES,
                     SIXSEVEN_HYSTERESIS, SIXSEVEN_MIN_VISIBILITY,
@@ -2507,10 +2508,12 @@ class Magnets:
         # Pickup coil (fixed for the session).
         self.coil_x = frame_width * MAG_COIL_X_FRAC
         self.coil_y = frame_height * MAG_COIL_Y_FRAC
-        # Induction state: last single-loop flux, raw EMF, displayed current.
+        # Induction state: last single-loop flux, raw EMF, displayed current,
+        # and the smoothed linear EMF behind the real-unit readout.
         self._flux = None
         self._emf = 0.0
         self._cur = 0.0
+        self._emf_disp = 0.0
         self._last_t = None
         # cv2-fallback needle grid, built lazily on the first draw().
         self._grid = None
@@ -2680,6 +2683,9 @@ class Magnets:
         target = math.tanh(self._emf / MAG_EMF_REF)
         alpha = 1.0 - math.exp(-dt / MAG_CUR_SMOOTH_S)
         self._cur += (target - self._cur) * alpha
+        # Smoothed RAW EMF for the real-unit readout (the tanh above is
+        # display normalization for the bulb; the readout must stay linear).
+        self._emf_disp += (self._emf - self._emf_disp) * alpha
 
     # ---- serialization --------------------------------------------------
 
@@ -2709,6 +2715,12 @@ class Magnets:
             },
             "current": round(self._cur, 3),
             "emf": round(self._emf, 1),
+            # Real-unit readout (see config's calibration note). Signed like
+            # `current`; the renderers show magnitudes and let the
+            # galvanometer carry the sign.
+            "emf_mv": round(self._emf_disp * MAG_EMF_TO_V * 1e3, 3),
+            "current_ma": round(self._emf_disp * MAG_EMF_TO_V
+                                / MAG_CIRCUIT_OHM * 1e3, 1),
         }
 
     # ---- cv2 drawing (window / stream fallback) ------------------------
@@ -2829,6 +2841,22 @@ class Magnets:
         cv2.line(frame, (gx, gy), (nx, ny), (80, 220, 255), 2, cv2.LINE_AA)
         cv2.putText(frame, "I", (gx - 5, gy + 16), cv2.FONT_HERSHEY_SIMPLEX,
                     0.5, (220, 220, 220), 1, cv2.LINE_AA)
+
+        # Real-unit readout (magnitudes; the needle above carries the sign).
+        emf_v = abs(self._emf_disp) * MAG_EMF_TO_V
+        ma = emf_v / MAG_CIRCUIT_OHM * 1e3
+        cur_txt = f"{ma / 1000:.2f} A" if ma >= 1000 else f"{ma:.0f} mA"
+        mv = emf_v * 1e3
+        emf_txt = f"{mv:.2f} mV" if mv < 10 else f"{mv:.1f} mV"
+        for txt, dy, scale, col in ((cur_txt, 44, 0.62, (255, 255, 255)),
+                                    (emf_txt, 66, 0.45, (200, 200, 200))):
+            (tw, _), _ = cv2.getTextSize(txt, cv2.FONT_HERSHEY_SIMPLEX,
+                                         scale, 2)
+            cv2.putText(frame, txt, (gx - tw // 2, gy + dy),
+                        cv2.FONT_HERSHEY_SIMPLEX, scale, (20, 20, 20), 3,
+                        cv2.LINE_AA)
+            cv2.putText(frame, txt, (gx - tw // 2, gy + dy),
+                        cv2.FONT_HERSHEY_SIMPLEX, scale, col, 1, cv2.LINE_AA)
 
 
 # --- Vtuber / Puppet interactable ---------------------------------------

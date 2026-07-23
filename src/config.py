@@ -627,6 +627,23 @@ MAG_COIL_SAMPLES = 9          # flux sample rows across the vertical diameter
 # as it physically should (B inside the bar dwarfs the outside field).
 MAG_EMF_REF = 8000.0
 MAG_CUR_SMOOTH_S = 0.12       # display smoothing time constant (s)
+# Real-unit readout under the galvanometer. The mapping is a DECLARED
+# physical calibration, then everything downstream is computed honestly:
+# the drawn bar (140 x 44 px) is declared a 7 x 2.2 cm ferrite bar magnet,
+# so 1 px = 0.5 mm; the model's field just outside the pole face is 0.368
+# screen units, declared to be 50 mT (typical ferrite). One screen flux
+# unit is then MAG_B_UNIT_T * MAG_PX_TO_M^2 = 3.40e-8 Wb, and since dt is
+# real seconds the same factor turns screen EMF into volts. The circuit is
+# the drawn one: 3 turns of 1.3 mm copper (~0.9 m, ~12 mOhm) plus the
+# meter shunt, rounded to 0.02 ohm. The resulting numbers are the true
+# physics of this hardware — a hand-speed pass beside the coil peaks near
+# 0.5 mV / 25 mA, shoving the bar through the coil reaches ~10 mV / 0.5 A.
+# Real classroom induction coils use hundreds of turns for exactly this
+# reason. Mirrored in web/scripts/mock_backend.py's fake values.
+MAG_PX_TO_M = 5.0e-4          # 140 px bar = 7 cm
+MAG_B_UNIT_T = 0.136          # 50 mT at the pole face / 0.368 screen units
+MAG_EMF_TO_V = MAG_B_UNIT_T * MAG_PX_TO_M * MAG_PX_TO_M   # 3.40e-8 V/unit
+MAG_CIRCUIT_OHM = 0.02        # coil copper + meter shunt
 
 # --- Spacetime experiment (relativistic gravity) -------------------------
 # The rubber-sheet picture, done honestly. Pinch empty space to drop a mass

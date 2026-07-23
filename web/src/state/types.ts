@@ -237,6 +237,11 @@ export interface MagnetsObject {
   current: number;
   /** raw EMF (screen units), informational */
   emf: number;
+  /** induced EMF in real millivolts (signed, smoothed) — see the
+   *  calibration note on config.MAG_EMF_TO_V */
+  emf_mv: number;
+  /** induced current in real milliamps (signed): emf / MAG_CIRCUIT_OHM */
+  current_ma: number;
 }
 
 export type SpacetimeKind = "sun" | "neutron" | "bh" | "orbiter";

@@ -137,6 +137,8 @@ export function interpolate(pair: SnapshotPair, now: number): AppState {
           ...o,
           // Smooths the bulb glow + galvanometer between 30 Hz snapshots.
           current: lerp(po.current, o.current, t),
+          emf_mv: lerp(po.emf_mv, o.emf_mv, t),
+          current_ma: lerp(po.current_ma, o.current_ma, t),
           magnets: o.magnets.map((m) => {
             const pm = prevMag.get(m.id);
             if (!pm) return m;

@@ -527,6 +527,10 @@ def scene_state(t):
             "coil": {"x": round(coil_x, 1), "y": round(coil_y, 1),
                      "r": 95.0, "loops": 3},
             "current": cur, "emf": round(cur * 8000.0, 1),
+            # Real-unit mirror of the backend calibration: screen EMF *
+            # MAG_EMF_TO_V (3.4e-8 V/unit), current over MAG_CIRCUIT_OHM.
+            "emf_mv": round(cur * 8000.0 * 3.4e-8 * 1e3, 3),
+            "current_ma": round(cur * 8000.0 * 3.4e-8 / 0.02 * 1e3, 1),
         }]
 
     elif SCENE == "spacetime":
