@@ -15,19 +15,24 @@ from config import (BH_DEFAULT_POS_FACTOR, BH_DISK_BRIGHTNESS,
                     CHG_ARROW_SPEED_PX_S, CHG_DEFAULT_KIND, CHG_EQUIPOT_STEP,
                     CHG_GRAB_PAD_PX, CHG_GRID_PX, CHG_K, CHG_LINE_MAX_STEPS,
                     CHG_LINE_STEP_PX, CHG_LINES_PER_Q, CHG_MAX, CHG_SOFTEN_PX,
-                    CHG_TYPES, ORB_BODY_TYPES, ORB_COLLISION_SLOP,
-                    ORB_DEFAULT_KIND, ORB_FLASH_DECAY, ORB_FRAG_COUNT,
-                    ORB_FRAG_LR_FRACTION, ORB_FRAG_MIN_MASS, ORB_FRAG_SPEED,
-                    ORB_FRAG_VESC_FACTOR, ORB_FRAME_DT, ORB_G, ORB_GRAB_PAD_PX,
-                    ORB_LAUNCH_GAIN, ORB_MAX_BODIES, ORB_MAX_PULL_PX,
-                    ORB_MAX_SUBSTEPS, ORB_PHYS_DT, ORB_PREDICT_SAMPLE,
-                    ORB_PREDICT_TIME_S, ORB_PRUNE_MARGIN, ORB_RESTITUTION,
-                    ORB_SOFTENING_PX, ORB_TIME_SCALES, ORB_TRAIL_LEN,
-                    PUPPET_IDLE_BOB_S, SCAT_BOX_CX_FRAC, SCAT_BOX_CY_FRAC,
-                    SCAT_BOX_H_FRAC, SCAT_BOX_W_FRAC, SCAT_CAT_R_FRAC,
-                    SCAT_CAT_START, SCAT_COLLAPSE_P_ALIVE, SCAT_DETECTOR_R_PX,
-                    SCAT_FLASH_DECAY, SCAT_FRAME_DT, SCAT_GRAB_PAD_PX,
-                    SCAT_GUN_MUZZLE_X_FRAC, SCAT_GUN_W_FRAC,
+                    CHG_TYPES, MAG_B_REF, MAG_COIL_LOOPS, MAG_COIL_R_PX,
+                    MAG_COIL_SAMPLES, MAG_COIL_X_FRAC, MAG_COIL_Y_FRAC,
+                    MAG_CUR_SMOOTH_S, MAG_DEFAULT_KIND, MAG_EDGE_SMOOTH_PX,
+                    MAG_EMF_REF, MAG_GRAB_PAD_PX, MAG_HALF_H_PX,
+                    MAG_HALF_LEN_PX, MAG_MAX, MAG_NEEDLE_LEN_PX,
+                    MAG_NEEDLE_SPACING_PX, MAG_TYPES, ORB_BODY_TYPES,
+                    ORB_COLLISION_SLOP, ORB_DEFAULT_KIND, ORB_FLASH_DECAY,
+                    ORB_FRAG_COUNT, ORB_FRAG_LR_FRACTION, ORB_FRAG_MIN_MASS,
+                    ORB_FRAG_SPEED, ORB_FRAG_VESC_FACTOR, ORB_FRAME_DT, ORB_G,
+                    ORB_GRAB_PAD_PX, ORB_LAUNCH_GAIN, ORB_MAX_BODIES,
+                    ORB_MAX_PULL_PX, ORB_MAX_SUBSTEPS, ORB_PHYS_DT,
+                    ORB_PREDICT_SAMPLE, ORB_PREDICT_TIME_S, ORB_PRUNE_MARGIN,
+                    ORB_RESTITUTION, ORB_SOFTENING_PX, ORB_TIME_SCALES,
+                    ORB_TRAIL_LEN, PUPPET_IDLE_BOB_S, SCAT_BOX_CX_FRAC,
+                    SCAT_BOX_CY_FRAC, SCAT_BOX_H_FRAC, SCAT_BOX_W_FRAC,
+                    SCAT_CAT_R_FRAC, SCAT_CAT_START, SCAT_COLLAPSE_P_ALIVE,
+                    SCAT_DETECTOR_R_PX, SCAT_FLASH_DECAY, SCAT_FRAME_DT,
+                    SCAT_GRAB_PAD_PX, SCAT_GUN_MUZZLE_X_FRAC, SCAT_GUN_W_FRAC,
                     SCAT_PARTICLE_SPEED, SCAT_RECOIL_DECAY, SCAT_SPRITE_DIR,
                     SCAT_TRIGGER_R_PX, SIXSEVEN_FLASH_FRAMES,
                     SIXSEVEN_HYSTERESIS, SIXSEVEN_MIN_VISIBILITY,
@@ -2443,6 +2448,387 @@ class Charges:
             cv2.putText(frame, CHG_TYPES[c.kind]["label"], (cx + r + 6, cy - r),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.45, (235, 235, 235), 1,
                         cv2.LINE_AA)
+
+
+def _smooth01(t):
+    """Clamped smoothstep — the same easing the shader uses for the bar's
+    inside(+M) window, so both sides compute identical fields."""
+    t = max(0.0, min(1.0, t))
+    return t * t * (3.0 - 2.0 * t)
+
+
+class _Magnet:
+    __slots__ = ("id", "x", "y", "m", "kind")
+
+    def __init__(self, mid, x, y, m, kind):
+        self.id = mid
+        self.x = x
+        self.y = y
+        self.m = m       # magnetization along +x; the N pole is where the
+                         # field exits (x = +a when m > 0)
+        self.kind = kind
+
+
+class Magnets:
+    """Bar magnets, their field, and the electricity moving them makes.
+
+    Pinch empty space to drop a bar magnet in the palette's orientation;
+    pinch a bar to drag it. A compass-needle grid (the iron-filings picture)
+    shows the field everywhere. A fixed pickup coil with a light bulb and a
+    galvanometer completes the circuit lesson: sweep a magnet past or
+    through the coil and the bulb lights while the galvanometer swings, hold
+    it still and everything goes dark, pull it back out and the needle
+    swings the other way. Faraday's law and Lenz's law, felt by hand.
+
+    The magnets are STATIC between drags for the same reason the Charges
+    are: mutual attraction would just slam the bars together, and the FIELD
+    plus the induction are the subject. The only time evolution is the
+    flux derivative, which needs no integrator (see config's MAG_* note).
+
+    This class owns the magnet list and the flux/EMF computation (Python is
+    authoritative for anything with physics meaning). Everything visual is
+    derived from it by whichever sink renders: the browser evaluates the
+    closed-form field per needle cell in a single-pass shader and draws the
+    coil/bulb/galvanometer from `current`; the cv2 fallback vectorizes the
+    same field in numpy here in :meth:`draw`.
+    """
+
+    def __init__(self, frame_width, frame_height):
+        self.w = frame_width
+        self.h = frame_height
+        self.magnets = []
+        self._next_id = 0
+        self._kind = MAG_DEFAULT_KIND
+        # Grab (drag a bar) state, mirroring Charges.
+        self.grab_mag = None
+        self.grab_hand = None
+        self.grab_offset_x = 0.0
+        self.grab_offset_y = 0.0
+        # Pickup coil (fixed for the session).
+        self.coil_x = frame_width * MAG_COIL_X_FRAC
+        self.coil_y = frame_height * MAG_COIL_Y_FRAC
+        # Induction state: last single-loop flux, raw EMF, displayed current.
+        self._flux = None
+        self._emf = 0.0
+        self._cur = 0.0
+        self._last_t = None
+        # cv2-fallback needle grid, built lazily on the first draw().
+        self._grid = None
+        self._build_palette()
+        self._apply_selection()
+        # Starter bar left of the coil so the first pinch has something to
+        # drag toward it (the scene teaches nothing while empty).
+        self._place(frame_width * 0.30, frame_height * 0.52)
+
+    # ---- palette -------------------------------------------------------
+
+    def _build_palette(self):
+        margin = int(self.h * 0.12)
+        bw, bh, gap = 96, 46, 8
+        x0, y0 = margin, margin
+        self._type_btns = []
+        for i, (kind, spec) in enumerate(MAG_TYPES.items()):
+            btn = Button(
+                x=x0 + i * (bw + gap), y=y0, width=bw, height=bh,
+                label=spec["label"], on_click=(lambda k=kind: self._select(k)),
+                font_scale=0.6,
+            )
+            self._type_btns.append((f"mag.type.{kind}", kind, btn))
+        n = len(self._type_btns)
+        self._clear_btn = Button(
+            x=x0 + n * (bw + gap), y=y0, width=bw, height=bh,
+            label="Clear", on_click=self.clear, font_scale=0.6,
+        )
+
+    @property
+    def palette(self):
+        """(id, Button) list the UIManager updates / draws / serializes."""
+        return ([(bid, btn) for bid, _kind, btn in self._type_btns]
+                + [("mag.clear", self._clear_btn)])
+
+    def _select(self, kind):
+        self._kind = kind
+        self._apply_selection()
+
+    def _apply_selection(self):
+        for _bid, kind, btn in self._type_btns:
+            btn.selected = (kind == self._kind)
+
+    @property
+    def grabbed(self):
+        # Retires the onboarding hint while dragging a bar.
+        return self.grab_mag is not None
+
+    # ---- placement -----------------------------------------------------
+
+    def clear(self):
+        self.magnets.clear()
+        self.grab_mag = None
+        self.grab_hand = None
+
+    def _place(self, x, y, kind=None):
+        kind = self._kind if kind is None else kind
+        mg = _Magnet(self._next_id, x, y, MAG_TYPES[kind]["m"], kind)
+        self._next_id += 1
+        self.magnets.append(mg)
+        # Hard cap (also the shader's uniform array size): oldest gives way.
+        if len(self.magnets) > MAG_MAX:
+            self.magnets.pop(0)
+        return mg
+
+    def _magnet_at(self, px, py):
+        best, best_d = None, None
+        for mg in self.magnets:
+            d = math.hypot(mg.x - px, mg.y - py)
+            if d <= MAG_GRAB_PAD_PX and (best_d is None or d < best_d):
+                best, best_d = mg, d
+        return best
+
+    def update(self, hand_result, pose_landmarks):
+        # 1) Continue an in-progress drag (owner-latched, as in Charges).
+        if self.grab_mag is not None:
+            _, held, (mx, my) = pinch_state(self.grab_hand)
+            if held and self.grab_mag in self.magnets:
+                self.grab_mag.x = mx + self.grab_offset_x
+                self.grab_mag.y = my + self.grab_offset_y
+            else:
+                self.grab_mag = None
+                self.grab_hand = None
+
+        # 2) A fresh pinch grabs the bar it landed on, or drops a new one.
+        if self.grab_mag is None and hand_result is not None:
+            for i in range(len(hand_result.hand_landmarks)):
+                hid = hand_id(hand_result, i)
+                pinching, _, (mx, my) = pinch_state(hid)
+                if not pinching:
+                    continue
+                hit = self._magnet_at(mx, my)
+                if hit is not None:
+                    self.grab_mag = hit
+                    self.grab_hand = hid
+                    self.grab_offset_x = hit.x - mx
+                    self.grab_offset_y = hit.y - my
+                else:
+                    self._place(mx, my)
+                break
+
+        # 3) The one piece of time evolution: Faraday's law on the coil.
+        self._step_induction()
+
+    # ---- field math (mirrored by the shader; keep both in sync) --------
+
+    @staticmethod
+    def _seg_h(px, py, xs, y1, y2, lam):
+        """H of one pole face: a uniformly 'charged' vertical segment at
+        x=xs, y in [y1,y2], density lam, in 2D (field ~ 1/r). Closed form;
+        the atan2 identity is branch-safe even inside the bar."""
+        X = px - xs
+        t1, t2 = y1 - py, y2 - py
+        hx = lam / (2.0 * math.pi) * math.atan2(X * (t2 - t1),
+                                                X * X + t1 * t2)
+        hy = lam / (4.0 * math.pi) * math.log(
+            (X * X + t1 * t1 + 1e-6) / (X * X + t2 * t2 + 1e-6))
+        return hx, hy
+
+    def field_at(self, x, y):
+        """B at one point (px units): the two pole faces of every bar, plus
+        the smoothed bound-magnetization term +M inside the bar so field
+        lines close S->N through it (B = H + M, mu0 = 1)."""
+        a, b = MAG_HALF_LEN_PX, MAG_HALF_H_PX
+        bx = by = 0.0
+        for mg in self.magnets:
+            hx1, hy1 = self._seg_h(x, y, mg.x + a, mg.y - b, mg.y + b, mg.m)
+            hx2, hy2 = self._seg_h(x, y, mg.x - a, mg.y - b, mg.y + b, -mg.m)
+            bx += hx1 + hx2
+            by += hy1 + hy2
+            wx = _smooth01((a - abs(x - mg.x)) / MAG_EDGE_SMOOTH_PX + 0.5)
+            wy = _smooth01((b - abs(y - mg.y)) / MAG_EDGE_SMOOTH_PX + 0.5)
+            bx += mg.m * wx * wy
+        return bx, by
+
+    def _loop_flux(self):
+        """Single-loop flux of Bx through the coil: PhET's chord-sampled
+        sum. The loop is a circle of radius R in the (y, z) plane; Bx is
+        assumed z-independent (the 2.5D convention every scene here uses),
+        so flux = sum over rows of Bx * chord(y) * dy."""
+        r = MAG_COIL_R_PX
+        dy = 2.0 * r / MAG_COIL_SAMPLES
+        total = 0.0
+        for i in range(MAG_COIL_SAMPLES):
+            yo = -r + (i + 0.5) * dy
+            chord = 2.0 * math.sqrt(max(r * r - yo * yo, 0.0))
+            bx, _ = self.field_at(self.coil_x, self.coil_y + yo)
+            total += bx * chord * dy
+        return total
+
+    def _step_induction(self):
+        now = time.monotonic()
+        flux = self._loop_flux()
+        if self._flux is None or self._last_t is None:
+            self._flux, self._last_t = flux, now
+            return
+        dt = now - self._last_t
+        if dt <= 1e-6:
+            return
+        if dt > 0.25:
+            # A hitch (paused process, dropped frames): rebaseline without
+            # reading the jump as a huge dPhi/dt.
+            self._flux, self._last_t = flux, now
+            return
+        self._emf = -MAG_COIL_LOOPS * (flux - self._flux) / dt
+        self._flux, self._last_t = flux, now
+        target = math.tanh(self._emf / MAG_EMF_REF)
+        alpha = 1.0 - math.exp(-dt / MAG_CUR_SMOOTH_S)
+        self._cur += (target - self._cur) * alpha
+
+    # ---- serialization --------------------------------------------------
+
+    def to_state(self):
+        return {
+            "type": "magnets",
+            "half_len": MAG_HALF_LEN_PX,
+            "half_h": MAG_HALF_H_PX,
+            "edge_smooth": MAG_EDGE_SMOOTH_PX,
+            "b_ref": MAG_B_REF,
+            "needle_spacing": MAG_NEEDLE_SPACING_PX,
+            "needle_len": MAG_NEEDLE_LEN_PX,
+            "kind": self._kind,
+            "count": len(self.magnets),
+            "magnets": [{
+                "id": mg.id,
+                "x": round(mg.x, 1),
+                "y": round(mg.y, 1),
+                "m": mg.m,
+                "grabbed": mg is self.grab_mag,
+            } for mg in self.magnets],
+            "coil": {
+                "x": round(self.coil_x, 1),
+                "y": round(self.coil_y, 1),
+                "r": MAG_COIL_R_PX,
+                "loops": MAG_COIL_LOOPS,
+            },
+            "current": round(self._cur, 3),
+            "emf": round(self._emf, 1),
+        }
+
+    # ---- cv2 drawing (window / stream fallback) ------------------------
+
+    def _needle_grid(self):
+        if self._grid is None:
+            sp = MAG_NEEDLE_SPACING_PX
+            xs = np.arange(sp * 0.5, self.w, sp, dtype=np.float32)
+            ys = np.arange(sp * 0.5, self.h, sp, dtype=np.float32)
+            self._grid = np.meshgrid(xs, ys)
+        return self._grid
+
+    def _field_np(self, xx, yy):
+        """Vectorized :meth:`field_at` over the needle-grid arrays."""
+        a, b = MAG_HALF_LEN_PX, MAG_HALF_H_PX
+        es = MAG_EDGE_SMOOTH_PX
+        bx = np.zeros_like(xx)
+        by = np.zeros_like(yy)
+        for mg in self.magnets:
+            for xs, lam in ((mg.x + a, mg.m), (mg.x - a, -mg.m)):
+                X = xx - xs
+                t1 = (mg.y - b) - yy
+                t2 = (mg.y + b) - yy
+                bx += lam / (2.0 * np.pi) * np.arctan2(
+                    X * (t2 - t1), X * X + t1 * t2)
+                by += lam / (4.0 * np.pi) * np.log(
+                    (X * X + t1 * t1 + 1e-6) / (X * X + t2 * t2 + 1e-6))
+            wx = np.clip((a - np.abs(xx - mg.x)) / es + 0.5, 0.0, 1.0)
+            wy = np.clip((b - np.abs(yy - mg.y)) / es + 0.5, 0.0, 1.0)
+            bx += mg.m * (wx * wx * (3 - 2 * wx)) * (wy * wy * (3 - 2 * wy))
+        return bx, by
+
+    def draw(self, frame):
+        # Compass-needle grid (iron filings): tail white, tip red toward B.
+        if self.magnets:
+            xx, yy = self._needle_grid()
+            bx, by = self._field_np(xx, yy)
+            mag = np.hypot(bx, by)
+            alpha = np.tanh(mag / MAG_B_REF)
+            hl = MAG_NEEDLE_LEN_PX * 0.5
+            for r in range(xx.shape[0]):
+                for c in range(xx.shape[1]):
+                    s = float(alpha[r, c])
+                    if s < 0.06:
+                        continue
+                    m = float(mag[r, c])
+                    ux, uy = bx[r, c] / m, by[r, c] / m
+                    L = hl * (0.55 + 0.45 * s)
+                    cx, cy = float(xx[r, c]), float(yy[r, c])
+                    g = int(90 + 165 * s)
+                    cv2.line(frame, (int(cx - ux * L), int(cy - uy * L)),
+                             (int(cx), int(cy)), (g, g, g), 2, cv2.LINE_AA)
+                    cv2.line(frame, (int(cx), int(cy)),
+                             (int(cx + ux * L), int(cy + uy * L)),
+                             (int(60 * s), int(60 * s), g), 2, cv2.LINE_AA)
+
+        self._draw_coil(frame)
+
+        # Magnet bars: blue S half, red N half, white letters.
+        a, b = int(MAG_HALF_LEN_PX), int(MAG_HALF_H_PX)
+        for mg in self.magnets:
+            cx, cy = int(mg.x), int(mg.y)
+            n_right = mg.m > 0
+            left_col = (245, 150, 80) if n_right else (90, 90, 245)
+            right_col = (90, 90, 245) if n_right else (245, 150, 80)
+            cv2.rectangle(frame, (cx - a, cy - b), (cx, cy + b),
+                          left_col, -1)
+            cv2.rectangle(frame, (cx, cy - b), (cx + a, cy + b),
+                          right_col, -1)
+            border = (255, 255, 255)
+            cv2.rectangle(frame, (cx - a, cy - b), (cx + a, cy + b), border,
+                          3 if mg is self.grab_mag else 1, cv2.LINE_AA)
+            lchar, rchar = ("S", "N") if n_right else ("N", "S")
+            for ch, px in ((lchar, cx - a // 2), (rchar, cx + a // 2)):
+                (tw, th), _ = cv2.getTextSize(ch, cv2.FONT_HERSHEY_SIMPLEX,
+                                              0.8, 2)
+                cv2.putText(frame, ch, (px - tw // 2, cy + th // 2),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255),
+                            2, cv2.LINE_AA)
+
+    def _draw_coil(self, frame):
+        """Pickup coil (edge-on loops), bulb above, galvanometer below."""
+        cx, cy = int(self.coil_x), int(self.coil_y)
+        r = int(MAG_COIL_R_PX)
+        copper = (51, 114, 184)
+        for i in range(MAG_COIL_LOOPS):
+            off = int((i - (MAG_COIL_LOOPS - 1) / 2.0) * 16)
+            cv2.ellipse(frame, (cx + off, cy), (13, r), 0, 0, 360,
+                        copper, 4, cv2.LINE_AA)
+
+        # Bulb: glow radius and brightness follow |current|.
+        bx, by = cx, cy - r - 60
+        cur = abs(self._cur)
+        cv2.line(frame, (cx - 16, cy - r), (bx - 8, by + 22),
+                 (200, 200, 200), 2, cv2.LINE_AA)
+        cv2.line(frame, (cx + 16, cy - r), (bx + 8, by + 22),
+                 (200, 200, 200), 2, cv2.LINE_AA)
+        if cur > 0.02:
+            glow = frame.copy()
+            cv2.circle(glow, (bx, by), int(22 + 46 * cur), (140, 235, 255),
+                       -1, cv2.LINE_AA)
+            cv2.addWeighted(glow, 0.55 * cur, frame, 1.0 - 0.55 * cur, 0,
+                            frame)
+        bulb_col = (int(90 + 165 * cur), int(160 + 95 * cur), 255) \
+            if cur > 0.02 else (70, 70, 70)
+        cv2.circle(frame, (bx, by), 20, bulb_col, -1, cv2.LINE_AA)
+        cv2.circle(frame, (bx, by), 20, (230, 230, 230), 2, cv2.LINE_AA)
+
+        # Galvanometer: needle deflects with the SIGNED current (Lenz).
+        gx, gy = cx, cy + r + 52
+        cv2.ellipse(frame, (gx, gy), (34, 34), 0, 180, 360, (30, 30, 30),
+                    -1, cv2.LINE_AA)
+        cv2.ellipse(frame, (gx, gy), (34, 34), 0, 180, 360, (200, 200, 200),
+                    2, cv2.LINE_AA)
+        ang = math.radians(-90) + self._cur * math.radians(60)
+        nx = gx + int(30 * math.cos(ang))
+        ny = gy + int(30 * math.sin(ang))
+        cv2.line(frame, (gx, gy), (nx, ny), (80, 220, 255), 2, cv2.LINE_AA)
+        cv2.putText(frame, "I", (gx - 5, gy + 16), cv2.FONT_HERSHEY_SIMPLEX,
+                    0.5, (220, 220, 220), 1, cv2.LINE_AA)
 
 
 # --- Vtuber / Puppet interactable ---------------------------------------

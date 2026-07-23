@@ -560,6 +560,74 @@ CHG_EQUIPOT_STEP = 900.0
 # and upscaled, mirroring the Waves fallback's approach.
 CHG_GRID_PX = 8
 
+# --- Magnets experiment (magnetostatics + induction) ---------------------
+# Pinch empty space to drop a bar magnet of the palette's orientation;
+# pinch a bar to drag it. A fixed pickup coil with a light bulb and a
+# galvanometer sits in the frame: moving a magnet changes the flux through
+# the coil and the induced current lights the bulb (Faraday's law), with
+# the deflection flipping sign on reversal (Lenz's law). A magnet held
+# still induces nothing, because only dPhi/dt matters. That is the lesson.
+#
+# FIELD model: exact 2D magnetostatics rather than a point dipole. Each bar
+# is a uniformly magnetized rectangle whose H field is that of its two pole
+# faces treated as "magnetic surface charge" segments; that has a closed
+# form (atan2 + log, the same integral as a charged rod in 2D). Inside the
+# bar the bound-magnetization term +M is added back (B = H + M, mu0 = 1),
+# so div B = 0 everywhere and field lines close S->N through the bar. Far
+# from the bar this converges to the 2D dipole (checked to <0.5% beyond
+# ~8 half-lengths); near and inside the bar, where visitors actually look,
+# it stays exact, which is precisely what the point-dipole shortcut gets
+# wrong. The browser evaluates it per needle cell in a single-pass shader
+# (web/src/gl/magnets.frag.glsl); the cv2 fallback vectorizes the same
+# closed form in numpy. Keep the two in sync with this block.
+#
+# INDUCTION model: PhET's faradays-electromagnetic-lab approach. Bx is
+# sampled on MAG_COIL_SAMPLES rows across the coil's vertical diameter,
+# single-loop flux = sum(Bx * chord * dy) (the chord is the loop's depth at
+# that row), EMF = -loops * dPhi/dt between frames, displayed current =
+# tanh(EMF / MAG_EMF_REF) with a short exponential smoothing so one noisy
+# frame cannot strobe the bulb. Python owns the magnet list AND the
+# flux/EMF computation; both renderers only draw what to_state() reports.
+MAG_MAX = 4                  # hard cap; also the shader's uniform array size
+                             # — keep web/src/gl/magnets.frag.glsl in sync
+MAG_GRAB_PAD_PX = 60         # pinch-grab radius around a bar's centre
+MAG_HALF_LEN_PX = 70.0       # bar half-length a (pole faces at x = +/- a)
+MAG_HALF_H_PX = 22.0         # bar half-height b
+# Palette: which way the bar is magnetized. m is the magnetization along +x;
+# the N pole is the face the field EXITS (x = +a when m > 0), so the label
+# reads left-to-right across the bar.
+MAG_TYPES = {
+    "sn": {"m": 1.0, "label": "S-N"},
+    "ns": {"m": -1.0, "label": "N-S"},
+}
+MAG_DEFAULT_KIND = "sn"
+# Smoothing width (px) of the inside-the-bar +M term. Without it the flux
+# jumps discontinuously the instant a pole face crosses a coil sample row,
+# and dPhi/dt then spikes with the step phase instead of the physics
+# (PhET's transitionSmoothingScale exists for exactly this).
+MAG_EDGE_SMOOTH_PX = 12.0
+# |B| that maps to a fully opaque compass needle, alpha = tanh(|B|/ref).
+# 0.03 saturates the needles within ~150 px of a unit bar and lets the far
+# field fade out instead of cluttering the frame.
+MAG_B_REF = 0.03
+MAG_NEEDLE_SPACING_PX = 38.0  # needle grid cell (px)
+MAG_NEEDLE_LEN_PX = 26.0      # needle length; < spacing so cells read apart
+# Pickup coil (fixed). Its plane is vertical, so the flux through it is the
+# Bx component. Kept inside EDGE_MARGIN_FRAC like every pinch target: the
+# coil itself is never grabbed, but magnets get dragged INTO it and the
+# hand doing that must stay fully in frame.
+MAG_COIL_X_FRAC = 0.70
+MAG_COIL_Y_FRAC = 0.52
+MAG_COIL_R_PX = 95.0
+MAG_COIL_LOOPS = 3
+MAG_COIL_SAMPLES = 9          # flux sample rows across the vertical diameter
+# EMF that maps to full displayed current, cur = tanh(EMF/ref). Measured on
+# this geometry: a 300 px/s head-on approach peaks ~1.4k, a 600 px/s pass
+# alongside the coil ~14k, and shoving the bar THROUGH the coil saturates,
+# as it physically should (B inside the bar dwarfs the outside field).
+MAG_EMF_REF = 8000.0
+MAG_CUR_SMOOTH_S = 0.12       # display smoothing time constant (s)
+
 # --- Spacetime experiment (relativistic gravity) -------------------------
 # The rubber-sheet picture, done honestly. Pinch empty space to drop a mass
 # and the grid sags into a well; pinch a mass to drag it and the curvature

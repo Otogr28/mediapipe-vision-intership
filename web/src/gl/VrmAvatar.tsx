@@ -22,7 +22,7 @@ import { setVrmReady } from "./vrmState";
 /**
  * VRM vtuber avatar (the model file is chosen by the `src` prop — see the
  * AVATARS registry in avatars.ts and the switcher in App.tsx; the default is
- * the CC0 "Sendagaya Shino" at /avatar.vrm), rendered with three.js +
+ * the first registry entry), rendered with three.js +
  * @pixiv/three-vrm as a WebGL layer. Mounted only while a vtuber object is
  * present (see App.tsx). Switching `src` remounts this component, so the old
  * VRM is disposed and the new one loaded fresh — the rig captures the new

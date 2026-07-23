@@ -10,9 +10,9 @@ from ui.button import Button
 from ui.cursor import PinchCursor
 from ui.debug_hud import DebugHUD
 from ui.hints import IntroOverlay, PinchHint
-from ui.interactables import (BlackHole, BouncingSphere, Charges, Orbitals,
-                              Puppet, SchrodingerCat, SixSevenCounter,
-                              Slingshot, Spacetime, Waves)
+from ui.interactables import (BlackHole, BouncingSphere, Charges, Magnets,
+                              Orbitals, Puppet, SchrodingerCat,
+                              SixSevenCounter, Slingshot, Spacetime, Waves)
 
 MENU_BTN_W, MENU_BTN_H = 260, 70
 RESET_W, RESET_H = 130, 50
@@ -21,7 +21,7 @@ RESET_W, RESET_H = 130, 50
 # web/src/gl/avatars.ts (the frontend maps this index to the .vrm file). The
 # pinch "Avatar" button cycles this list; the index rides to_state() so the
 # browser loads the matching model.
-AVATAR_NAMES = ["Shino", "Cool Alien", "Cool Banana", "Milk", "Agnes", "Stitch Witch"]
+AVATAR_NAMES = ["Cool Alien", "Cool Banana", "Milk", "Agnes", "Stitch Witch"]
 SPEED_BTN = 46          # square -/+ sim-speed buttons (top-right)
 SPEED_LABEL_W = 92      # readout pill between them ("1x", "0.25x", ...)
 # Corner-anchored buttons keep a healthy margin from the frame edges: to
@@ -102,9 +102,8 @@ class UIManager:
         self._menu_interactables_btn = Button(
             x=start_x, y=top_y,
             width=MENU_BTN_W, height=MENU_BTN_H,
-            label="Interactable Figures",
+            label="Games",
             on_click=lambda: self._set_state("interactables"),
-            font_scale=0.55,
         )
         self._menu_experiments_btn = Button(
             x=start_x + MENU_BTN_W + gap, y=top_y,
@@ -172,10 +171,17 @@ class UIManager:
             on_click=self._spawn_schrodinger,
             font_scale=0.6,
         )
+        # 8th experiment wraps to a second row: at the kiosk's 1280 px the
+        # first row is full (7 buttons end at ~1196 px).
+        self._magnets_btn = Button(
+            x=margin, y=margin + 50 + 10, width=150, height=50,
+            label="Magnets",
+            on_click=self._spawn_magnets,
+        )
         self._experiment_btns = [self._black_hole_btn, self._slingshot_btn,
                                  self._orbitals_btn, self._waves_btn,
                                  self._charges_btn, self._spacetime_btn,
-                                 self._schrodinger_btn]
+                                 self._schrodinger_btn, self._magnets_btn]
 
         # Sim-speed stepper, pinned top-right: [-] 1x [+]. Only shown while
         # the active experiment exposes a `time_scale` (the slingshot).
@@ -248,6 +254,9 @@ class UIManager:
 
     def _spawn_charges(self):
         self._active_experiment = Charges(self.frame_w, self.frame_h)
+
+    def _spawn_magnets(self):
+        self._active_experiment = Magnets(self.frame_w, self.frame_h)
 
     def _spawn_spacetime(self):
         self._active_experiment = Spacetime(self.frame_w, self.frame_h)
@@ -437,6 +446,7 @@ class UIManager:
                     self._charges_btn.to_state("exp.charges"),
                     self._spacetime_btn.to_state("exp.spacetime"),
                     self._schrodinger_btn.to_state("exp.schrodinger"),
+                    self._magnets_btn.to_state("exp.magnets"),
                 ]
             else:
                 exp_state = self._active_experiment.to_state()

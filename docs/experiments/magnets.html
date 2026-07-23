@@ -1,0 +1,133 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#0A1724">
+<title>Magnets · HalL</title>
+<meta name="description" content="The magnets experiment on the physics hall display: magnetic fields, Faraday's law and how a moving magnet makes electricity, explained in plain language.">
+<meta property="og:title" content="Magnets · HalL">
+<meta property="og:description" content="Drag bar magnets through a field of compass needles, and sweep one past a coil to make real electricity.">
+<meta property="og:image" content="https://otogr28.github.io/mediapipe-vision-intership/img/magnets.jpg">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ccircle cx='16' cy='16' r='13' fill='none' stroke='%2300B0DC' stroke-width='3'/%3E%3Ccircle cx='16' cy='16' r='5' fill='%23FFB84D'/%3E%3C/svg%3E">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600&family=Space+Grotesk:wght@500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="../style.css">
+</head>
+<body>
+
+<header class="mast">
+  <a href="../index.html" class="brand">HalL<span class="dot">.</span></a>
+  <span class="dept">Gordon College · Physics Hall</span>
+</header>
+
+<main class="wrap">
+
+  <section class="exp-head">
+    <div>
+      <p class="eyebrow">Magnetism · induction</p>
+      <h1>Magnets</h1>
+      <p class="lede">A magnet fills the space around it with a field of
+      its own, and when that field sweeps through a coil of wire,
+      electricity flows. Here you make that happen with one hand.</p>
+    </div>
+    <div class="exp-anim" aria-hidden="true">
+      <svg viewBox="0 0 128 128">
+        <path d="M 88,52 C 108,30 108,98 88,76" fill="none" stroke="#00b0dc"
+              stroke-width="1.6" stroke-dasharray="4 5" opacity="0.8">
+          <animate attributeName="stroke-dashoffset" values="18;0" dur="1.2s" repeatCount="indefinite"/>
+        </path>
+        <path d="M 40,52 C 20,30 20,98 40,76" fill="none" stroke="#00b0dc"
+              stroke-width="1.6" stroke-dasharray="4 5" opacity="0.8">
+          <animate attributeName="stroke-dashoffset" values="0;18" dur="1.2s" repeatCount="indefinite"/>
+        </path>
+        <path d="M 84,40 C 104,10 24,10 44,40" fill="none" stroke="#00b0dc"
+              stroke-width="1.6" stroke-dasharray="4 5" opacity="0.6">
+          <animate attributeName="stroke-dashoffset" values="18;0" dur="1.2s" repeatCount="indefinite"/>
+        </path>
+        <path d="M 84,88 C 104,118 24,118 44,88" fill="none" stroke="#00b0dc"
+              stroke-width="1.6" stroke-dasharray="4 5" opacity="0.6">
+          <animate attributeName="stroke-dashoffset" values="0;18" dur="1.2s" repeatCount="indefinite"/>
+        </path>
+        <rect x="40" y="52" width="24" height="24" rx="3" fill="#2f7fd6"/>
+        <rect x="64" y="52" width="24" height="24" rx="3" fill="#e0484f"/>
+        <text x="52" y="69" fill="#fff" font-size="13" font-weight="700"
+              text-anchor="middle" font-family="sans-serif">S</text>
+        <text x="76" y="69" fill="#fff" font-size="13" font-weight="700"
+              text-anchor="middle" font-family="sans-serif">N</text>
+      </svg>
+    </div>
+  </section>
+
+  <figure class="shot">
+    <img src="../img/magnets.jpg" width="1600" height="900"
+         alt="The magnets experiment: two bar magnets surrounded by a grid of small red and white compass needles, with a copper coil, a light bulb and a meter on the right.">
+    <figcaption>TWO BAR MAGNETS AND THEIR FIELD OF COMPASS NEEDLES. THE
+    COIL LIGHTS ITS BULB ONLY WHILE THE FIELD THROUGH IT IS CHANGING</figcaption>
+  </figure>
+
+  <h2>At the display</h2>
+  <ul class="do">
+    <li><strong>Pinch empty space</strong> to drop a bar magnet, choosing
+    S-N or N-S from the palette to set which way it points. The compass
+    needles around it snap to the new field at once.</li>
+    <li><strong>Drag a magnet toward the coil</strong> and the bulb lights
+    while the bar is moving. The faster you sweep, the brighter it
+    glows; hold still and it goes dark, however strong the magnet.</li>
+    <li><strong>Watch the meter under the coil</strong> as you push the
+    magnet in and pull it back out. The needle swings one way going in
+    and the other way coming out.</li>
+  </ul>
+
+  <h2>What's really happening</h2>
+  <p>Every magnet has two ends, a <strong>north pole</strong> and a
+  <strong>south pole</strong>. The screen scatters hundreds of tiny
+  compass needles around your magnets, and each needle turns to line up
+  with the field passing through its spot. Follow the red tips from
+  needle to needle and they trace closed loops: out of the north face,
+  around through the air, back in at the south face, and straight on
+  through the metal to complete the circuit. Cutting a magnet in half
+  gives two smaller magnets, each with both poles again; as far as anyone
+  has ever measured, the poles come only in pairs.</p>
+  <p>The coil is where the field becomes electricity. In 1831 Michael
+  Faraday discovered that a current appears in a loop of wire only while
+  the magnetic field threading it is <em>changing</em>. Physicists call
+  the amount of field through the loop the <strong>flux</strong>, and the
+  induced push on the charges grows with how fast that flux changes. A
+  magnet parked beside the coil induces nothing at all. A magnet in
+  motion drives the bulb, and the display computes the same flux a real
+  coil would feel, frame by frame, from the exact field of your bars.</p>
+  <p>The meter underneath adds the direction of the story. On the way in,
+  the current flows one way around the coil; on the way out, it reverses.
+  The induced current always opposes the change that created it, a rule
+  named after Heinrich Lenz, and that opposition is why a real generator
+  takes muscle, steam or falling water to keep turning.</p>
+
+  <aside class="fact">
+    <p><strong>Worth knowing:</strong> nearly every power station on
+    Earth, whether it burns coal, splits atoms, or catches wind and
+    water, ends in this same trick: something spins magnets past coils of
+    wire. The wireless pad that charges a phone plays it in miniature,
+    with a coil in the pad and a coil in the phone sharing a field that
+    changes thousands of times each second.</p>
+  </aside>
+
+  <div class="related">
+    <p>KEEP EXPLORING: <a href="charges.html">Charges</a> paints the
+    electric field that surrounds charges at rest, the other half of
+    electromagnetism. <a href="waves.html">Waves</a> shows what happens
+    when changing fields chase each other across space.</p>
+  </div>
+
+</main>
+
+<footer>
+  <div class="wrap">
+    <p><a href="../index.html">Back to all experiments</a></p>
+    <p>Built during a Physics Department summer internship at Gordon College.</p>
+  </div>
+</footer>
+
+</body>
+</html>

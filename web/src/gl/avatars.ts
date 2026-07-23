@@ -13,7 +13,6 @@ export interface AvatarDef {
 }
 
 export const AVATARS: AvatarDef[] = [
-  { name: "Shino", src: "/avatar.vrm" }, // CC0 VRoid sample (the original default)
   { name: "Cool Alien", src: "/avatars/CoolAlien.vrm" },
   { name: "Cool Banana", src: "/avatars/CoolBanana.vrm" },
   { name: "Milk", src: "/avatars/Milk.vrm" },

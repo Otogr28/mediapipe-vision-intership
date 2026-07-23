@@ -30,7 +30,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(
 import numpy as np  # noqa: E402
 
 from ui.interactables import (BlackHole, BouncingSphere, Charges,  # noqa: E402
-                              Orbitals, Puppet, SchrodingerCat,
+                              Magnets, Orbitals, Puppet, SchrodingerCat,
                               SixSevenCounter, Slingshot, Spacetime, Waves)
 
 W, H = 1280, 720
@@ -221,6 +221,61 @@ def check_spacetime_physics():
           " off-screen prune)")
 
 
+def check_magnets_physics():
+    """Assert the field model and the induction behave as the config MAG_*
+    block claims: exact 2D magnetostatics (far field = 2D dipole), zero EMF
+    for a resting magnet, and Lenz-sign current that flips with motion."""
+    import math
+    import time as _time
+
+    from config import MAG_HALF_H_PX, MAG_HALF_LEN_PX, MAG_TYPES  # noqa: E402
+
+    m = Magnets(W, H)
+    m.clear()
+    mg = m._place(W * 0.35, H * 0.5, "sn")
+
+    # Far field converges to the 2D dipole with moment M * (2a)(2b):
+    # B = m_dip/(2 pi r^2) * (2cos^2-1, 2 sin cos) in the bar's frame.
+    m_dip = MAG_TYPES["sn"]["m"] * (2 * MAG_HALF_LEN_PX) * (2 * MAG_HALF_H_PX)
+    for ang in (0.3, 1.2, 2.4, 4.0):
+        r = 9 * MAG_HALF_LEN_PX
+        px = mg.x + r * math.cos(ang)
+        py = mg.y + r * math.sin(ang)
+        bx, by = m.field_at(px, py)
+        c, s = math.cos(ang), math.sin(ang)
+        dx = m_dip / (2 * math.pi * r * r) * (2 * c * c - 1)
+        dy = m_dip / (2 * math.pi * r * r) * (2 * s * c)
+        err = math.hypot(bx - dx, by - dy) / math.hypot(dx, dy)
+        assert err < 0.02, f"far field vs 2D dipole off by {err:.1%} at {ang}"
+
+    # Field lines exit the N face and run S->N inside: Bx > 0 just outside
+    # BOTH pole faces and inside the bar (m > 0 means N on the right).
+    for px in (mg.x + MAG_HALF_LEN_PX + 10, mg.x - MAG_HALF_LEN_PX - 10, mg.x):
+        bx, _ = m.field_at(px, mg.y)
+        assert bx > 0, f"Bx must point +x on the axis (got {bx} at {px})"
+
+    # A resting magnet induces nothing.
+    for _ in range(12):
+        m.update(None, None)
+        _time.sleep(0.01)
+    assert abs(m._cur) < 0.05, f"resting magnet shows current {m._cur}"
+
+    # Motion induces; reversing the motion reverses the sign (Lenz).
+    def sweep(step):
+        for _ in range(18):
+            mg.x += step
+            m.update(None, None)
+            _time.sleep(0.01)
+        return m._cur
+
+    toward = sweep(+12)
+    away = sweep(-12)
+    assert abs(toward) > 0.1, f"approach induced ~nothing ({toward})"
+    assert toward * away < 0, f"no Lenz sign flip ({toward} vs {away})"
+    print("  ok    Magnets physics (far field = 2D dipole / axis Bx sign /"
+          " rest EMF ~ 0 / Lenz sign flip)")
+
+
 def check_schrodinger_logic():
     """Walk the full measurement cycle deterministically (no hands: the owner
     latch reads pinch_state(<unknown id>) -> released, which is exactly the
@@ -316,6 +371,10 @@ def main():
     chg._preset_dipole()
     cases.append(("Charges", chg, ()))
 
+    mag = Magnets(W, H)
+    mag._place(W * 0.25, H * 0.75, "ns")   # both orientations render
+    cases.append(("Magnets", mag, ()))
+
     st = Spacetime(W, H)
     st._preset_precession()
     st._place_mass(W * 0.75, H * 0.35, "bh")       # spinning body: Kerr paths
@@ -333,6 +392,11 @@ def main():
     except Exception:
         failed.append('Spacetime physics')
         print('  FAIL  Spacetime physics\n' + traceback.format_exc())
+    try:
+        check_magnets_physics()
+    except Exception:
+        failed.append('Magnets physics')
+        print('  FAIL  Magnets physics\n' + traceback.format_exc())
     try:
         check_schrodinger_logic()
     except Exception:

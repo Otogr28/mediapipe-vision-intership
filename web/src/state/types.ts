@@ -204,6 +204,41 @@ export interface ChargesObject {
   charges: PointCharge[];
 }
 
+export interface BarMagnet {
+  id: number;
+  x: number;
+  y: number;
+  /** magnetization along +x: +1 puts the N pole on the RIGHT face */
+  m: number;
+  grabbed: boolean;
+}
+
+export interface MagnetsObject {
+  type: "magnets";
+  /** bar half-length a (px) — pole faces sit at x = +/- a */
+  half_len: number;
+  /** bar half-height b (px) */
+  half_h: number;
+  /** smoothing width (px) of the inside-the-bar +M term */
+  edge_smooth: number;
+  /** |B| that maps to a fully opaque needle, alpha = tanh(|B|/b_ref) */
+  b_ref: number;
+  /** needle grid cell (px) */
+  needle_spacing: number;
+  /** needle length (px) */
+  needle_len: number;
+  /** palette selection for the next placed bar */
+  kind: "sn" | "ns";
+  count: number;
+  magnets: BarMagnet[];
+  /** fixed pickup coil (px); its plane is vertical, flux is Bx through it */
+  coil: { x: number; y: number; r: number; loops: number };
+  /** normalized induced current in [-1, 1] — bulb glow + galvanometer */
+  current: number;
+  /** raw EMF (screen units), informational */
+  emf: number;
+}
+
 export type SpacetimeKind = "sun" | "neutron" | "bh" | "orbiter";
 
 export interface SpacetimeMass {
@@ -367,6 +402,7 @@ export type SceneObject =
   | OrbitalsObject
   | WavesObject
   | ChargesObject
+  | MagnetsObject
   | SpacetimeObject
   | VtuberObject
   | SchrodingerObject;
@@ -396,6 +432,7 @@ export interface AppState {
       | "orbitals"
       | "waves"
       | "charges"
+      | "magnets"
       | "spacetime"
       | "schrodinger"
       | null;

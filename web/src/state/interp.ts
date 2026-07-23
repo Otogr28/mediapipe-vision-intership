@@ -130,6 +130,20 @@ export function interpolate(pair: SnapshotPair, now: number): AppState {
           }),
         };
       }
+      case "magnets": {
+        if (po.type !== "magnets") return o;
+        const prevMag = new Map(po.magnets.map((m) => [m.id, m]));
+        return {
+          ...o,
+          // Smooths the bulb glow + galvanometer between 30 Hz snapshots.
+          current: lerp(po.current, o.current, t),
+          magnets: o.magnets.map((m) => {
+            const pm = prevMag.get(m.id);
+            if (!pm) return m;
+            return { ...m, x: lerp(pm.x, m.x, t), y: lerp(pm.y, m.y, t) };
+          }),
+        };
+      }
       case "spacetime": {
         if (po.type !== "spacetime") return o;
         const prevMass = new Map(po.masses.map((m) => [m.id, m]));

@@ -39,6 +39,7 @@ EXPERIMENTS = [
     "charges",
     "spacetime",
     "schrodinger",
+    "magnets",
 ]
 
 BASE_URL = "https://otogr28.github.io/mediapipe-vision-intership"

@@ -11,11 +11,13 @@ import qrSlingshotUrl from "../assets/qr/slingshot.png";
 import qrOrbitalsUrl from "../assets/qr/orbitals.png";
 import qrWavesUrl from "../assets/qr/waves.png";
 import qrChargesUrl from "../assets/qr/charges.png";
+import qrMagnetsUrl from "../assets/qr/magnets.png";
 import qrSpacetimeUrl from "../assets/qr/spacetime.png";
 import qrSchrodingerUrl from "../assets/qr/schrodinger.png";
 import type {
   AppState,
   ChargesObject,
+  MagnetsObject,
   OrbitalsObject,
   SchrodingerObject,
   SlingshotObject,
@@ -799,6 +801,115 @@ function drawCharges(
     }
     ctx.stroke();
   }
+}
+
+// ---- magnets (bars + coil + bulb + galvanometer; the needle grid is the
+// ---- WebGL layer, gl/MagnetsLayer) -------------------------------------
+
+const MAG_N = "#f45a5a"; // N pole (matches the + charge red)
+const MAG_S = "#509bf5"; // S pole (matches the - charge blue)
+const MAG_COPPER = "#b87233";
+
+function drawMagnets(ctx: CanvasRenderingContext2D, o: MagnetsObject) {
+  const { coil } = o;
+
+  // Pickup coil: edge-on loops drawn as narrow vertical ellipses.
+  ctx.strokeStyle = MAG_COPPER;
+  ctx.lineWidth = 4;
+  for (let i = 0; i < coil.loops; i++) {
+    const off = (i - (coil.loops - 1) / 2) * 16;
+    ctx.beginPath();
+    ctx.ellipse(coil.x + off, coil.y, 13, coil.r, 0, 0, Math.PI * 2);
+    ctx.stroke();
+  }
+
+  // Wires from the coil up to the bulb.
+  const bx = coil.x;
+  const by = coil.y - coil.r - 60;
+  ctx.strokeStyle = "rgba(220,220,220,0.9)";
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.moveTo(coil.x - 16, coil.y - coil.r);
+  ctx.lineTo(bx - 8, by + 22);
+  ctx.moveTo(coil.x + 16, coil.y - coil.r);
+  ctx.lineTo(bx + 8, by + 22);
+  ctx.stroke();
+
+  // Bulb: glow scales with |current| (the backend already smoothed it).
+  const cur = o.current;
+  const mag = Math.abs(cur);
+  if (mag > 0.02) {
+    const glowR = 24 + 52 * mag;
+    const g = ctx.createRadialGradient(bx, by, 4, bx, by, glowR);
+    g.addColorStop(0, `rgba(255,240,170,${0.85 * mag})`);
+    g.addColorStop(1, "rgba(255,240,170,0)");
+    ctx.fillStyle = g;
+    ctx.beginPath();
+    ctx.arc(bx, by, glowR, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  ctx.fillStyle =
+    mag > 0.02
+      ? `rgba(255,${Math.round(215 + 40 * mag)},${Math.round(120 + 70 * mag)},1)`
+      : "rgba(70,70,70,1)";
+  ctx.beginPath();
+  ctx.arc(bx, by, 20, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.strokeStyle = "rgba(235,235,235,0.95)";
+  ctx.lineWidth = 2;
+  ctx.stroke();
+
+  // Galvanometer: the needle deflects with the SIGNED current, so pulling
+  // the magnet back swings it the other way (Lenz's law made visible).
+  const gx = coil.x;
+  const gy = coil.y + coil.r + 52;
+  ctx.fillStyle = "rgba(20,24,30,0.85)";
+  ctx.beginPath();
+  ctx.arc(gx, gy, 34, Math.PI, 2 * Math.PI);
+  ctx.closePath();
+  ctx.fill();
+  ctx.strokeStyle = "rgba(200,200,200,0.9)";
+  ctx.lineWidth = 2;
+  ctx.stroke();
+  ctx.strokeStyle = "rgba(160,160,160,0.8)";
+  ctx.lineWidth = 1.5;
+  for (const tick of [-1, -0.5, 0, 0.5, 1]) {
+    const a = -Math.PI / 2 + tick * (Math.PI / 3);
+    ctx.beginPath();
+    ctx.moveTo(gx + 28 * Math.cos(a), gy + 28 * Math.sin(a));
+    ctx.lineTo(gx + 33 * Math.cos(a), gy + 33 * Math.sin(a));
+    ctx.stroke();
+  }
+  const na = -Math.PI / 2 + cur * (Math.PI / 3);
+  ctx.strokeStyle = "#ffd45a";
+  ctx.lineWidth = 2.5;
+  ctx.lineCap = "round";
+  ctx.beginPath();
+  ctx.moveTo(gx, gy);
+  ctx.lineTo(gx + 30 * Math.cos(na), gy + 30 * Math.sin(na));
+  ctx.stroke();
+
+  // Magnet bars on top: blue S half, red N half, white letters.
+  const a = o.half_len;
+  const b = o.half_h;
+  for (const mg of o.magnets) {
+    const nRight = mg.m > 0;
+    ctx.fillStyle = nRight ? MAG_S : MAG_N;
+    ctx.fillRect(mg.x - a, mg.y - b, a, 2 * b);
+    ctx.fillStyle = nRight ? MAG_N : MAG_S;
+    ctx.fillRect(mg.x, mg.y - b, a, 2 * b);
+    ctx.strokeStyle = "rgba(255,255,255,0.95)";
+    ctx.lineWidth = mg.grabbed ? 3 : 1.5;
+    ctx.strokeRect(mg.x - a, mg.y - b, 2 * a, 2 * b);
+    ctx.fillStyle = "#ffffff";
+    ctx.font = "700 22px ui-sans-serif, system-ui, sans-serif";
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.fillText(nRight ? "S" : "N", mg.x - a / 2, mg.y + 1);
+    ctx.fillText(nRight ? "N" : "S", mg.x + a / 2, mg.y + 1);
+  }
+  ctx.textAlign = "left";
+  ctx.textBaseline = "alphabetic";
 }
 
 // ---- vtuber avatar (loading state) ------------------------------------
@@ -1719,6 +1830,9 @@ export function drawScene(
       case "charges":
         drawCharges(ctx, obj, _now);
         break;
+      case "magnets":
+        drawMagnets(ctx, obj);
+        break;
       case "spacetime":
         drawSpacetime(ctx, obj, state.frame.w, state.frame.h);
         break;
@@ -1753,6 +1867,7 @@ const QR_IMGS: Record<string, HTMLImageElement> = {
   orbitals: scatImg(qrOrbitalsUrl),
   waves: scatImg(qrWavesUrl),
   charges: scatImg(qrChargesUrl),
+  magnets: scatImg(qrMagnetsUrl),
   spacetime: scatImg(qrSpacetimeUrl),
   schrodinger: scatImg(qrSchrodingerUrl),
 };

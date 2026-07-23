@@ -9,7 +9,7 @@ Run from the repo root (needs the repo venv for cv2/numpy):
     uv run python web/scripts/mock_backend.py [scene]
 
 Scenes: menu (default), sphere, sixseven, slingshot, blackhole, picker,
-orbitals, orbaim, waves, charges, spacetime, vtuber, schrodinger.
+orbitals, orbaim, waves, charges, magnets, spacetime, vtuber, schrodinger.
 Then point the vite dev server at it:  npm run dev  (same port 8092).
 """
 
@@ -252,7 +252,7 @@ def scene_state(t):
         bw, bh, gap = 260, 70, 16
         sx = (W - 2 * bw - gap) // 2
         base["buttons"] = [
-            btn("menu.interactables", "Interactable Figures", sx, margin, bw, bh, hovered=hover),
+            btn("menu.interactables", "Games", sx, margin, bw, bh, hovered=hover),
             btn("menu.experiments", "Experiments", sx + bw + gap, margin, bw, bh),
         ]
         base["session"]["hint"] = {"visible": True}
@@ -492,6 +492,43 @@ def scene_state(t):
             "count": len(charges), "charges": charges,
         }]
 
+    elif SCENE == "magnets":
+        base["session"]["state"] = "experiments"
+        base["session"]["experiment"] = "magnets"
+        bw, bh, gap = 96, 46, 8
+        kinds = [("sn", "S-N"), ("ns", "N-S")]
+        for i, (k, lab) in enumerate(kinds):
+            b = btn(f"mag.type.{k}", lab, margin + i * (bw + gap), margin,
+                    bw, bh)
+            b["selected"] = (k == "sn")
+            base["buttons"].append(b)
+        base["buttons"] += [
+            btn("mag.clear", "Clear", margin + 2 * (bw + gap), margin,
+                bw, bh),
+            btn("reset", "Reset", W - 130 - margin, H - 50 - margin, 130, 50),
+        ]
+        # One bar sweeping toward/away from the coil (its faked current is
+        # the motion's derivative, so bulb + galvanometer breathe with it)
+        # plus a parked flipped bar so both orientations render.
+        coil_x, coil_y = W * 0.70, H * 0.52
+        sweep = math.sin(t * 0.8)
+        mags = [
+            {"id": 0, "x": round(coil_x - 330 + 140 * sweep, 1),
+             "y": round(coil_y, 1), "m": 1.0, "grabbed": int(t) % 4 == 0},
+            {"id": 1, "x": W * 0.22, "y": H * 0.78, "m": -1.0,
+             "grabbed": False},
+        ]
+        cur = round(0.8 * math.cos(t * 0.8), 3)
+        base["objects"] = [{
+            "type": "magnets", "half_len": 70.0, "half_h": 22.0,
+            "edge_smooth": 12.0, "b_ref": 0.03, "needle_spacing": 38.0,
+            "needle_len": 26.0, "kind": "sn", "count": len(mags),
+            "magnets": mags,
+            "coil": {"x": round(coil_x, 1), "y": round(coil_y, 1),
+                     "r": 95.0, "loops": 3},
+            "current": cur, "emf": round(cur * 8000.0, 1),
+        }]
+
     elif SCENE == "spacetime":
         base["session"]["state"] = "experiments"
         base["session"]["experiment"] = "spacetime"
@@ -687,7 +724,7 @@ def scene_state(t):
         base["session"]["show_points"] = show_points
         # Cycle the avatar every 5 s so the state-driven switcher is testable
         # (the real backend sets this from the "Avatar" pinch button).
-        base["session"]["avatar_index"] = int(t / 5) % 6
+        base["session"]["avatar_index"] = int(t / 5) % 5
         pbtn = btn("points", "Points", margin, H - 50 - margin, 150, 50)
         pbtn["selected"] = show_points
         base["buttons"].append(pbtn)
