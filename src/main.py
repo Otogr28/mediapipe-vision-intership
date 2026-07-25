@@ -203,6 +203,15 @@ def main():
                     pose_smoother.reset()
                     last_pose_obj = None
 
+                # UI first, drawing second. The mirrored frame goes into
+                # update() as well — attract mode's presence detector reads
+                # motion off it to notice somebody walking up with their
+                # hands down, which no landmark model can see — and it has
+                # to be the CAMERA image, before any skeleton is painted on
+                # top of it.
+                ui.update(hand_result, pose_landmarks, hand_received_t,
+                          frame=flip_frame)
+
                 # Web mode streams the RAW frame — the browser draws the
                 # skeleton and all UI from the published state instead.
                 if publish_state is None:
@@ -214,7 +223,6 @@ def main():
                             draw_landmarks(hand_result.hand_landmarks[i], flip_frame)
                             draw_connections(hand_result.hand_landmarks[i], flip_frame, hand_connections)
 
-                ui.update(hand_result, pose_landmarks, hand_received_t)
                 if publish_state is None:
                     ui.draw(flip_frame)
                 else:

@@ -19,7 +19,12 @@ export interface HandState {
   press_cursor: Vec2;
   state: PinchPhase;
   progress: number;
+  /** the combined ratio the state machine ran on, always in PINCH units
+   *  whichever gesture produced it (see gestures._combined_ratio) */
   ratio: number | null;
+  /** each gesture in its own units, for the debug HUD's tuning readout */
+  pinch_ratio?: number | null;
+  fist_ratio?: number | null;
   pinching: boolean;
   held: boolean;
   /** ms since this hand was last seen; > ~200 means a grace-window ghost */
@@ -417,8 +422,57 @@ export interface DebugState {
   hand_fps: number;
   age_ms: number;
   backend: string;
+  /** HALL_GESTURE — which gesture(s) close the cursor */
+  gesture?: GestureMode;
   close_ratio: number;
   release_ratio: number;
+  fist_close_ratio?: number;
+  fist_release_ratio?: number;
+  /** what attract mode's presence detector currently sees */
+  presence?: {
+    present: boolean;
+    /** fraction of the frame differing from the learned background */
+    motion: number;
+    source: "hand" | "pose" | "motion" | null;
+  } | null;
+}
+
+/** HALL_GESTURE: which gesture closes the cursor. */
+export type GestureMode = "pinch" | "fist" | "either";
+
+/**
+ * Attract phase — one level ABOVE `session.state`:
+ * - "attract"  nobody there; the slideshow covers the camera
+ * - "greeting" somebody just walked up; "Hi" + the gesture demo
+ * - "live"     `session.state` means something
+ */
+export type SessionPhase = "attract" | "greeting" | "live";
+
+export interface AttractSlide {
+  /** served by the backend out of ATTRACT_DIR (see output.WebSink) */
+  src: string;
+  title: string;
+  caption: string;
+}
+
+export interface AttractState {
+  title: string;
+  prompt: string;
+  index: number;
+  /** slide being faded OUT; equals `index` when there is no fade */
+  prev: number;
+  /** 1.0 = fully on `index` */
+  fade: number;
+  slides: AttractSlide[];
+}
+
+export interface GreetingState {
+  title: string;
+  subtitle: string;
+  hint: string;
+  /** seconds since the greeting started */
+  t: number;
+  duration: number;
 }
 
 export interface AppState {
@@ -441,7 +495,19 @@ export interface AppState {
       | "spacetime"
       | "schrodinger"
       | null;
-    hint: { visible: boolean };
+    /** attract phase; absent on backends predating attract mode → "live" */
+    phase?: SessionPhase;
+    /** non-null only while phase === "attract" */
+    attract?: AttractState | null;
+    /** non-null only while phase === "greeting" */
+    greeting?: GreetingState | null;
+    /** which gesture(s) close the cursor, and which one the onboarding
+     *  hands should act out. Absent on older backends → pinch. */
+    gesture?: GestureMode;
+    demo_gesture?: "pinch" | "fist";
+    /** `text` rides along so the words match the gesture the detector is
+     *  watching for; absent on older backends → the pinch wording. */
+    hint: { visible: boolean; text?: string };
     /** vtuber "Points" toggle — hide the avatar + draw the raw skeleton */
     show_points?: boolean;
     /** which vtuber avatar to load (index into AVATARS); set by the backend's

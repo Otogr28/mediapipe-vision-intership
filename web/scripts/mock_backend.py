@@ -8,8 +8,9 @@ Run from the repo root (needs the repo venv for cv2/numpy):
 
     uv run python web/scripts/mock_backend.py [scene]
 
-Scenes: menu (default), sphere, sixseven, slingshot, blackhole, picker,
-orbitals, orbaim, waves, charges, magnets, spacetime, vtuber, schrodinger.
+Scenes: menu (default), attract, greeting, sphere, sixseven, slingshot,
+blackhole, picker, orbitals, orbaim, waves, charges, magnets, spacetime,
+vtuber, schrodinger.
 Then point the vite dev server at it:  npm run dev  (same port 8092).
 """
 
@@ -26,6 +27,43 @@ import numpy as np
 W, H = 1280, 720
 PORT = 8092
 SCENE = sys.argv[1] if len(sys.argv) > 1 else "menu"
+
+# Mirrors config.GESTURE_MODE / DEMO_GESTURE / HINT_TEXT, so the onboarding
+# hands the mock renders are the ones the real backend would ask for. Set
+# HALL_GESTURE=pinch here too to preview the other demo hand.
+GESTURE = os.environ.get("HALL_GESTURE", "either")
+DEMO_GESTURE = "pinch" if GESTURE == "pinch" else "fist"
+HINT_TEXT = ("Pinch your fingers to interact" if DEMO_GESTURE == "pinch"
+             else "Close your hand to interact")
+
+# Attract slides. Served straight off disk by this mock's /attract/ route,
+# the same path the real WebSink serves them from.
+ATTRACT_DIR = os.path.join(os.path.dirname(os.path.dirname(
+    os.path.dirname(os.path.abspath(__file__)))), "docs", "img")
+_SLIDE_TEXT = {
+    "black_hole": ("Black Hole",
+                   "Light bends around a mass so dense it has no surface"),
+    "slingshot": ("Slingshot",
+                  "Pull, aim, release — gravity and drag do the rest"),
+    "orbitals": ("Orbitals",
+                 "Launch worlds and watch gravity pull them into orbit"),
+    "waves": ("Waves", "Drop sources in a ripple tank and interfere them"),
+    "charges": ("Charges",
+                "Place charges and see the electric field they make"),
+    "magnets": ("Magnets", "Move a magnet through a coil and light a bulb"),
+    "spacetime": ("Spacetime",
+                  "Mass curves the sheet that everything else falls along"),
+    "schrodinger": ("Quantum Cat",
+                    "Measure the atom and the cat stops being both"),
+}
+ATTRACT_SLIDES = [
+    {"src": "/attract/" + name,
+     "title": _SLIDE_TEXT.get(os.path.splitext(name)[0],
+                              (os.path.splitext(name)[0], ""))[0],
+     "caption": _SLIDE_TEXT.get(os.path.splitext(name)[0], ("", ""))[1]}
+    for name in sorted(os.listdir(ATTRACT_DIR))
+    if name.lower().endswith((".jpg", ".jpeg", ".png", ".webp"))
+] if os.path.isdir(ATTRACT_DIR) else []
 # spacetime: set HALL_MOCK_YAW=0 to freeze the camera at the default view.
 MOCK_YAW = os.environ.get("HALL_MOCK_YAW", "1") == "1"
 
@@ -243,12 +281,43 @@ def scene_state(t):
     margin = int(H * 0.12)
     hover = int(t) % 2 == 0
     base = {
-        "session": {"state": "menu", "experiment": None,
-                    "hint": {"visible": False}},
+        "session": {"state": "menu", "experiment": None, "phase": "live",
+                    "attract": None, "greeting": None,
+                    "gesture": GESTURE, "demo_gesture": DEMO_GESTURE,
+                    "hint": {"visible": False, "text": HINT_TEXT}},
         "buttons": [], "speed": None, "objects": [],
     }
 
-    if SCENE == "menu":
+    if SCENE == "attract":
+        # The idle exhibit. Slides advance on the mock's own clock at the
+        # real ATTRACT_SLIDE_S / ATTRACT_FADE_S, so the cross-fade can be
+        # judged without waiting out a 25 s absence in front of a camera.
+        slide_s, fade_s = 7.0, 1.2
+        n = max(len(ATTRACT_SLIDES), 1)
+        index = int(t // slide_s) % n
+        into = t % slide_s
+        faded = into >= fade_s or t < slide_s
+        base["session"]["phase"] = "attract"
+        base["session"]["attract"] = {
+            "title": "Physics Hall",
+            "prompt": "Step closer to control this display with your hand",
+            "index": index,
+            "prev": index if faded else (index - 1) % n,
+            "fade": 1.0 if faded else round(into / fade_s, 3),
+            "slides": ATTRACT_SLIDES,
+        }
+
+    elif SCENE == "greeting":
+        base["session"]["phase"] = "greeting"
+        base["session"]["greeting"] = {
+            "title": "Hi",
+            "subtitle": "This display is controlled with your hand",
+            "hint": HINT_TEXT,
+            "t": round(t % 5.0, 2),
+            "duration": 5.0,
+        }
+
+    elif SCENE == "menu":
         bw, bh, gap = 260, 70, 16
         sx = (W - 2 * bw - gap) // 2
         base["buttons"] = [
@@ -775,7 +844,13 @@ class Handler(BaseHTTPRequestHandler):
                         "hands": [fake_hand(t)], "pose": None,
                         "debug": {"render_fps": 30.0, "hand_fps": 30.0,
                                   "age_ms": 15.0, "backend": "mock",
-                                  "close_ratio": 0.45, "release_ratio": 0.9},
+                                  "gesture": GESTURE,
+                                  "close_ratio": 0.45, "release_ratio": 0.9,
+                                  "fist_close_ratio": 1.05,
+                                  "fist_release_ratio": 1.30,
+                                  "presence": {"present": True,
+                                               "motion": 0.12,
+                                               "source": "hand"}},
                     }
                     state.update(scene_state(t))
                     payload = json.dumps(state, separators=(",", ":"))
@@ -783,6 +858,18 @@ class Handler(BaseHTTPRequestHandler):
                     time.sleep(1 / 30)
             except (BrokenPipeError, ConnectionResetError):
                 pass
+        elif self.path.startswith("/attract/"):
+            full = os.path.join(ATTRACT_DIR, os.path.basename(self.path))
+            if not os.path.isfile(full):
+                self.send_error(404)
+                return
+            with open(full, "rb") as f:
+                body = f.read()
+            self.send_response(200)
+            self.send_header("Content-Type", "image/jpeg")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
         elif self.path == "/healthz":
             body = b"ok\n"
             self.send_response(200)

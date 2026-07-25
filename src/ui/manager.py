@@ -1,18 +1,22 @@
 import os
+import time
 
 import cv2
 
-from config import (DEBUG_HUD, POSE_ENABLED, QR_BOX_FRAC, QR_DIR,
+from config import (ATTRACT_ENABLED, ATTRACT_IDLE_S, DEBUG_HUD, DEMO_GESTURE,
+                    GESTURE_MODE, HINT_TEXT, POSE_ENABLED, QR_BOX_FRAC, QR_DIR,
                     QR_MARGIN_FRAC, START_VTUBER)
-from detection.gestures import update_pinches
+from detection.gestures import pinch_infos, update_pinches
 from rendering.gl_lensing import LensingRenderer
+from ui.attract import AttractScreen, Greeting
 from ui.button import Button
 from ui.cursor import PinchCursor
 from ui.debug_hud import DebugHUD
-from ui.hints import IntroOverlay, PinchHint
+from ui.hints import GestureHint, IntroOverlay
 from ui.interactables import (BlackHole, BouncingSphere, Charges, Magnets,
                               Orbitals, Puppet, SchrodingerCat,
                               SixSevenCounter, Slingshot, Spacetime, Waves)
+from ui.presence import PresenceDetector
 
 MENU_BTN_W, MENU_BTN_H = 260, 70
 RESET_W, RESET_H = 130, 50
@@ -39,6 +43,13 @@ class UIManager:
         self.frame_w = frame_w
         self.frame_h = frame_h
         self.state = "menu"
+        # Attract phase, one level ABOVE `state`: "attract" (nobody there,
+        # slideshow), "greeting" (somebody just arrived, being shown the
+        # gesture) or "live" (`state` means something). Kept separate so
+        # every existing state/button/scene branch below is untouched — the
+        # exhibit's idle behaviour is a wrapper around the app, not a mode
+        # inside it. HALL_ATTRACT=0 pins it to "live" forever.
+        self.phase = "attract" if ATTRACT_ENABLED else "live"
         # False in web mode: the backend never creates a GL context — the
         # browser's WebGL port of the lensing shader renders the black hole
         # from to_state()'s parameters instead.
@@ -70,11 +81,24 @@ class UIManager:
         # keeps startup cost out of the camera-only path.
         self._lensing_renderer = None
 
-        # Onboarding overlays. The intro splash plays once at startup; the
-        # bottom-right pinch hint shows until the user first interacts.
-        self._intro = IntroOverlay(frame_w, frame_h)
-        self._pinch_hint = PinchHint(frame_w, frame_h)
+        # Onboarding overlays. The bottom-right hint shows until the user
+        # first interacts. The startup splash exists only when attract mode
+        # is OFF: with it on, the greeting is a better version of the same
+        # thing — it plays for each visitor instead of once per boot, which
+        # nobody but the person who turned the exhibit on would ever see.
+        self._intro = None if ATTRACT_ENABLED else IntroOverlay(frame_w,
+                                                                frame_h)
+        self._pinch_hint = GestureHint(frame_w, frame_h)
         self._has_interacted = False
+
+        # Attract mode: is anybody there, and what to show while nobody is.
+        self._presence = PresenceDetector()
+        self._attract = AttractScreen(frame_w, frame_h)
+        self._greeting = Greeting(frame_w, frame_h)
+        # When presence was last seen. Absence has to persist for
+        # ATTRACT_IDLE_S before the exhibit gives up on the current visitor,
+        # so stepping out of frame to fetch a friend does not reset it.
+        self._last_present_t = time.monotonic()
 
         # Always-on pinch cursor (progress ring + click flash) and the
         # optional HALL_DEBUG=1 pipeline HUD.
@@ -290,6 +314,63 @@ class UIManager:
         self._points_btn.selected = False
         self.state = "menu"
 
+    # --- attract phase ----------------------------------------------------
+
+    def _enter_greeting(self, now):
+        """Somebody just walked up: hand them a clean exhibit and say hi.
+
+        The reset is the point. Without it every visitor inherits whatever
+        the last one abandoned — a dragged black hole, a menu three levels
+        deep — and has no idea it is not the exhibit's normal state. The
+        onboarding hint is rebuilt too, since it retires after ONE person
+        interacts and the next person has not.
+        """
+        self._reset()
+        self._has_interacted = False
+        self._pinch_hint = GestureHint(self.frame_w, self.frame_h)
+        self._greeting.enter(now)
+        self.phase = "greeting"
+
+    def _enter_attract(self, now):
+        self._reset()
+        self._attract.enter(now)
+        self.phase = "attract"
+
+    def _gesture_fired(self):
+        """True on a frame where any hand completed a closing gesture."""
+        return any(m.pinching for _hid, m in pinch_infos())
+
+    def _update_phase(self, hand_result, pose_landmarks, frame):
+        """Advance attract -> greeting -> live -> attract."""
+        if not ATTRACT_ENABLED or START_VTUBER:
+            self.phase = "live"
+            return
+
+        now = time.monotonic()
+        if self._presence.update(frame, hand_result, pose_landmarks, now):
+            self._last_present_t = now
+
+        if self.phase == "attract":
+            if self._presence.present:
+                self._enter_greeting(now)
+        elif self.phase == "greeting":
+            # Making the gesture is a better way out than waiting for a bar
+            # to fill: a visitor who has already understood the instruction
+            # should not be held at it. Buttons are not updated during the
+            # greeting, so the same gesture cannot also press something.
+            if self._greeting.done(now) or self._gesture_fired():
+                self.phase = "live"
+        elif now - self._last_present_t > ATTRACT_IDLE_S:
+            self._enter_attract(now)
+
+    def presence_state(self):
+        """What the presence detector currently sees — debug-block payload.
+
+        Exposed as a method so `web/state.py` does not reach into the
+        manager's internals for it (the debug HUD is the only consumer).
+        """
+        return self._presence.to_state()
+
     def wants_pose(self):
         """True when an active feature needs body-pose inference right now —
         the Vtuber puppet (its arms follow shoulder→elbow→wrist) or the
@@ -322,7 +403,8 @@ class UIManager:
         else:
             exp.speed_down()
 
-    def update(self, hand_result, pose_landmarks, hand_received_t=None):
+    def update(self, hand_result, pose_landmarks, hand_received_t=None,
+               frame=None):
         # Advance every hand's pinch state machine exactly once per frame;
         # buttons and interactables then read the shared snapshot through
         # pinch_state()/pinch_info(). `hand_received_t` (the monotonic
@@ -337,6 +419,17 @@ class UIManager:
             self.state = "interactables"
             if self._puppet is None:
                 self._spawn_puppet()
+
+        # `frame` (the mirrored camera image) is the motion signal presence
+        # runs on; it is optional so a caller without one still gets the
+        # hand/pose signals.
+        self._update_phase(hand_result, pose_landmarks, frame)
+        if self.phase != "live":
+            # Nothing below is reachable without a visitor: no buttons to
+            # press, no scene to step. Hide the onboarding hint so it does
+            # not surface over the slideshow or the greeting.
+            self._pinch_hint.update(False, self._has_interacted)
+            return
 
         if self.state == "menu":
             self._menu_interactables_btn.update(hand_result, pose_landmarks, self.frame_w, self.frame_h)
@@ -414,6 +507,13 @@ class UIManager:
         speed = None
         experiment = None
 
+        if self.phase != "live":
+            # Nobody to press anything: the browser renders the slideshow or
+            # the greeting from `session` alone, and the live UI stays gone
+            # rather than sitting greyed out behind it.
+            return {"session": self._session_state(None), "buttons": [],
+                    "speed": None, "objects": []}
+
         if self.state == "menu":
             buttons = [
                 self._menu_interactables_btn.to_state("menu.interactables"),
@@ -466,19 +566,40 @@ class UIManager:
             buttons.append(self._reset_btn.to_state("reset"))
 
         return {
-            "session": {
-                "state": self.state,
-                "experiment": experiment,
-                "hint": {"visible": self._pinch_hint.visible},
-                # Web-only: hide the avatar + draw the raw pose/hand skeleton.
-                "show_points": self._show_points,
-                # Which vtuber avatar the frontend should load (index into
-                # web/src/gl/avatars.ts). Cycled by the "Avatar" pinch button.
-                "avatar_index": self._avatar_index,
-            },
+            "session": self._session_state(experiment),
             "buttons": buttons,
             "speed": speed,
             "objects": objects,
+        }
+
+    def _session_state(self, experiment):
+        """The `session` block, identical in shape across every phase."""
+        return {
+            "state": self.state,
+            "experiment": experiment,
+            # Attract phase — "attract", "greeting" or "live". The two
+            # payloads below are non-null only in their own phase, so an
+            # idle exhibit's state document stays a few hundred bytes.
+            "phase": self.phase,
+            "attract": (self._attract.to_state()
+                        if self.phase == "attract" else None),
+            "greeting": (self._greeting.to_state()
+                         if self.phase == "greeting" else None),
+            # Which gesture closes the cursor (HALL_GESTURE), and which one
+            # the onboarding hands should act out. The browser draws its demo
+            # from these, so the picture cannot disagree with the detector.
+            "gesture": GESTURE_MODE,
+            "demo_gesture": DEMO_GESTURE,
+            # The words next to the demo hand travel with it, so the
+            # browser never hardcodes a sentence about pinching while
+            # the detector is watching for a fist.
+            "hint": {"visible": self._pinch_hint.visible,
+                     "text": HINT_TEXT},
+            # Web-only: hide the avatar + draw the raw pose/hand skeleton.
+            "show_points": self._show_points,
+            # Which vtuber avatar the frontend should load (index into
+            # web/src/gl/avatars.ts). Cycled by the "Avatar" pinch button.
+            "avatar_index": self._avatar_index,
         }
 
     def _draw_speed_label(self, frame):
@@ -554,6 +675,13 @@ class UIManager:
                     scale, (122, 128, 136), 2, cv2.LINE_AA)
 
     def draw(self, frame):
+        if self.phase == "attract":
+            # The slideshow REPLACES the camera image — see ui/attract.py.
+            self._attract.draw(frame)
+            if self._debug_hud is not None:
+                self._debug_hud.draw(frame, self.presence_state())
+            return
+
         if self.state == "menu":
             self._menu_interactables_btn.draw(frame)
             self._menu_experiments_btn.draw(frame)
@@ -595,13 +723,16 @@ class UIManager:
         # exact point — and the progress — the detector sees.
         self._pinch_cursor.draw(frame)
 
-        # Onboarding overlays sit on top of the scene. The bottom-right hint
-        # yields to the intro splash so they never stack.
-        if self._intro.active:
+        # Onboarding overlays sit on top of the scene, one at a time. The
+        # greeting outranks both: it is the one a visitor is actually looking
+        # at, and it draws over the live menu appearing behind it.
+        if self.phase == "greeting":
+            self._greeting.draw(frame)
+        elif self._intro is not None and self._intro.active:
             self._intro.draw(frame)
         else:
             self._pinch_hint.draw(frame)
 
         # The debug HUD (HALL_DEBUG=1) draws dead-last, above everything.
         if self._debug_hud is not None:
-            self._debug_hud.draw(frame)
+            self._debug_hud.draw(frame, self.presence_state())

@@ -1,7 +1,14 @@
 """High-level gestures derived from raw MediaPipe landmarks.
 
-The only gesture implemented is the thumb-index **pinch**, built from the
-techniques production hand-tracking stacks use:
+Two closing gestures share one state machine, selected by ``HALL_GESTURE``
+(``config.GESTURE_MODE``): the thumb-index **pinch** and the whole-hand
+**fist**. ``"either"`` (the default) closes on whichever the visitor makes.
+Both are reduced to a single ``ratio`` in the pinch's units before the
+machine sees them, so the hysteresis, debounce, ``progress`` and every
+downstream consumer are identical whichever gesture fired — see
+``_combined_ratio``.
+
+The pipeline is built from the techniques production hand-tracking stacks use:
 
 * **Per-frame snapshot.** ``update_pinches()`` advances one state machine per
   hand exactly once per rendered frame; every consumer (buttons, spheres,
@@ -22,7 +29,16 @@ techniques production hand-tracking stacks use:
 * **One-Euro filtering** (Casiez, Roussel & Vogel, CHI 2012) on both the
   pinch ratio and the cursor: heavy smoothing at rest kills the jitter,
   light smoothing during fast motion keeps latency invisible.
-* **Thumb-anchored cursor**: the cursor rides the THUMB TIP (landmark 4).
+* **Fist = finger curl, measured as a ratio of two wrist distances**:
+  ``|tip - wrist| / |MCP - wrist|`` per finger, averaged over index, middle,
+  ring and pinky. Both distances foreshorten together when the hand tilts
+  toward the camera, so unlike a raw finger length the metric survives hand
+  orientation, and it needs no size reference at all. The thumb is left out:
+  it folds ACROSS the palm rather than into it, so its own ratio barely
+  moves between an open hand and a fist. Thresholds in ``config``
+  (``FIST_CLOSE_RATIO`` / ``FIST_RELEASE_RATIO``).
+* **Thumb-anchored cursor** (``HALL_GESTURE=pinch`` only): the cursor rides
+  the THUMB TIP (landmark 4).
   In a thumb-index pinch the index does most of the closing travel while
   the thumb stays comparatively still, so anchoring on the thumb keeps the
   dot on the finger the user aims with and nearly motionless through the
@@ -57,7 +73,8 @@ techniques production hand-tracking stacks use:
 import math
 import time
 
-from config import (PINCH_CLOSE_RATIO, PINCH_CURSOR_BETA,
+from config import (FIST_CLOSE_RATIO, FIST_CURSOR_LANDMARK, FIST_RELEASE_RATIO,
+                    GESTURE_MODE, PINCH_CLOSE_RATIO, PINCH_CURSOR_BETA,
                     PINCH_CURSOR_COMPENSATE, PINCH_CURSOR_MIN_CUTOFF,
                     PINCH_CURSOR_THUMB_OFFSET_X, PINCH_CURSOR_THUMB_OFFSET_Y,
                     PINCH_DEBOUNCE_CLOSE_FRAMES, PINCH_DEBOUNCE_RELEASE_FRAMES,
@@ -65,10 +82,21 @@ from config import (PINCH_CLOSE_RATIO, PINCH_CURSOR_BETA,
                     PINCH_RATIO_MIN_CUTOFF, PINCH_RELEASE_RATIO,
                     PINCH_TRACK_GRACE_S, PINCH_Z_WEIGHT)
 
-PINCH_LANDMARK_A = 4   # thumb tip (hand) — also the cursor anchor
+PINCH_LANDMARK_A = 4   # thumb tip (hand) — the cursor anchor in "pinch" mode
 PINCH_LANDMARK_B = 8   # index finger tip (hand)
 
 THUMB_MCP = 2          # base of the thumb ray for the cursor offset
+
+WRIST = 0
+# (tip, MCP) per finger for the curl ratio. The thumb (4, 2) is deliberately
+# absent — it folds across the palm, not into it, so its ratio hardly moves.
+CURL_FINGERS = ((8, 5), (12, 9), (16, 13), (20, 17))
+
+# Only the thumb-index pinch justifies the thumb-tip anchor and its
+# counter-movement compensation: they exist to cancel the travel of the ONE
+# finger that closes. When the whole hand closes there is no such finger, so
+# the cursor sits on the palm knuckle instead (a point the fingers cannot move).
+USE_THUMB_ANCHOR = GESTURE_MODE == "pinch"
 
 HAND_SCALE_KNUCKLE_A = 5     # index finger MCP (knuckle)
 HAND_SCALE_KNUCKLE_B = 17    # pinky MCP (knuckle)
@@ -141,6 +169,87 @@ def hand_scale(hand_landmarks, frame_w, frame_h):
     return max(knuckle, palm * HAND_SCALE_PALM_FACTOR)
 
 
+def _dist3(a, b, frame_w, frame_h):
+    """Landmark distance in pixels, with ``z`` mixed in at ``PINCH_Z_WEIGHT``.
+
+    ``z`` is wrist-relative in ~x-normalized units, so ``frame_w`` puts it in
+    the same pixels as dx/dy; a backend that omits it degrades to pure 2D.
+    """
+    dx = (a.x - b.x) * frame_w
+    dy = (a.y - b.y) * frame_h
+    dz = (getattr(a, "z", 0.0) - getattr(b, "z", 0.0)) * frame_w * PINCH_Z_WEIGHT
+    return math.sqrt(dx * dx + dy * dy + dz * dz)
+
+
+def pinch_ratio(hand_landmarks, frame_w, frame_h, scale):
+    """Thumb-index tip distance over the hand's own size (see ``hand_scale``).
+
+    Falls below ``PINCH_CLOSE_RATIO`` as the two fingertips meet.
+    """
+    return _dist3(hand_landmarks[PINCH_LANDMARK_A],
+                  hand_landmarks[PINCH_LANDMARK_B], frame_w, frame_h) / scale
+
+
+def fist_ratio(hand_landmarks, frame_w, frame_h):
+    """How OPEN the hand is: mean of ``|tip - wrist| / |MCP - wrist|`` over
+    index, middle, ring and pinky.
+
+    ~1.85 with the fingers straight out, ~1.6 relaxed, ~0.7 in a deliberate
+    fist, on any hand at any camera distance — both distances share the same
+    wrist origin, so hand size cancels and foreshortening affects numerator
+    and denominator together. A fist reads well below 1 because each tip
+    folds back PAST its own knuckle, which is what separates it cleanly from
+    every half-curled pose. Returns ``None`` if the knuckles are degenerate
+    (a hand seen edge-on can collapse |MCP - wrist| to nothing), which the
+    caller treats as "no fist reading this frame" rather than a closed hand.
+    """
+    wrist = hand_landmarks[WRIST]
+    total = 0.0
+    for tip_i, mcp_i in CURL_FINGERS:
+        base = _dist3(hand_landmarks[mcp_i], wrist, frame_w, frame_h)
+        if base <= 1e-6:
+            return None
+        total += _dist3(hand_landmarks[tip_i], wrist, frame_w, frame_h) / base
+    return total / len(CURL_FINGERS)
+
+
+# The fist's open/closed band mapped onto the pinch's, so ONE ratio in pinch
+# units drives the state machine whichever gesture produced it. Everything
+# downstream — hysteresis, debounce, `progress`, the debug HUD's thresholds —
+# then needs no idea which gesture is configured.
+_FIST_TO_PINCH_GAIN = ((PINCH_RELEASE_RATIO - PINCH_CLOSE_RATIO)
+                       / (FIST_RELEASE_RATIO - FIST_CLOSE_RATIO))
+
+
+def _fist_in_pinch_units(ratio):
+    # Floored at 0: a firm fist sits far below FIST_CLOSE_RATIO and would map
+    # to a negative ratio. The machine would not care (it only asks whether
+    # the ratio is under the close threshold) but the debug HUD draws a bar
+    # of width ratio/1.5, and the state payload documents `ratio` as a
+    # distance-like quantity. Keep it well-formed at the source.
+    return max(0.0, PINCH_CLOSE_RATIO
+               + (ratio - FIST_CLOSE_RATIO) * _FIST_TO_PINCH_GAIN)
+
+
+def _combined_ratio(pinch_r, fist_r):
+    """The single ratio the state machine runs on, per ``GESTURE_MODE``.
+
+    In ``"either"`` mode the two gestures are combined with ``min`` — the
+    hand counts as closed as soon as EITHER reading says so — after each has
+    been filtered separately. Filtering first matters: ``min`` of two noisy
+    signals is biased toward whichever happens to be low this frame, so
+    combining raw readings would drift the trigger point downward.
+    """
+    if GESTURE_MODE == "pinch":
+        return pinch_r
+    fist_r = None if fist_r is None else _fist_in_pinch_units(fist_r)
+    if GESTURE_MODE == "fist":
+        return fist_r
+    if fist_r is None:
+        return pinch_r
+    return min(pinch_r, fist_r)
+
+
 class _OneEuroFilter:
     """One-Euro filter (Casiez, Roussel & Vogel, CHI 2012).
 
@@ -194,11 +303,19 @@ class _HandPinch:
         self.closed = False
         self.pinching = False        # edge event: True for one frame only
         self.cursor = (0.0, 0.0)
+        # Filtered readings of each gesture in its OWN units, for the debug
+        # HUD (`ratio` below is the combined, pinch-unit signal the machine
+        # actually runs on). `fist_ratio` is None on a frame whose knuckles
+        # were too degenerate to measure curl.
+        self.pinch_ratio = None
+        self.fist_ratio = None
         # Cursor latched where the close gesture STARTED (close debounce
         # 0->1); consumers hit-test clicks against this so the hand drifting
         # during the close cannot slide the click off its target.
         self.press_cursor = (0.0, 0.0)
-        self.ratio = None            # filtered pinch ratio (None until seen)
+        # The combined ratio the machine runs on, always in PINCH units
+        # whichever gesture produced it (None until the hand is first seen).
+        self.ratio = None
         self.last_seen = 0.0
         # Open-pose cursor coordinates in the rigid hand frame (wrist ->
         # index MCP basis) — the anchor of the close counter-movement.
@@ -209,6 +326,11 @@ class _HandPinch:
         self._fx = _OneEuroFilter(PINCH_CURSOR_MIN_CUTOFF, PINCH_CURSOR_BETA)
         self._fy = _OneEuroFilter(PINCH_CURSOR_MIN_CUTOFF, PINCH_CURSOR_BETA)
         self._fr = _OneEuroFilter(PINCH_RATIO_MIN_CUTOFF, PINCH_RATIO_BETA)
+        # The fist reading shares the pinch ratio's filter tuning: its
+        # open->closed band (1.45 -> 1.05) spans about as much as the pinch's
+        # (0.90 -> 0.45), so the same beta reacts at the same rate per unit
+        # of gesture travel.
+        self._ff = _OneEuroFilter(PINCH_RATIO_MIN_CUTOFF, PINCH_RATIO_BETA)
 
     @property
     def progress(self):
@@ -228,9 +350,7 @@ class _HandPinch:
 
     def advance(self, hand_landmarks, frame_w, frame_h, dt, now, age_s):
         a = hand_landmarks[PINCH_LANDMARK_A]
-        b = hand_landmarks[PINCH_LANDMARK_B]
         ax, ay = a.x * frame_w, a.y * frame_h
-        bx, by = b.x * frame_w, b.y * frame_h
 
         scale = hand_scale(hand_landmarks, frame_w, frame_h)
         if scale <= 0.0:
@@ -239,12 +359,36 @@ class _HandPinch:
             self.last_seen = now
             return
 
-        # 3D tip distance: z is wrist-relative in ~x-normalized units, so
-        # frame_w puts it in pixels like dx/dy; missing z degrades to 2D.
-        dz = ((getattr(a, "z", 0.0) - getattr(b, "z", 0.0))
-              * frame_w * PINCH_Z_WEIGHT)
-        dist = math.sqrt((ax - bx) ** 2 + (ay - by) ** 2 + dz * dz)
-        self.ratio = self._fr(dist / scale, dt)
+        # Measure and filter BOTH gestures every frame, whichever is
+        # configured: the spare one costs four landmark distances and it is
+        # what makes HALL_GESTURE tunable against a live hand through the
+        # debug HUD. `_combined_ratio` then reduces them to the single
+        # pinch-unit signal the state machine below runs on.
+        self.pinch_ratio = self._fr(
+            pinch_ratio(hand_landmarks, frame_w, frame_h, scale), dt)
+        raw_fist = fist_ratio(hand_landmarks, frame_w, frame_h)
+        self.fist_ratio = (self._ff(raw_fist, dt)
+                           if raw_fist is not None else None)
+        self.ratio = _combined_ratio(self.pinch_ratio, self.fist_ratio)
+        if self.ratio is None:
+            # "fist" mode on a frame whose curl could not be measured (a hand
+            # seen edge-on collapses |MCP - wrist|). Hold the previous state
+            # rather than inventing a closure out of a missing reading.
+            self.pinching = False
+            self.last_seen = now
+            return
+
+        if not USE_THUMB_ANCHOR:
+            # Fist/either: the cursor sits on the palm knuckle (landmark 9).
+            # The fingers cannot move it, so a closing hand does not drag the
+            # cursor and none of the thumb machinery below is needed — this
+            # is also the point a visitor reads as "where my hand is" when
+            # they aim a closed hand at a button.
+            palm = hand_landmarks[FIST_CURSOR_LANDMARK]
+            raw_x, raw_y = palm.x * frame_w, palm.y * frame_h
+            self._advance_cursor(raw_x, raw_y, dt, age_s)
+            self._advance_machine(now)
+            return
 
         # Cursor: anchored to the THUMB TIP (landmark 4, already in ax/ay),
         # optionally offset in the thumb's own frame: X slides along the
@@ -313,12 +457,25 @@ class _HandPinch:
                 raw_x += (hat_x - raw_x) * PINCH_CURSOR_COMPENSATE
                 raw_y += (hat_y - raw_y) * PINCH_CURSOR_COMPENSATE
 
+        self._advance_cursor(raw_x, raw_y, dt, age_s)
+        self._advance_machine(now)
+
+    def _advance_cursor(self, raw_x, raw_y, dt, age_s):
+        """Filter the anchor point, then extrapolate the OUTPUT forward by the
+        filter's velocity times the detection age (never feed the
+        extrapolation back into the filter, or the correction compounds)."""
         fx = self._fx(raw_x, dt)
         fy = self._fy(raw_y, dt)
         lead = min(age_s, PINCH_EXTRAP_MAX_S)
         self.cursor = (fx + self._fx.velocity * lead,
                        fy + self._fy.velocity * lead)
 
+    def _advance_machine(self, now):
+        """Edge-triggered close/open machine on ``self.ratio``.
+
+        Identical whichever gesture produced the ratio — that is the whole
+        point of normalizing the fist into pinch units upstream.
+        """
         self.pinching = False
         if not self._initialised:
             # A hand that appears already closed starts in the closed state

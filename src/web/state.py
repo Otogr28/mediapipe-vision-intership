@@ -21,7 +21,8 @@ must run on the Jetson's system Python 3.10).
 import json
 import time
 
-from config import (DEBUG_HUD, HALL_INFERENCE, PINCH_CLOSE_RATIO,
+from config import (DEBUG_HUD, FIST_CLOSE_RATIO, FIST_RELEASE_RATIO,
+                    GESTURE_MODE, HALL_INFERENCE, PINCH_CLOSE_RATIO,
                     PINCH_RELEASE_RATIO)
 from detection import detectors, gestures
 
@@ -75,6 +76,13 @@ def _hands_state(hand_result, now):
             "state": m.state,
             "progress": round(m.progress, 3),
             "ratio": round(m.ratio, 3) if m.ratio is not None else None,
+            # Each gesture in its own units, for the debug HUD's tuning
+            # readout. `ratio` above is the combined signal the machine ran
+            # on, always in pinch units whichever gesture produced it.
+            "pinch_ratio": (round(m.pinch_ratio, 3)
+                            if m.pinch_ratio is not None else None),
+            "fist_ratio": (round(m.fist_ratio, 3)
+                           if m.fist_ratio is not None else None),
             "pinching": m.pinching,
             "held": m.closed,
             "seen_ms": round((now - m.last_seen) * 1000.0, 1),
@@ -113,15 +121,19 @@ def _pose_world_state(pose_world_landmarks):
     ]
 
 
-def _debug_state(render_fps):
+def _debug_state(render_fps, presence):
     return {
+        "presence": presence,
         "render_fps": round(render_fps, 1),
         "hand_fps": round(detectors.hand_fps(), 1),
         "pose_fps": round(detectors.pose_fps(), 1),
         "age_ms": round(gestures.result_age_s() * 1000.0, 1),
         "backend": HALL_INFERENCE,
+        "gesture": GESTURE_MODE,
         "close_ratio": PINCH_CLOSE_RATIO,
         "release_ratio": PINCH_RELEASE_RATIO,
+        "fist_close_ratio": FIST_CLOSE_RATIO,
+        "fist_release_ratio": FIST_RELEASE_RATIO,
     }
 
 
@@ -149,7 +161,8 @@ def build_state(ui, hand_result, pose_landmarks, pose_world_landmarks=None):
         "hands": _hands_state(hand_result, now),
         "pose": _pose_state(pose_landmarks),
         "pose_world": _pose_world_state(pose_world_landmarks),
-        "debug": (_debug_state(1.0 / _dt_ema if _dt_ema > 0.0 else 0.0)
+        "debug": (_debug_state(1.0 / _dt_ema if _dt_ema > 0.0 else 0.0,
+                               ui.presence_state())
                   if DEBUG_HUD else None),
     }
     state.update(ui.to_state())

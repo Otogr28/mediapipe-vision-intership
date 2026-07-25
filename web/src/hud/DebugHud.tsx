@@ -21,8 +21,22 @@ export function DebugHud({ state, frameH }: { state: AppState; frameH: number })
             {d.hand_fps.toFixed(0)} fps · age {d.age_ms.toFixed(0)} ms
           </div>
           <div className="dim">
-            backend {d.backend} · close &lt; {close} · release &gt; {release}
+            backend {d.backend} · gesture {d.gesture ?? "pinch"} · pinch &lt;
+            {close} &gt;{release}
+            {d.fist_close_ratio !== undefined && (
+              <>
+                {" "}
+                · fist &lt;{d.fist_close_ratio} &gt;{d.fist_release_ratio}
+              </>
+            )}
           </div>
+          {d.presence && (
+            <div className={d.presence.present ? "" : "dim"}>
+              presence {d.presence.present ? "YES" : "no"} via{" "}
+              {d.presence.source ?? "--"} · motion{" "}
+              {d.presence.motion.toFixed(3)}
+            </div>
+          )}
         </>
       ) : (
         <div className="dim">backend debug off — set HALL_DEBUG=1</div>
@@ -55,8 +69,11 @@ export function DebugHud({ state, frameH }: { state: AppState; frameH: number })
               />
             </div>
             <div className="dim">
-              cursor ({h.cursor[0].toFixed(0)}, {h.cursor[1].toFixed(0)}) ·
-              seen {h.seen_ms.toFixed(0)} ms ago
+              pinch{" "}
+              {h.pinch_ratio != null ? h.pinch_ratio.toFixed(2) : "--"} · fist{" "}
+              {h.fist_ratio != null ? h.fist_ratio.toFixed(2) : "--"} · cursor
+              ({h.cursor[0].toFixed(0)}, {h.cursor[1].toFixed(0)}) · seen{" "}
+              {h.seen_ms.toFixed(0)} ms ago
             </div>
           </div>
         );

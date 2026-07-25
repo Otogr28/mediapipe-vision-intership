@@ -3,8 +3,10 @@ import { LensedVideo } from "./gl/LensedVideo";
 import { WavesLayer } from "./gl/WavesLayer";
 import { ChargesLayer } from "./gl/ChargesLayer";
 import { MagnetsLayer } from "./gl/MagnetsLayer";
+import { Attract } from "./hud/Attract";
 import { Buttons } from "./hud/Buttons";
 import { DebugHud } from "./hud/DebugHud";
+import { Greeting } from "./hud/Greeting";
 import { HintPanel } from "./hud/HintPanel";
 import { HudLayer } from "./hud/HudLayer";
 import { Intro } from "./hud/Intro";
@@ -29,7 +31,9 @@ const VrmAvatar = lazy(() =>
  *   LensedVideo    WebGL2 black-hole shader — mounted only while one exists
  *   OverlayCanvas  frame-pixel Canvas2D: skeleton, scene objects, cursors
  *   HudLayer       frame-pixel DOM: buttons, panels, onboarding, debug
- *   Intro          page-load splash (frontend-local clock)
+ *   Attract        opaque idle slideshow — covers everything above
+ *   Greeting       translucent hello + gesture demo for a new visitor
+ *   Intro          page-load splash (frontend-local clock; attract mode off)
  */
 export function App() {
   const { state, connected, pairRef } = useAppState();
@@ -71,6 +75,23 @@ export function App() {
     setSkeletonView(skeletonView);
   }, [skeletonView]);
 
+  // Attract phase. A backend predating attract mode sends no `phase` at all,
+  // which means it is always live — the exhibit behaviour then matches what
+  // it was before, rather than a blank screen waiting for a signal that
+  // never arrives.
+  const phase = state?.session.phase ?? "live";
+  const attract = phase === "attract" ? state?.session.attract : null;
+  const greeting = phase === "greeting" ? state?.session.greeting : null;
+  const demoGesture = state?.session.demo_gesture;
+
+  // The page-load splash is redundant once attract mode is running: the
+  // greeting says the same thing per VISITOR instead of per page load, and
+  // on a kiosk a page load happens at boot with nobody in the room. Retire
+  // it as soon as a backend proves it has phases.
+  useEffect(() => {
+    if (state?.session.phase) setIntroDone(true);
+  }, [state?.session.phase]);
+
   const frameW = state?.frame.w ?? 1920;
   const frameH = state?.frame.h ?? 1080;
 
@@ -99,7 +120,14 @@ export function App() {
   return (
     <div className="viewport">
       <div className="stage" style={{ aspectRatio: `${frameW} / ${frameH}` }}>
-        <img ref={videoRef} className="layer" src="/stream.mjpg" alt="" />
+        {/* Unmounted during attract, not merely covered: dropping the <img>
+            closes the MJPEG connection, so the browser stops decoding 30
+            frames a second of an empty room behind an opaque slideshow —
+            which is what the Orin would otherwise spend most of its day
+            doing. It reconnects when the greeting brings the video back. */}
+        {phase !== "attract" && (
+          <img ref={videoRef} className="layer" src="/stream.mjpg" alt="" />
+        )}
         {hasBlackHole && (
           <LensedVideo
             pairRef={pairRef}
@@ -151,13 +179,26 @@ export function App() {
                 </div>
               )}
               {introDone && state.session.hint.visible && (
-                <HintPanel frameW={frameW} frameH={frameH} />
+                <HintPanel
+                  frameW={frameW}
+                  frameH={frameH}
+                  gesture={demoGesture}
+                  text={state.session.hint.text}
+                />
               )}
               {showDebug && <DebugHud state={state} frameH={frameH} />}
             </>
           )}
         </HudLayer>
-        {!introDone && <Intro onDone={() => setIntroDone(true)} />}
+        {attract && <Attract attract={attract} />}
+        {greeting && <Greeting greeting={greeting} gesture={demoGesture} />}
+        {!introDone && (
+          <Intro
+            onDone={() => setIntroDone(true)}
+            gesture={demoGesture}
+            hint={state?.session.hint.text}
+          />
+        )}
         {!connected && (
           <div className="conn-banner">Reconnecting to camera backend…</div>
         )}

@@ -16,7 +16,9 @@ import time
 
 import cv2
 
-from config import HALL_INFERENCE, PINCH_CLOSE_RATIO, PINCH_RELEASE_RATIO
+from config import (FIST_CLOSE_RATIO, FIST_RELEASE_RATIO, GESTURE_MODE,
+                    HALL_INFERENCE, PINCH_CLOSE_RATIO, PINCH_RELEASE_RATIO,
+                    PRESENCE_ENTER_FRAC, PRESENCE_EXIT_FRAC)
 from detection import detectors, gestures
 
 FONT = cv2.FONT_HERSHEY_SIMPLEX
@@ -51,7 +53,10 @@ class DebugHUD:
         self._tick_close = int(BAR_W * PINCH_CLOSE_RATIO / BAR_MAX_RATIO)
         self._tick_release = int(BAR_W * PINCH_RELEASE_RATIO / BAR_MAX_RATIO)
 
-    def draw(self, frame):
+    def draw(self, frame, presence=None):
+        """``presence`` is ``PresenceDetector.to_state()`` when attract mode
+        is running — the one number (motion fraction vs its thresholds) that
+        makes PRESENCE_ENTER_FRAC tunable against the real room."""
         now = time.monotonic()
         if self._last_draw_t is not None:
             dt = now - self._last_draw_t
@@ -60,7 +65,7 @@ class DebugHUD:
         self._last_draw_t = now
 
         infos = gestures.pinch_infos()
-        lines = 2 + 3 * len(infos)
+        lines = 2 + 3 * len(infos) + (1 if presence is not None else 0)
         panel_h = PAD * 2 + LINE_H * lines
         x0 = MARGIN
         y1 = self.h - MARGIN
@@ -80,9 +85,22 @@ class DebugHUD:
                     (x0 + PAD, ty), FONT, 0.45, COL_TEXT, 1, cv2.LINE_AA)
         ty += LINE_H
         cv2.putText(frame,
-                    f"backend {HALL_INFERENCE}   close < {PINCH_CLOSE_RATIO}"
-                    f"   release > {PINCH_RELEASE_RATIO}",
-                    (x0 + PAD, ty), FONT, 0.45, COL_DIM, 1, cv2.LINE_AA)
+                    f"backend {HALL_INFERENCE}   gesture {GESTURE_MODE}"
+                    f"   pinch <{PINCH_CLOSE_RATIO} >{PINCH_RELEASE_RATIO}"
+                    f"   fist <{FIST_CLOSE_RATIO} >{FIST_RELEASE_RATIO}",
+                    (x0 + PAD, ty), FONT, 0.38, COL_DIM, 1, cv2.LINE_AA)
+
+        if presence is not None:
+            ty += LINE_H
+            cv2.putText(frame,
+                        f"presence {'YES' if presence['present'] else 'no '}"
+                        f" via {presence['source'] or '--'}"
+                        f"   motion {presence['motion']:.3f}"
+                        f"  enter >{PRESENCE_ENTER_FRAC}"
+                        f"  exit <{PRESENCE_EXIT_FRAC}",
+                        (x0 + PAD, ty), FONT, 0.38,
+                        COL_CLOSED if presence["present"] else COL_DIM, 1,
+                        cv2.LINE_AA)
 
         for hid, m in infos:
             ratio = m.ratio
@@ -106,7 +124,14 @@ class DebugHUD:
                 cv2.line(frame, (bx + tick, by - 2),
                          (bx + tick, by + BAR_H + 2), COL_TICK, 1)
             ty += LINE_H
+            # Both gestures in their OWN units, next to the combined ratio
+            # above: this is the readout the fist thresholds are tuned
+            # against, and it also shows which gesture won in "either" mode.
+            ptxt = ("--" if m.pinch_ratio is None
+                    else f"{m.pinch_ratio:.2f}")
+            ftxt = "--" if m.fist_ratio is None else f"{m.fist_ratio:.2f}"
             cv2.putText(frame,
+                        f"pinch {ptxt}  fist {ftxt}   "
                         f"cursor ({m.cursor[0]:4.0f},{m.cursor[1]:4.0f})  "
-                        f"seen {(now - m.last_seen) * 1000:3.0f} ms ago",
+                        f"seen {(now - m.last_seen) * 1000:3.0f} ms",
                         (x0 + PAD, ty), FONT, 0.4, COL_DIM, 1, cv2.LINE_AA)

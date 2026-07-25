@@ -1,14 +1,20 @@
-"""Onboarding overlays: startup splash + bottom-right pinch hint.
+"""Onboarding overlays: startup splash + bottom-right gesture hint.
 
-Both reuse :func:`draw_pinch_hand`, which renders a real 21-landmark hand
-(MediaPipe's hand topology) posed mid-pinch: the middle, ring, and pinky
-fingers are curled into a loose fist while the index and thumb extend and
-animate together. Drawing it from the same skeleton the app already draws
-for live hands keeps the demo unmistakably "a hand".
+Both reuse :func:`draw_gesture_hand`, which renders a real 21-landmark hand
+(MediaPipe's hand topology) acting out whichever gesture drives the app:
 
-Neither class reads detection results directly — `UIManager` feeds them the
-small amount of state they need (elapsed time is tracked internally, person
-presence and "has interacted" come from the manager).
+* ``"pinch"`` — middle, ring and pinky curled into a loose fist while the
+  index and thumb extend and animate together.
+* ``"fist"`` — every finger animating between fully extended and folded into
+  the palm, the thumb closing across them.
+
+Drawing the demo from the same skeleton the app draws for live hands keeps it
+unmistakably "a hand", and posing it from ``config.DEMO_GESTURE`` keeps the
+picture honest about what the detector is actually watching for.
+
+None of the classes read detection results directly — `UIManager` feeds them
+the small amount of state they need (elapsed time is tracked internally,
+person presence and "has interacted" come from the manager).
 """
 
 import math
@@ -17,9 +23,9 @@ import time
 import cv2
 import numpy as np
 
-from config import (HINT_PINCH_PERIOD_S, HINT_TEXT, HINT_TIMEOUT_S,
-                    INTRO_DURATION_S, INTRO_FADE_S, INTRO_SUBTITLE,
-                    INTRO_TITLE)
+from config import (DEMO_GESTURE, HINT_PINCH_PERIOD_S, HINT_TEXT,
+                    HINT_TIMEOUT_S, INTRO_DURATION_S, INTRO_FADE_S,
+                    INTRO_SUBTITLE, INTRO_TITLE)
 
 FONT = cv2.FONT_HERSHEY_SIMPLEX
 
@@ -66,6 +72,61 @@ _HAND_CONNECTIONS = [
 ]
 _PALM = [0, 1, 5, 9, 13, 17]
 
+# Fist demo: two complete 21-landmark poses that every finger interpolates
+# between, rather than the pinch template's "three fingers frozen curled".
+# The whole hand has to move for the picture to read as "close your hand".
+# Fingers are SPLAYED here, wider than an anatomical open hand. Drawn as
+# capsules the width of a knuckle, parallel fingers merge into one paw-shaped
+# blob at the size these overlays are shown; the splay keeps four distinct
+# fingers readable, which is the entire content of the picture.
+_HAND_EXTENDED = {
+    0:  (0.50, 1.05),   # wrist
+    1:  (0.70, 0.86),   # thumb CMC
+    2:  (0.85, 0.68),   # thumb MCP
+    3:  (0.96, 0.52),   # thumb IP
+    4:  (1.05, 0.38),   # thumb TIP, out to the side
+    5:  (0.63, 0.52),   # index MCP
+    6:  (0.67, 0.34),
+    7:  (0.69, 0.21),
+    8:  (0.71, 0.08),   # index TIP
+    9:  (0.49, 0.49),   # middle MCP
+    10: (0.50, 0.29),
+    11: (0.50, 0.15),
+    12: (0.51, 0.01),   # middle TIP
+    13: (0.35, 0.51),   # ring MCP
+    14: (0.32, 0.32),
+    15: (0.30, 0.19),
+    16: (0.28, 0.06),   # ring TIP
+    17: (0.22, 0.58),   # pinky MCP
+    18: (0.16, 0.43),
+    19: (0.12, 0.32),
+    20: (0.09, 0.22),   # pinky TIP
+}
+
+_HAND_CLOSED = {
+    0:  (0.50, 1.05),
+    1:  (0.68, 0.84),
+    2:  (0.76, 0.67),
+    3:  (0.68, 0.59),
+    4:  (0.55, 0.58),   # thumb folded across the fingers
+    5:  (0.60, 0.54),
+    6:  (0.63, 0.38),
+    7:  (0.60, 0.47),
+    8:  (0.57, 0.56),   # index TIP tucked into the palm
+    9:  (0.48, 0.52),
+    10: (0.48, 0.36),
+    11: (0.49, 0.45),
+    12: (0.50, 0.55),
+    13: (0.37, 0.54),
+    14: (0.36, 0.39),
+    15: (0.38, 0.47),
+    16: (0.39, 0.56),
+    17: (0.27, 0.60),
+    18: (0.26, 0.46),
+    19: (0.28, 0.53),
+    20: (0.30, 0.61),
+}
+
 
 def _lerp(a, b, t):
     return a + (b - a) * t
@@ -80,26 +141,47 @@ def _capsule(frame, p0, p1, radius, color):
     cv2.circle(frame, p1, radius, color, -1, cv2.LINE_AA)
 
 
-def draw_pinch_hand(frame, cx, cy, s, openness):
-    """Draw a real 21-landmark hand mid-pinch, centred near ``(cx, cy)``.
+def _pose_points(gesture, t):
+    """The 21 normalised landmarks of the demo hand at openness ``t``.
 
-    ``s`` is the approximate hand height in pixels; ``openness`` in
-    ``[0, 1]`` sets how far the thumb and index are apart (0 = touching,
-    1 = wide open). A glow ring pulses at the pinch point as they meet.
+    ``"pinch"`` animates only the two fingers that pinch, over a silhouette
+    whose other three stay curled. ``"fist"`` interpolates EVERY landmark
+    between a fully extended hand and a closed one — a demo of "close your
+    hand" in which most of the hand never moves does not read as one.
     """
-    t = max(0.0, min(1.0, openness))
-
+    if gesture == "fist":
+        return {i: (_lerp(_HAND_CLOSED[i][0], _HAND_EXTENDED[i][0], t),
+                    _lerp(_HAND_CLOSED[i][1], _HAND_EXTENDED[i][1], t))
+                for i in _HAND_EXTENDED}
     pts_n = dict(_HAND_BASE)
     # Index tip: straight up when open, curling down to meet the thumb closed.
     pts_n[8] = (_lerp(0.605, 0.59, t), _lerp(0.33, 0.15, t))
     # Thumb tip: swings out to the right when open, meets the index when closed.
     pts_n[4] = (_lerp(0.605, 0.71, t), _lerp(0.33, 0.27, t))
+    return pts_n
+
+
+def draw_gesture_hand(frame, cx, cy, s, openness, gesture=None):
+    """Draw a real 21-landmark hand acting out a gesture, near ``(cx, cy)``.
+
+    ``s`` is the approximate hand height in pixels; ``openness`` in
+    ``[0, 1]`` runs from fully closed to fully open. ``gesture`` is
+    ``"pinch"`` or ``"fist"``, defaulting to whichever the app is actually
+    watching for (``config.DEMO_GESTURE``). A glow ring pulses where the
+    cursor would be as the hand finishes closing — the same ring affordance
+    the live cursor draws, so a visitor recognizes it on their own hand.
+    """
+    t = max(0.0, min(1.0, openness))
+    gesture = gesture or DEMO_GESTURE
+    pts_n = _pose_points(gesture, t)
 
     def to_px(p):
         return (cx + (p[0] - 0.5) * s, cy + (p[1] - 0.55) * s)
 
     pts = {i: to_px(p) for i, p in pts_n.items()}
-    rf = max(int(0.072 * s), 2)
+    # Thinner bones for the fist: five fingers are on screen instead of two,
+    # and knuckle-wide capsules would touch and read as a mitten.
+    rf = max(int((0.045 if gesture == "fist" else 0.072) * s), 2)
 
     palm = np.array([pts[i] for i in _PALM], dtype=np.float32)
     centroid = palm.mean(axis=0)
@@ -118,25 +200,35 @@ def draw_pinch_hand(frame, cx, cy, s, openness):
     draw_pass(rf + 2, SKIN_EDGE, 1.14)
     draw_pass(rf, SKIN, 1.0)
 
-    # Fingertip highlights on the two active fingers.
-    for idx in (4, 8):
+    # Fingertip highlights on whichever fingers are doing the work.
+    for idx in ((4, 8, 12, 16, 20) if gesture == "fist" else (4, 8)):
         cv2.circle(frame, (int(pts[idx][0]), int(pts[idx][1])),
                    max(rf - 2, 1), NAIL, -1, cv2.LINE_AA)
 
-    # Pinch glow as the fingertips meet.
+    # Glow ring where the live cursor would sit — between the fingertips for
+    # a pinch, on the palm knuckle for a fist, matching each mode's real
+    # cursor anchor (see gestures.USE_THUMB_ANCHOR).
     closeness = 1.0 - t
     if closeness > 0.45:
         a = (closeness - 0.45) / 0.55  # 0..1 as it finishes closing
-        mid = (int((pts[4][0] + pts[8][0]) / 2),
-               int((pts[4][1] + pts[8][1]) / 2))
+        if gesture == "fist":
+            mid = (int(pts[9][0]), int(pts[9][1]))
+        else:
+            mid = (int((pts[4][0] + pts[8][0]) / 2),
+                   int((pts[4][1] + pts[8][1]) / 2))
         ring_r = max(int((0.08 + 0.16 * a) * s), 1)
         cv2.circle(frame, mid, ring_r, GLOW, 2, cv2.LINE_AA)
         cv2.circle(frame, mid, max(int(0.04 * s), 2), GLOW, -1, cv2.LINE_AA)
 
 
-def _pinch_openness(start, period):
-    """Looping open->close->open value in [0, 1] driven by the clock."""
-    phase = ((time.monotonic() - start) % period) / period
+def gesture_openness(start, period, now=None):
+    """Looping open->close->open value in [0, 1] driven by the clock.
+
+    ``now`` overrides the clock, so a screenshot check can render the
+    animation at a chosen instant instead of whenever it happened to run.
+    """
+    now = time.monotonic() if now is None else now
+    phase = ((now - start) % period) / period
     return 0.5 * (1.0 + math.cos(2.0 * math.pi * phase))
 
 
@@ -197,8 +289,8 @@ class IntroOverlay:
         _put_centered(layer, INTRO_SUBTITLE, cx, h * 0.22 + 38, 0.6, (200, 200, 200), 1)
 
         s = min(w, h) * 0.20
-        draw_pinch_hand(layer, cx, h * 0.52, s,
-                        _pinch_openness(self._start, HINT_PINCH_PERIOD_S))
+        draw_gesture_hand(layer, cx, h * 0.52, s,
+                          gesture_openness(self._start, HINT_PINCH_PERIOD_S))
         _put_centered(layer, HINT_TEXT, cx, h * 0.52 + s * 0.72, 0.8, (255, 255, 255), 2)
 
         # Countdown bar.
@@ -212,7 +304,7 @@ class IntroOverlay:
         cv2.addWeighted(layer, op, frame, 1.0 - op, 0.0, frame)
 
 
-class PinchHint:
+class GestureHint:
     """Bottom-right reminder shown while a person is detected and has not
     interacted yet.
 
@@ -272,8 +364,9 @@ class PinchHint:
         cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 200, 255), 2)
 
         cx = (x1 + x2) / 2.0
-        draw_pinch_hand(frame, cx, y1 + 70, 70,
-                        _pinch_openness(self._anim_start, HINT_PINCH_PERIOD_S))
+        draw_gesture_hand(frame, cx, y1 + 70, 70,
+                          gesture_openness(self._anim_start,
+                                            HINT_PINCH_PERIOD_S))
 
         lines = _wrap(HINT_TEXT, 0.5, 1, self.PANEL_W - 24)
         ty = y1 + 140

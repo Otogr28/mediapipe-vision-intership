@@ -394,6 +394,280 @@ body {
   .ph-ripple { animation: none; }
 }
 
+/* ---- animated fist-demo hand (FistHand.tsx) ------------------------- */
+/* Same 2.4 s cycle and dwell as .ph-* above, so the two demo hands are
+   interchangeable: 0-16.7% open hold · 16.7-37.5% close · 37.5-66.7%
+   closed dwell · 66.7-83.3% open · 83.3-100% hold. */
+
+.fist-hand {
+  display: block;
+  overflow: visible;
+}
+
+.fh-body {
+  fill: rgba(237, 241, 247, 0.13);
+  stroke: rgba(237, 241, 247, 0.85);
+  stroke-width: 2.5;
+  stroke-linejoin: round;
+}
+
+.fh-knuckles circle {
+  fill: rgba(237, 241, 247, 0.42);
+}
+
+.fh-finger,
+.fh-thumb,
+.fh-ring-progress,
+.fh-ripple {
+  transform-box: view-box;
+}
+
+/* Each finger folds toward its own knuckle: transform-origin sits at the
+   BASE of the bar, so scaleY collapses the fingertip down onto the palm. */
+.fh-finger {
+  animation: fh-fold 2.4s cubic-bezier(0.45, 0, 0.25, 1) infinite;
+}
+
+.fh-pinky {
+  transform-origin: 68px 126px;
+}
+.fh-ring {
+  transform-origin: 93px 124px;
+}
+.fh-middle {
+  transform-origin: 118px 124px;
+}
+.fh-index {
+  transform-origin: 143px 126px;
+}
+
+/* Staggered by a hair so the hand closes like a hand rather than a shutter,
+   pinky first. Kept well inside the close window so all four are folded
+   before the dwell begins. */
+.fh-ring {
+  animation-delay: 30ms;
+}
+.fh-middle {
+  animation-delay: 60ms;
+}
+.fh-index {
+  animation-delay: 90ms;
+}
+
+.fh-thumb {
+  transform-origin: 158px 188px;
+  animation: fh-thumb 2.4s cubic-bezier(0.45, 0, 0.25, 1) infinite;
+}
+
+.fh-ring-base {
+  fill: none;
+  stroke: rgba(237, 241, 247, 0.4);
+  stroke-width: 2;
+}
+
+.fh-ring-progress {
+  fill: none;
+  stroke: var(--amber);
+  stroke-width: 3;
+  stroke-linecap: round;
+  stroke-dasharray: 94.2;
+  stroke-dashoffset: 94.2;
+  animation: fh-progress 2.4s cubic-bezier(0.45, 0, 0.25, 1) infinite;
+}
+
+.fh-ripple {
+  fill: none;
+  stroke: #ffffff;
+  stroke-width: 2.5;
+  opacity: 0;
+  transform-origin: 106px 186px;
+  animation: ph-ripple 2.4s linear infinite;
+}
+
+@keyframes fh-fold {
+  0%, 16.7% { transform: scaleY(1); }
+  37.5%, 66.7% { transform: scaleY(0.26); }
+  83.3%, 100% { transform: scaleY(1); }
+}
+
+@keyframes fh-thumb {
+  0%, 16.7% { transform: rotate(24deg); }
+  37.5%, 66.7% { transform: rotate(-58deg); }
+  83.3%, 100% { transform: rotate(24deg); }
+}
+
+@keyframes fh-progress {
+  0%, 16.7% { stroke-dashoffset: 94.2; stroke: var(--amber); }
+  37.5% { stroke-dashoffset: 0; stroke: var(--amber); }
+  40%, 66.7% { stroke-dashoffset: 0; stroke: var(--go); }
+  83.3%, 100% { stroke-dashoffset: 94.2; stroke: var(--amber); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .fh-finger { animation: none; transform: scaleY(0.26); }
+  .fh-thumb { animation: none; transform: rotate(-58deg); }
+  .fh-ring-progress { animation: none; stroke-dashoffset: 0; stroke: var(--go); }
+  .fh-ripple { animation: none; }
+}
+
+/* ---- attract slideshow (Attract.tsx) --------------------------------- */
+/* Opaque and above every scene layer: while nobody is there the exhibit is
+   a display, not a camera. */
+
+.attract {
+  position: absolute;
+  inset: 0;
+  z-index: 25;
+  overflow: hidden;
+  background: #06080c;
+}
+
+.attract-photo {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  /* No CSS transition: the backend owns the cross-fade clock (attract.fade),
+     and a transition on top of it would fight the state stream. */
+  user-select: none;
+  -webkit-user-drag: none;
+}
+
+.attract-scrim {
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(
+    to top,
+    rgba(4, 6, 10, 0.92) 0%,
+    rgba(4, 6, 10, 0.72) 16%,
+    rgba(4, 6, 10, 0) 42%
+  );
+}
+
+.attract-caption {
+  position: absolute;
+  left: 5%;
+  right: 5%;
+  bottom: 6%;
+}
+
+.attract-eyebrow {
+  font-size: clamp(11px, 1.1vw, 15px);
+  color: var(--amber);
+  margin-bottom: 10px;
+}
+
+.attract-title {
+  font-family: var(--font-label);
+  font-weight: 600;
+  font-size: clamp(30px, 5vw, 66px);
+  line-height: 1.05;
+  letter-spacing: 0.01em;
+}
+
+.attract-sub {
+  margin-top: 8px;
+  font-size: clamp(14px, 1.7vw, 24px);
+  color: var(--ink-dim);
+  max-width: 46ch;
+}
+
+.attract-prompt {
+  margin-top: 22px;
+  font-size: clamp(12px, 1.3vw, 18px);
+  color: var(--ink);
+  animation: attract-breathe 3.4s ease-in-out infinite;
+}
+
+.attract-dots {
+  position: absolute;
+  right: 5%;
+  bottom: 6%;
+  display: flex;
+  gap: 10px;
+}
+
+.attract-dots .dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: rgba(237, 241, 247, 0.28);
+  transition: background-color 400ms ease;
+}
+
+.attract-dots .dot.on {
+  background: var(--ink);
+}
+
+@keyframes attract-breathe {
+  50% { opacity: 0.45; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .attract-prompt { animation: none; }
+}
+
+/* ---- greeting (Greeting.tsx) ----------------------------------------- */
+/* Translucent, unlike .attract: the visitor should see themselves arrive
+   behind the instructions. */
+
+.greeting {
+  position: absolute;
+  inset: 0;
+  z-index: 28;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  background: rgba(6, 8, 12, 0.58);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  animation: greeting-in 420ms ease both;
+}
+
+.greeting-title {
+  font-size: clamp(38px, 7vw, 86px);
+  letter-spacing: 0.14em;
+  line-height: 1;
+}
+
+.greeting-sub {
+  color: var(--ink-dim);
+  font-size: clamp(14px, 1.9vw, 24px);
+  margin-bottom: 14px;
+}
+
+.greeting-hint {
+  margin-top: 4px;
+  font-size: clamp(14px, 1.8vw, 23px);
+  color: var(--amber);
+}
+
+.greeting-bar {
+  width: min(34vw, 380px);
+  height: 3px;
+  margin-top: 26px;
+  background: rgba(237, 241, 247, 0.18);
+  border-radius: 2px;
+  overflow: hidden;
+}
+
+.greeting-bar-fill {
+  height: 100%;
+  background: var(--amber);
+}
+
+@keyframes greeting-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .greeting { animation: none; }
+}
+
 /* ---- intro splash ---------------------------------------------------- */
 
 .intro {

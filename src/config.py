@@ -279,6 +279,58 @@ PINCH_EXTRAP_MAX_S = 0.10
 # fingertips along the camera axis. 0.0 = pure 2D distance (old behavior).
 PINCH_Z_WEIGHT = 0.5
 
+# --- Which gesture closes the cursor (HALL_GESTURE) -----------------------
+# The pinch above is precise but demanding: it asks a visitor to bring two
+# specific fingertips together and hold them there while aiming. Closing the
+# whole hand is a bigger, more legible motion — easier to explain in one
+# picture, easier for kids, and far more tolerant of landmark noise, which is
+# what an exhibit at arm's length actually gets. So the gesture is selectable:
+#
+#   "pinch"  — thumb-index distance only (the historical behaviour, with the
+#              thumb-tip cursor anchor and its counter-movement compensation).
+#   "fist"   — finger curl only: the cursor closes when the hand closes.
+#   "either" — DEFAULT. Whichever gesture the visitor happens to make closes
+#              the cursor. A superset of both, so nobody has to be taught the
+#              "right" one before the exhibit responds to them.
+#
+# `fist`/`either` move the cursor anchor to the palm (see FIST_CURSOR_LANDMARK)
+# because the thumb-tip anchor and its compensation are thumb-index-pinch
+# machinery: with the whole hand closing there is no single travelling finger
+# to cancel, and the palm is the point a visitor reads as "where my hand is".
+GESTURE_MODE = os.environ.get("HALL_GESTURE", "either")
+if GESTURE_MODE not in ("pinch", "fist", "either"):
+    print(f"HALL_GESTURE={GESTURE_MODE!r} is not pinch/fist/either; "
+          "falling back to 'either'")
+    GESTURE_MODE = "either"
+
+# Finger curl, measured per finger as |tip - wrist| / |MCP - wrist| and
+# averaged over index/middle/ring/pinky (the thumb is excluded: it folds
+# ACROSS the palm rather than into it, so its own ratio barely moves).
+#
+# The metric is deliberately a ratio of two wrist-anchored distances rather
+# than a length over `hand_scale`: numerator and denominator foreshorten
+# together, so it survives a hand tilted toward the camera, and it needs no
+# size reference at all. Typical adult values, both hands, any distance:
+#   ~1.85  fingers straight out
+#   ~1.6   the relaxed pose a hand rests in when held up at a screen
+#   ~1.2   a claw, fingers well curled but not closed
+#   ~0.7   deliberate fist, tips folded past the knuckles into the palm
+# The last part of the curl is what drops the ratio steeply — the fingertip
+# folds BACK past its own knuckle, so the numerator falls below the
+# denominator — which is what leaves a fist so far from every partial pose.
+# Hence: close low enough that only a real fist reaches it, release low
+# enough that uncurling half-way lets go (a visitor should not have to
+# splay their fingers to put an object down).
+# Run with HALL_DEBUG=1 to watch the live value (the HUD prints both the
+# pinch and the fist ratio per hand) before changing these.
+FIST_CLOSE_RATIO = 1.05
+FIST_RELEASE_RATIO = 1.30
+
+# The cursor anchor in fist/either mode: landmark 9, the middle finger's
+# knuckle. It is the centre of the palm polygon, the fingers cannot move it,
+# and it is where a visitor points at a target with a closed hand.
+FIST_CURSOR_LANDMARK = 9
+
 # Buttons.
 BUTTON_COOLDOWN_FRAMES = 8     # frames before a button can fire again; the
                                # pinch edge-trigger + release debounce is the
@@ -354,7 +406,129 @@ HINT_PINCH_PERIOD_S = 1.6       # one open->close->open cycle of the demo hand
 HINT_TIMEOUT_S = 8.0
 INTRO_TITLE = "HalLMediaPipe"
 INTRO_SUBTITLE = "Gesture-controlled vision"
-HINT_TEXT = "Close your hand to interact"
+
+# Which gesture the animated demo hands act out, and the words next to them.
+# "either" teaches the FIST: it is the bigger, simpler motion, it reads from
+# across a hall, and a visitor who pinches instead still works — so teaching
+# the easier of two accepted gestures costs nothing. Both renderers read
+# these (ui/hints.py, ui/attract.py, and `session.gesture` in the browser).
+DEMO_GESTURE = "pinch" if GESTURE_MODE == "pinch" else "fist"
+HINT_TEXT = ("Pinch your fingers to interact" if DEMO_GESTURE == "pinch"
+             else "Close your hand to interact")
+
+# ---------------------------------------------------------------------------
+# Attract mode: the exhibit when nobody is standing in front of it.
+#
+# A hall exhibit spends most of its day alone. Left to itself the app showed a
+# live camera feed of an empty corridor with a menu floating over it, stuck in
+# whatever scene the last visitor abandoned. Attract mode gives it the two
+# states a museum display is supposed to have:
+#
+#   ATTRACT   nobody near — a full-screen slideshow of the experiments, the
+#             way any other display in the building behaves. The camera feed
+#             is covered (an empty room is not interesting, and not filming
+#             the corridor at people who never opted in is the polite default).
+#   GREETING  somebody just walked up — a short "Hi" plus one animated demo of
+#             the gesture that drives everything, then the live menu. The point
+#             is that a visitor learns the control before they need it, the way
+#             a console game shows the controller motion before the first level.
+#
+# Leaving resets the app to the menu, so the next visitor never inherits the
+# last one's half-finished black hole.
+#
+# HALL_ATTRACT=0 disables the whole thing (the app is always live, which is
+# what you want on a laptop while developing).
+ATTRACT_ENABLED = os.environ.get("HALL_ATTRACT", "1") == "1"
+
+# Seconds of continuous absence before the exhibit goes back to the slideshow.
+# Long enough to survive a visitor stepping out of frame to fetch a friend,
+# short enough that the display is not left mid-experiment for the next one.
+ATTRACT_IDLE_S = 25.0
+
+# Seconds per slide, and the cross-fade between them.
+ATTRACT_SLIDE_S = 7.0
+ATTRACT_FADE_S = 1.2
+
+# Slideshow source: one image per experiment, repo-root relative. These are
+# the same photographs the exhibit website uses for its cards, so the plate on
+# the wall, the site and the idle screen all show the same picture of each
+# experiment. Files are matched by stem against ATTRACT_SLIDE_TEXT below;
+# an unknown stem still shows, captioned by its filename.
+ATTRACT_DIR = "docs/img"
+
+# Title + one-line caption per slide, keyed by the image stem (which is also
+# the `session.experiment` key, so a slide and its QR page always agree).
+ATTRACT_SLIDE_TEXT = {
+    "black_hole": ("Black Hole",
+                   "Light bends around a mass so dense it has no surface"),
+    "slingshot": ("Slingshot",
+                  "Pull, aim, release — gravity and drag do the rest"),
+    "orbitals": ("Orbitals",
+                 "Launch worlds and watch gravity pull them into orbit"),
+    "waves": ("Waves",
+              "Drop sources in a ripple tank and interfere them"),
+    "charges": ("Charges",
+                "Place charges and see the electric field they make"),
+    "magnets": ("Magnets",
+                "Move a magnet through a coil and light a bulb"),
+    "spacetime": ("Spacetime",
+                  "Mass curves the sheet that everything else falls along"),
+    "schrodinger": ("Quantum Cat",
+                    "Measure the atom and the cat stops being both"),
+}
+
+# Greeting: how long the "Hi" + gesture demo holds before the menu appears.
+# A visitor who makes the gesture during it skips straight through — trying
+# the control is a better exit than waiting out a timer.
+GREETING_S = 5.0
+GREETING_TITLE = "Hi"
+GREETING_SUBTITLE = "This display is controlled with your hand"
+
+# The line under the slideshow. It is the only thing telling somebody walking
+# past that the screen is not a poster, so it says what to do, not what the
+# exhibit is.
+ATTRACT_PROMPT = "Step closer to control this display with your hand"
+ATTRACT_TITLE = "Physics Hall"
+
+# ---------------------------------------------------------------------------
+# Presence: is somebody standing in front of the exhibit?
+#
+# Three signals, cheapest first, OR-ed together:
+#
+#   1. A tracked HAND. Free — the hand detector runs every frame anyway — and
+#      unambiguous: a hand in frame is a visitor.
+#   2. Frame MOTION against a slowly-learned background. This is the signal
+#      that catches somebody walking up with their hands down, which is how
+#      people actually approach a display. Costs ~0.2 ms/frame: the frame is
+#      reduced to a PRESENCE_GRID_W-wide grayscale thumbnail first.
+#   3. A detected POSE, when some other feature already has pose running.
+#      Never turned on for presence alone — body inference is the app's
+#      biggest CPU cost and motion answers the same question for free.
+#
+# The background is an EMA that only adapts while nobody is present, so a
+# visitor who walks up and then stands perfectly still keeps registering
+# instead of being absorbed into the background after a few seconds.
+PRESENCE_GRID_W = 64            # thumbnail width in px (height keeps aspect)
+PRESENCE_PIXEL_DELTA = 18       # per-pixel gray difference counted as "changed"
+# Fraction of the thumbnail that must differ from the background. Distance is
+# the reason there are two: somebody at the display fills a large part of the
+# frame, somebody crossing the corridor behind them does not. Enter is the
+# strict one; presence then persists down to the looser exit threshold.
+PRESENCE_ENTER_FRAC = 0.07
+PRESENCE_EXIT_FRAC = 0.025
+# The enter threshold must hold this long before presence is asserted, so a
+# door swinging or a light switching does not wake the exhibit.
+PRESENCE_ENTER_S = 0.6
+# Background EMA time constant (s) while nobody is present. Long enough to
+# ignore a passing cloud, short enough to relearn a moved chair.
+PRESENCE_BG_TAU_S = 12.0
+# Warm-up after the detector starts: the background is learned FAST and the
+# motion signal is ignored. The first frame out of a camera is often garbage
+# (a black or half-exposed frame); seeded as the background it would make
+# every later frame look like motion, and the exhibit would greet an empty
+# room and then sit live for ATTRACT_IDLE_S with nobody there. Hands and
+# pose are exempt — those are unambiguous whenever they appear.
+PRESENCE_WARMUP_S = 2.0
 
 # --- Orbitals experiment (n-body gravity sandbox) -----------------------
 # A pinch-driven gravity playground: place stars/planets/moons/comets and

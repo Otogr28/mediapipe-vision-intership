@@ -17,6 +17,7 @@ export default defineConfig({
       "/stream": backend,
       "/snapshot.jpg": backend,
       "/healthz": backend,
+      "/attract": backend,
     },
   },
 });

@@ -27,8 +27,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import cv2
 
-from config import (OUTPUT_MODE, STATE_FPS, STREAM_BIND, STREAM_PORT,
-                    STREAM_QUALITY, WEB_DIST_DIR)
+from config import (ATTRACT_DIR, OUTPUT_MODE, STATE_FPS, STREAM_BIND,
+                    STREAM_PORT, STREAM_QUALITY, WEB_DIST_DIR)
 
 
 class WindowSink:
@@ -229,6 +229,10 @@ class WebSink(MjpegSink):
       JSON (built by ``web/state.py``) at up to ``STATE_FPS`` events/s. The
       same latest-only pattern as the MJPEG loop: a slow client skips
       snapshots instead of building a backlog.
+    * ``GET /attract/<name>`` — the attract-mode slideshow photographs, out
+      of ``ATTRACT_DIR``. Served from there rather than bundled into
+      ``web/dist`` because they are already committed once for the exhibit
+      website and ``web/dist`` travels to the Jetson in every ``git pull``.
     * Static serving of the built frontend (``web/dist``) at ``/``.
 
     ``present()`` still streams the frame — but ``main.py`` passes the RAW
@@ -236,11 +240,14 @@ class WebSink(MjpegSink):
     """
 
     def __init__(self, bind="auto", port=8092, quality=80, fps=30,
-                 state_fps=STATE_FPS, dist_dir=WEB_DIST_DIR):
+                 state_fps=STATE_FPS, dist_dir=WEB_DIST_DIR,
+                 attract_dir=ATTRACT_DIR):
         # Set before super().__init__ — the HTTP server starts serving in
         # there, and its handler reads these through the `sink` closure.
         self._state_fps = max(int(state_fps), 1)
         self._dist_dir = os.path.realpath(dist_dir) if dist_dir else None
+        self._attract_dir = (os.path.realpath(attract_dir)
+                             if attract_dir else None)
         self._state = None       # latest state JSON (bytes)
         self._state_seq = 0
         super().__init__(bind=bind, port=port, quality=quality, fps=fps)
@@ -272,8 +279,39 @@ class WebSink(MjpegSink):
                 elif path in ("/stream.mjpg", "/stream", "/snapshot.jpg",
                               "/healthz"):
                     base_handler.do_GET(self)
+                elif path.startswith("/attract/"):
+                    self._serve_attract(path)
                 else:
                     self._serve_static(path)
+
+            def _serve_attract(self, path):
+                """Serve one attract-mode slide, path-traversal-safe.
+
+                Cached hard by the browser: these are static photographs the
+                kiosk re-requests every time the exhibit goes idle, and
+                re-sending a quarter of a megabyte per slide per visitor is
+                work the Orin does not need to do."""
+                root = sink._attract_dir
+                if root is None:
+                    self.send_error(404)
+                    return
+                name = os.path.basename(path)
+                full = os.path.realpath(os.path.join(root, name))
+                if not (full.startswith(root + os.sep)
+                        and os.path.isfile(full)):
+                    self.send_error(404)
+                    return
+                ctype = (mimetypes.guess_type(full)[0]
+                         or "application/octet-stream")
+                with open(full, "rb") as f:
+                    body = f.read()
+                self.send_response(200)
+                self.send_header("Content-Type", ctype)
+                self.send_header("Content-Length", str(len(body)))
+                self.send_header("Cache-Control", "public, max-age=86400")
+                self.send_header("Access-Control-Allow-Origin", "*")
+                self.end_headers()
+                self.wfile.write(body)
 
             def _serve_state(self):
                 """SSE loop — same latest-only shape as the MJPEG stream."""
