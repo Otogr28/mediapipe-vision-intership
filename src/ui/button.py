@@ -25,6 +25,21 @@ class Button:
         return (self.x - pad <= x <= self.x + self.width + pad and
                 self.y - pad <= y <= self.y + self.height + pad)
 
+    def covers(self, point):
+        """True when ``point`` falls in this button's RESERVED area.
+
+        The area is the hit rect plus the sticky pad, applied
+        unconditionally — unlike the click test, which only inflates once
+        the button is already hovered. Reserving slightly more than is
+        clickable is the safe direction: a hand hovering a button's edge
+        doing nothing beats it quietly acting on the scene behind.
+
+        ``UIManager`` uses this to hand a button ownership of the hands
+        over it for the frame (see ``gestures.reserve_hand``).
+        """
+        return self._inside(point[0], point[1],
+                            int(BUTTON_STICKY_PAD_FRAC * self.height))
+
     def update(self, hand_result, pose_landmarks, frame_w, frame_h):
         # pose_landmarks / frame dims are unused since the pinch pipeline
         # became a per-frame snapshot (see detection/gestures.py); the

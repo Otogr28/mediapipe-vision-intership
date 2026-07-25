@@ -512,6 +512,31 @@ _pinch_machines: dict[str, _HandPinch] = {}
 _last_update_t: float | None = None
 _result_age_s: float = 0.0
 
+# Hands claimed by the UI for the current frame (see ``reserve_hand``).
+_reserved_hands: set[str] = set()
+
+
+def reserve_hand(hand_id):
+    """Claim a hand for a UI widget for the rest of this frame.
+
+    Buttons float ON TOP of the scene, and the two read the same pinch
+    snapshot independently — so closing your hand on the "Magnets" button
+    used to press the button *and* drop a magnet underneath it, because
+    nothing told the scene that a button had already taken that gesture.
+    ``UIManager`` reserves any hand sitting over a live button, and
+    ``pinch_state`` then withholds the closing EVENT from it, the way a
+    click on a dialog does not also reach the page behind it.
+
+    Cleared at the start of every ``update_pinches`` call, so a reservation
+    can never outlive the frame that made it.
+    """
+    _reserved_hands.add(hand_id)
+
+
+def hand_reserved(hand_id):
+    """True while a UI widget owns this hand's closing event this frame."""
+    return hand_id in _reserved_hands
+
 
 def update_pinches(hand_result, frame_w, frame_h, now=None, received_t=None):
     """Advance every hand's pinch machine. Call exactly ONCE per rendered
@@ -536,6 +561,9 @@ def update_pinches(hand_result, frame_w, frame_h, now=None, received_t=None):
     _last_update_t = now
     _result_age_s = (min(max(now - received_t, 0.0), 1.0)
                      if received_t is not None else 0.0)
+    # UI reservations last exactly one frame; this is the once-per-frame
+    # entry point, so clearing here is what guarantees that.
+    _reserved_hands.clear()
 
     advanced = set()
     if hand_result is not None:
@@ -577,6 +605,16 @@ def pinch_state(hand_id):
     * ``(mx, my)`` — smoothed, latency-compensated pinch cursor in pixels;
       always provided for hover/cursor use.
 
+    **This is the SCENE-facing read, and it honours UI reservations**: a
+    hand sitting over a live button reports ``pinching = False``, so
+    closing your hand on a button presses the button without also
+    spawning whatever the scene underneath does with a new pinch (see
+    ``reserve_hand``). Only the *event* is withheld — ``held`` still
+    reports the truth, so an object already being dragged survives being
+    carried across a button instead of being dropped on it. Widgets that
+    need the raw machine (buttons, the cursor overlay, the debug HUD, the
+    state payload) use ``pinch_info`` / ``pinch_infos`` instead.
+
     Reading never mutates state, so any number of widgets can query the
     same hand in one frame. Requires ``update_pinches()`` to have run this
     frame; unknown ids return ``(False, False, (0.0, 0.0))``.
@@ -584,7 +622,8 @@ def pinch_state(hand_id):
     machine = _pinch_machines.get(hand_id)
     if machine is None:
         return False, False, (0.0, 0.0)
-    return machine.pinching, machine.closed, machine.cursor
+    pinching = machine.pinching and hand_id not in _reserved_hands
+    return pinching, machine.closed, machine.cursor
 
 
 def pinch_info(hand_id):

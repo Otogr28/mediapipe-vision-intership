@@ -6,7 +6,8 @@ import cv2
 from config import (ATTRACT_ENABLED, ATTRACT_IDLE_S, DEBUG_HUD, DEMO_GESTURE,
                     GESTURE_MODE, HINT_TEXT, POSE_ENABLED, QR_BOX_FRAC, QR_DIR,
                     QR_MARGIN_FRAC, START_VTUBER)
-from detection.gestures import pinch_infos, update_pinches
+from detection.gestures import (hand_id, pinch_info, pinch_infos, reserve_hand,
+                                update_pinches)
 from rendering.gl_lensing import LensingRenderer
 from ui.attract import AttractScreen, Greeting
 from ui.button import Button
@@ -202,10 +203,18 @@ class UIManager:
             label="Magnets",
             on_click=self._spawn_magnets,
         )
-        self._experiment_btns = [self._black_hole_btn, self._slingshot_btn,
-                                 self._orbitals_btn, self._waves_btn,
-                                 self._charges_btn, self._spacetime_btn,
-                                 self._schrodinger_btn, self._magnets_btn]
+        # (state id, Button) like every other list the manager hands around —
+        # see _active_buttons().
+        self._experiment_btns = [
+            ("exp.black_hole", self._black_hole_btn),
+            ("exp.slingshot", self._slingshot_btn),
+            ("exp.orbitals", self._orbitals_btn),
+            ("exp.waves", self._waves_btn),
+            ("exp.charges", self._charges_btn),
+            ("exp.spacetime", self._spacetime_btn),
+            ("exp.schrodinger", self._schrodinger_btn),
+            ("exp.magnets", self._magnets_btn),
+        ]
 
         # Sim-speed stepper, pinned top-right: [-] 1x [+]. Only shown while
         # the active experiment exposes a `time_scale` (the slingshot).
@@ -388,6 +397,83 @@ class UIManager:
         exp = self._active_experiment
         return getattr(exp, "palette", []) if exp is not None else []
 
+    def _active_buttons(self):
+        """The ``(state id, Button)`` pairs live this frame.
+
+        The single source for the four things done with them — updating,
+        reserving the hands over them, serializing them and drawing them.
+        Three hand-kept copies of this list used to exist (`update`,
+        `to_state`, `draw`); the reservation below wanted a fourth, and a
+        button that is drawn but never updated (or hit-tested but never
+        shown) is exactly the bug that invites.
+        """
+        if self.phase != "live":
+            return []
+
+        if self.state == "menu":
+            return [("menu.interactables", self._menu_interactables_btn),
+                    ("menu.experiments", self._menu_experiments_btn)]
+
+        if self.state == "interactables":
+            out = [("spawn.sphere", self._sphere_btn),
+                   ("spawn.vtuber", self._vtuber_btn)]
+            if POSE_ENABLED:
+                # The 6-7 counter is pose-driven; without body inference its
+                # button would spawn a counter that can never count.
+                out.append(("spawn.sixseven", self._sixseven_btn))
+            if self._puppet is not None:
+                out.append(("points", self._points_btn))
+                out.append(("avatar", self._avatar_btn))
+            out.append(("reset", self._reset_btn))
+            return out
+
+        if self.state == "experiments":
+            if self._active_experiment is None:
+                out = list(self._experiment_btns)
+            else:
+                out = []
+                if self._speed_control_active():
+                    out.append(("speed.minus", self._speed_minus_btn))
+                    out.append(("speed.plus", self._speed_plus_btn))
+                # Experiment-owned palette (e.g. Orbitals body types).
+                out.extend(self._experiment_palette())
+            out.append(("reset", self._reset_btn))
+            return out
+
+        return []
+
+    def _reserve_ui_hands(self, buttons, hand_result):
+        """Give each button ownership of the hands sitting over it.
+
+        Buttons float ON TOP of the scene, and the two read the same pinch
+        snapshot independently — so closing your hand on "Magnets" pressed
+        the button *and* dropped a magnet underneath it, and merely hovering
+        a button while pinching planted objects behind it. Reserving the
+        hand makes the topmost thing win, the way a click on a dialog does
+        not also reach the page behind it.
+
+        Reserved on HOVER, not on the press, because both halves of the
+        complaint matter: nothing should appear under a button whether or
+        not the click lands. Both cursors are tested — the live one covers
+        hovering, and the press-latched one covers a close that BEGAN
+        outside and ended over the button (the button ignores that click,
+        so the scene must not take it either).
+
+        Only the closing EVENT is withheld (see ``gestures.pinch_state``);
+        a drag already under way keeps its hold, so carrying a charge past
+        the Reset button does not drop it there.
+        """
+        if hand_result is None or not buttons:
+            return
+        for i in range(len(hand_result.hand_landmarks)):
+            hid = hand_id(hand_result, i)
+            info = pinch_info(hid)
+            if info is None:
+                continue
+            if any(btn.covers(info.cursor) or btn.covers(info.press_cursor)
+                   for _bid, btn in buttons):
+                reserve_hand(hid)
+
     def _speed_control_active(self):
         """True while the active experiment has an adjustable sim speed."""
         return (self.state == "experiments"
@@ -431,39 +517,28 @@ class UIManager:
             self._pinch_hint.update(False, self._has_interacted)
             return
 
-        if self.state == "menu":
-            self._menu_interactables_btn.update(hand_result, pose_landmarks, self.frame_w, self.frame_h)
-            self._menu_experiments_btn.update(hand_result, pose_landmarks, self.frame_w, self.frame_h)
+        # BUTTONS FIRST, then the hands over them are reserved, then the
+        # scene. The order is the fix for "pressing a button also spawned
+        # something behind it": buttons sit on top, so they get first refusal
+        # on every closing gesture, and the scene is told which hands are
+        # already spoken for before it looks at any of them.
+        buttons = self._active_buttons()
+        for _bid, btn in buttons:
+            btn.update(hand_result, pose_landmarks, self.frame_w,
+                       self.frame_h)
+        self._reserve_ui_hands(buttons, hand_result)
 
-        elif self.state == "interactables":
-            self._sphere_btn.update(hand_result, pose_landmarks, self.frame_w, self.frame_h)
-            self._vtuber_btn.update(hand_result, pose_landmarks, self.frame_w, self.frame_h)
-            if POSE_ENABLED:
-                # The 6-7 counter is pose-driven; without body inference its
-                # button would spawn a counter that can never count.
-                self._sixseven_btn.update(hand_result, pose_landmarks, self.frame_w, self.frame_h)
+        if self.state == "interactables":
             for s in self.spheres:
                 s.update(hand_result, pose_landmarks)
             if self._sixseven is not None:
                 self._sixseven.update(hand_result, pose_landmarks)
             if self._puppet is not None:
                 self._puppet.update(hand_result, pose_landmarks)
-                self._points_btn.update(hand_result, pose_landmarks, self.frame_w, self.frame_h)
-                self._avatar_btn.update(hand_result, pose_landmarks, self.frame_w, self.frame_h)
-            self._reset_btn.update(hand_result, pose_landmarks, self.frame_w, self.frame_h)
 
         elif self.state == "experiments":
-            if self._active_experiment is None:
-                for btn in self._experiment_btns:
-                    btn.update(hand_result, pose_landmarks, self.frame_w, self.frame_h)
-            else:
+            if self._active_experiment is not None:
                 self._active_experiment.update(hand_result, pose_landmarks)
-                if self._speed_control_active():
-                    self._speed_minus_btn.update(hand_result, pose_landmarks, self.frame_w, self.frame_h)
-                    self._speed_plus_btn.update(hand_result, pose_landmarks, self.frame_w, self.frame_h)
-                for _id, btn in self._experiment_palette():
-                    btn.update(hand_result, pose_landmarks, self.frame_w, self.frame_h)
-            self._reset_btn.update(hand_result, pose_landmarks, self.frame_w, self.frame_h)
 
         if self._detect_interaction():
             self._has_interacted = True
@@ -475,34 +550,26 @@ class UIManager:
 
     def _detect_interaction(self):
         """True on a frame where the user pressed a button or grabbed an
-        object — used to retire the onboarding pinch hint."""
-        if self.state == "menu":
-            return self._menu_interactables_btn.pressed or self._menu_experiments_btn.pressed
+        object — used to retire the onboarding gesture hint."""
+        if any(btn.pressed for _bid, btn in self._active_buttons()):
+            return True
         if self.state == "interactables":
-            return (self._sphere_btn.pressed or self._vtuber_btn.pressed
-                    or self._sixseven_btn.pressed
-                    or self._reset_btn.pressed
-                    or any(s.grabbed for s in self.spheres)
-                    or (self._puppet is not None and (self._puppet.grabbed
-                        or self._points_btn.pressed
-                        or self._avatar_btn.pressed)))
+            return (any(s.grabbed for s in self.spheres)
+                    or (self._puppet is not None and self._puppet.grabbed))
         if self.state == "experiments":
-            if self._active_experiment is None:
-                return self._reset_btn.pressed or any(b.pressed for b in self._experiment_btns)
-            return (self._reset_btn.pressed or self._active_experiment.grabbed
-                    or self._speed_minus_btn.pressed or self._speed_plus_btn.pressed
-                    or any(btn.pressed for _id, btn in self._experiment_palette()))
+            return (self._active_experiment is not None
+                    and self._active_experiment.grabbed)
         return False
 
     def to_state(self):
         """Serializable UI snapshot for the web frontend.
 
-        Mirrors the per-state branching of draw(): only the buttons/objects
-        the cv2 path would draw this frame are included, so the browser is
-        a pure renderer of the same scene. All logic (state machine,
-        hit-testing, physics) stays here.
+        Buttons come from the same `_active_buttons()` list that update(),
+        the hand reservation and draw() use, so the browser can never be
+        sent a button the backend is not hit-testing. Objects still branch
+        per state below. All logic (state machine, hit-testing, physics)
+        stays here.
         """
-        buttons = []
         objects = []
         speed = None
         experiment = None
@@ -514,18 +581,9 @@ class UIManager:
             return {"session": self._session_state(None), "buttons": [],
                     "speed": None, "objects": []}
 
-        if self.state == "menu":
-            buttons = [
-                self._menu_interactables_btn.to_state("menu.interactables"),
-                self._menu_experiments_btn.to_state("menu.experiments"),
-            ]
+        buttons = [btn.to_state(bid) for bid, btn in self._active_buttons()]
 
-        elif self.state == "interactables":
-            buttons = [self._sphere_btn.to_state("spawn.sphere"),
-                       self._vtuber_btn.to_state("spawn.vtuber")]
-            if POSE_ENABLED:
-                buttons.append(self._sixseven_btn.to_state("spawn.sixseven"))
-            buttons.append(self._reset_btn.to_state("reset"))
+        if self.state == "interactables":
             objects = [dict(s.to_state(), id=i)
                        for i, s in enumerate(self.spheres)]
             if self._sixseven is not None:
@@ -533,37 +591,15 @@ class UIManager:
             # The puppet renders last so its dim backdrop sits over the scene.
             if self._puppet is not None:
                 objects.append(self._puppet.to_state())
-                buttons.append(self._points_btn.to_state("points"))
-                buttons.append(self._avatar_btn.to_state("avatar"))
 
-        elif self.state == "experiments":
-            if self._active_experiment is None:
-                buttons = [
-                    self._black_hole_btn.to_state("exp.black_hole"),
-                    self._slingshot_btn.to_state("exp.slingshot"),
-                    self._orbitals_btn.to_state("exp.orbitals"),
-                    self._waves_btn.to_state("exp.waves"),
-                    self._charges_btn.to_state("exp.charges"),
-                    self._spacetime_btn.to_state("exp.spacetime"),
-                    self._schrodinger_btn.to_state("exp.schrodinger"),
-                    self._magnets_btn.to_state("exp.magnets"),
-                ]
-            else:
-                exp_state = self._active_experiment.to_state()
-                experiment = exp_state["type"]
-                objects = [exp_state]
-                if self._speed_control_active():
-                    buttons = [
-                        self._speed_minus_btn.to_state("speed.minus"),
-                        self._speed_plus_btn.to_state("speed.plus"),
-                    ]
-                    x, y, w, h = self._speed_label_rect
-                    speed = {"rect": [x, y, w, h],
-                             "text": f"{self._active_experiment.time_scale:g}x"}
-                # Experiment-owned palette buttons (e.g. Orbitals body types).
-                for _id, btn in self._experiment_palette():
-                    buttons.append(btn.to_state(_id))
-            buttons.append(self._reset_btn.to_state("reset"))
+        elif self.state == "experiments" and self._active_experiment is not None:
+            exp_state = self._active_experiment.to_state()
+            experiment = exp_state["type"]
+            objects = [exp_state]
+            if self._speed_control_active():
+                x, y, w, h = self._speed_label_rect
+                speed = {"rect": [x, y, w, h],
+                         "text": f"{self._active_experiment.time_scale:g}x"}
 
         return {
             "session": self._session_state(experiment),
@@ -682,15 +718,11 @@ class UIManager:
                 self._debug_hud.draw(frame, self.presence_state())
             return
 
-        if self.state == "menu":
-            self._menu_interactables_btn.draw(frame)
-            self._menu_experiments_btn.draw(frame)
-
-        elif self.state == "interactables":
-            self._sphere_btn.draw(frame)
-            self._vtuber_btn.draw(frame)
-            if POSE_ENABLED:
-                self._sixseven_btn.draw(frame)
+        # The SCENE draws first, buttons last: they float on top, they stay
+        # readable over a black hole's full-frame distortion, and drawing
+        # them last is the visual half of the same rule the hand reservation
+        # enforces for input (see _reserve_ui_hands).
+        if self.state == "interactables":
             for s in self.spheres:
                 s.draw(frame)
             if self._sixseven is not None:
@@ -698,26 +730,16 @@ class UIManager:
             # The puppet dims the scene, so it draws over the spheres.
             if self._puppet is not None:
                 self._puppet.draw(frame)
-                self._points_btn.draw(frame)
-                self._avatar_btn.draw(frame)
-            self._reset_btn.draw(frame)
 
         elif self.state == "experiments":
-            # The active experiment draws first (e.g. the BH's full-frame
-            # distortion) so the picker/reset buttons stay readable on top.
             if self._active_experiment is not None:
                 self._active_experiment.draw(frame)
                 self._draw_qr_plate(frame)
-                if self._speed_control_active():
-                    self._speed_minus_btn.draw(frame)
-                    self._speed_plus_btn.draw(frame)
-                    self._draw_speed_label(frame)
-                for _id, btn in self._experiment_palette():
-                    btn.draw(frame)
-            else:
-                for btn in self._experiment_btns:
-                    btn.draw(frame)
-            self._reset_btn.draw(frame)
+
+        for _bid, btn in self._active_buttons():
+            btn.draw(frame)
+        if self.state == "experiments" and self._speed_control_active():
+            self._draw_speed_label(frame)
 
         # The pinch cursor sits above the scene so the user always sees the
         # exact point — and the progress — the detector sees.
