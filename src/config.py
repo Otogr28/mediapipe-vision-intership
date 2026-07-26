@@ -1039,12 +1039,14 @@ ST_LATTICE_DEPTH_PX = 300.0  # vertical extent of the lattice box (px). Kept
                              # well under the reach: layers further out than
                              # ST_CURV_REACH_PX from a mass feel nothing and
                              # just add flat clutter.
-ST_LATTICE_MARGIN = 1.15     # slightly larger than the frame, so a mass placed
-                             # anywhere the user can reach is INSIDE the volume.
-                             # The box edges therefore sit just off-screen — the
-                             # reference is a standalone model that can show its
-                             # own corners; an AR overlay reads better as "space
-                             # fills the view".
+ST_LATTICE_MARGIN = 1.55     # slightly larger than the VISIBLE patch at the
+                             # zoomed-out default (1/ST_ZOOM_DEFAULT = 1.33x
+                             # the frame), so a mass placed anywhere the user
+                             # can reach is INSIDE the volume and the box edges
+                             # sit just off-screen — the reference is a
+                             # standalone model that can show its own corners;
+                             # an AR overlay reads better as "space fills the
+                             # view".
 ST_LATTICE_VERTICALS = True  # the box's vertical struts; off = layers only
 ST_LATTICE_VERT_STRIDE = 2   # ...but only every Nth node, or 100+ struts turn
                              # the volume into a hairball
@@ -1064,10 +1066,14 @@ ST_GRID_COLS = 30
 ST_GRID_ROWS = 18
 ST_LINE_SAMPLES = 72
 # Sheet extent as a fraction of the frame. Sized for the YAWED case, not the
-# default one: the sheet is a finite patch, so at 1.25 a 70-degree yaw swings
-# its corner into view and leaves a bare triangle. 1.7 keeps the edges out of
-# frame through a full spin; cols/rows are scaled with it to hold cell density.
-ST_GRID_MARGIN = 1.7
+# default one: the sheet is a finite patch, so a spin must not swing a bare
+# corner into view. 1.7 covered a full spin at zoom 1.0; the camera now opens
+# at ST_ZOOM_DEFAULT = 0.75 (the view is 1/0.75 = 1.33x the frame each way),
+# so the extent scales by the same factor. Cols/rows deliberately do NOT
+# scale with it: the world cells get coarser by exactly what the zoom-out
+# shrinks them, so on-screen cell density — and the per-frame polyline cost
+# the Jetson pays in Canvas2D — is unchanged.
+ST_GRID_MARGIN = 2.3
 
 # Camera — a TURNTABLE (yaw about the sheet's normal + elevation), not an
 # arcball. The sheet has a real "up", so preserving it is what keeps the view
@@ -1093,7 +1099,15 @@ ST_YAW_DEFAULT_RAD = 0.0
 ST_PITCH_DEFAULT_RAD = math.radians(34.0)   # classic three-quarter view
 ST_PITCH_TOP_RAD = math.radians(90.0)       # the "Top" button's exact XY view
 ST_FOCAL_PX = 1700.0         # perspective focal length; larger = flatter
-ST_ZOOM_MIN, ST_ZOOM_MAX = 0.55, 2.4
+# The camera opens ZOOMED OUT. At 1.0 the visible patch is exactly the frame,
+# which reads as a close-up of a single well; 0.75 shows ~1.33x the frame each
+# way, so a staged system (see the preset block below) has empty space around
+# it and a whole binary orbit fits on screen with room to breathe. Placement
+# is untouched — the hand still maps to frame px, so the reachable region is
+# the middle of the visible space — and the two-hand pinch-zoom can always
+# come back to 1.0 and past it.
+ST_ZOOM_DEFAULT = 0.75
+ST_ZOOM_MIN, ST_ZOOM_MAX = 0.45, 2.4
 
 # --- Two-hand camera control: hybrid position/rate (RubberEdge-style) -----
 #
@@ -1170,11 +1184,11 @@ ST_TIME_SCALES = (0.25, 0.5, 1.0, 2.0, 4.0)
 ST_ORB_TRAIL_LEN = 360       # ~2 laps at 1x — enough to see the axis walk
 # Anything beyond this * frame extent is removed — masses AND orbiters. With
 # everything gravitating, a close encounter can sling a body off-screen, and an
-# off-screen mass would keep pulling the scene with no visible cause. 1.8 is
-# just past the drawn sheet (ST_GRID_MARGIN 1.7) and matches the widest view
-# (min zoom 0.55 shows ~1.8x the frame), so a body vanishes only once no
+# off-screen mass would keep pulling the scene with no visible cause. 2.4 is
+# just past the drawn sheet (ST_GRID_MARGIN 2.3) and matches the widest view
+# (min zoom 0.45 shows ~2.2x the frame), so a body vanishes only once no
 # camera setting could still show it. A grabbed mass is never pruned.
-ST_PRUNE_MARGIN = 1.8
+ST_PRUNE_MARGIN = 2.4
 # Spawn velocity as a fraction of the local circular speed. 1.0 would give a
 # circle, which precesses invisibly (a rotating circle looks identical); 0.72
 # gives a clearly eccentric ellipse whose axis visibly walks around.
@@ -1193,6 +1207,51 @@ ST_ORBITER_MASS = 0.02
 # seconds. 1.0 = circular; the ORBITER palette entry keeps its own eccentric
 # ST_ORB_SPAWN_VFRAC so it visibly precesses.
 ST_MASS_SPAWN_VFRAC = 1.0
+
+# --- Preset systems (one button = one staged scene) -----------------------
+# PRECESS proved the pattern: one press stages a system that would take a
+# visitor several precise pinches to build. BINARY is the LIGO story end to
+# end — two equal Holes on a mutual circular orbit about their COM, spiralling
+# in by the GW drag below until the horizons touch and merge (flash, ~5% mass
+# radiated, ripples on the sheet the whole way). SYSTEM is the Kepler picture:
+# one Sun with three planets on staggered eccentric orbits whose ellipses
+# visibly precess. Sizes are fractions of the frame HEIGHT (the binding screen
+# dimension), so window mode stages the same picture at any capture size.
+ST_BINARY_SEP_FRAC = 0.28    # ~200 px at 720p. Peters gives ~1 min of 1x sim
+                             # time to merger — slow enough to watch the orbit
+                             # tighten, and the speed buttons cover the
+                             # impatient. v/c ~ 0.11 per body at the start, so
+                             # the inspiral begins inside the honest 1PN band.
+# SYSTEM's planets launch milder and LIGHTER than the hand-placed ORBITER,
+# because three of them have to share one screen for minutes. Both numbers
+# were sized by measurement, not by the Newtonian back-of-envelope (which
+# failed twice here):
+#
+#   * vfrac 0.92 -> e ~ 0.11: still a visibly precessing ellipse, but the
+#     periapsis sits at ~0.78 * apoapsis instead of the ORBITER 0.72's ~0.35,
+#     which is what lets three NON-CROSSING orbits fit between the Sun's
+#     surface and the frame. The first cut reused 0.72 with evenly spaced
+#     radii: the orbits crossed, and a planet-planet encounter walked the
+#     middle planet's periapsis into the Sun's 50 px surface within laps.
+#   * mass 0.002 vs ST_ORBITER_MASS's 0.02: three 2%-of-the-star planets at
+#     screen-sized spacings are a genuinely unstable system — mutual-Hill
+#     spacing K ~ 2.4 where long-term stability wants >~ 4 — and the measured
+#     result was planet-planet scattering at ~160 s that ended with the star
+#     eating its own system. 0.4% (K ~ 4) still lost a planet at ~24 min of
+#     sim time; 0.2% (K ~ 5) ran a 30-minute soak clean. The planets still
+#     gravitate back; they are just no longer a trio of super-Jupiters.
+ST_SYSTEM_SPAWN_VFRAC = 0.92
+ST_SYSTEM_PLANET_MASS = 0.002
+# Planet apoapses, as fractions of H. Consecutive ratios keep each planet's
+# periapsis OUTSIDE its inner neighbour's apoapsis with a REAL gap (>= 55 px
+# — the first cut left 1-2 px gaps, which is crossing in all but name): no
+# encounters, no scattering. The inner periapsis (~112 px) clears the Sun's
+# 50 px surface more than twice over; the outermost apoapsis (~460 px)
+# deliberately pokes past the frame's top and bottom — the camera opens
+# zoomed out (ST_ZOOM_DEFAULT shows ~480 px of world half-height), so it
+# stays fully visible, and planets are not pinch targets (only masses are
+# grabbable).
+ST_SYSTEM_ORBIT_FRACS = (0.20, 0.36, 0.64)
 
 # --- Gravitational waves ------------------------------------------------
 # A bound pair radiates orbital energy as gravitational waves and spirals in.

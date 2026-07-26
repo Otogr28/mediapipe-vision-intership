@@ -37,17 +37,17 @@ from config import (BH_DEFAULT_POS_FACTOR, BH_DISK_BRIGHTNESS,
                     SCAT_PARTICLE_SPEED, SCAT_RECOIL_DECAY, SCAT_SPRITE_DIR,
                     SCAT_TRIGGER_R_PX, SIXSEVEN_FLASH_FRAMES,
                     SIXSEVEN_HYSTERESIS, SIXSEVEN_MIN_VISIBILITY,
-                    ST_BACKDROP_ALPHA, ST_BACKDROP_RGB, ST_CAM_PITCH_POS_GAIN,
-                    ST_CAM_PITCH_RATE_GAIN, ST_CAM_POS_RADIUS_PX,
-                    ST_CAM_RATE_MAX_RAD_S, ST_CAM_SMOOTH, ST_CAM_YAW_POS_GAIN,
-                    ST_CAM_YAW_RATE_GAIN, ST_CAPTURE_FLASH_DECAY,
-                    ST_CURV_REACH_PX, ST_DEFAULT_KIND, ST_DEPTH_GAIN,
-                    ST_FOCAL_PX, ST_FRAME_DT, ST_GRAB_PAD_PX, ST_GRID_COLS,
-                    ST_GRID_MARGIN, ST_GRID_ROWS, ST_GW_ENABLED, ST_GW_GAIN,
-                    ST_GW_HIST_S, ST_GW_STRAIN_GAIN, ST_GW_WAVE_ENABLED,
-                    ST_GW_WAVE_MAX_PX, ST_LATTICE_COLS, ST_LATTICE_DEPTH_PX,
-                    ST_LATTICE_GAIN, ST_LATTICE_LAYERS, ST_LATTICE_MARGIN,
-                    ST_LATTICE_ROWS, ST_LATTICE_SAMPLES,
+                    ST_BACKDROP_ALPHA, ST_BACKDROP_RGB, ST_BINARY_SEP_FRAC,
+                    ST_CAM_PITCH_POS_GAIN, ST_CAM_PITCH_RATE_GAIN,
+                    ST_CAM_POS_RADIUS_PX, ST_CAM_RATE_MAX_RAD_S, ST_CAM_SMOOTH,
+                    ST_CAM_YAW_POS_GAIN, ST_CAM_YAW_RATE_GAIN,
+                    ST_CAPTURE_FLASH_DECAY, ST_CURV_REACH_PX, ST_DEFAULT_KIND,
+                    ST_DEPTH_GAIN, ST_FOCAL_PX, ST_FRAME_DT, ST_GRAB_PAD_PX,
+                    ST_GRID_COLS, ST_GRID_MARGIN, ST_GRID_ROWS, ST_GW_ENABLED,
+                    ST_GW_GAIN, ST_GW_HIST_S, ST_GW_STRAIN_GAIN,
+                    ST_GW_WAVE_ENABLED, ST_GW_WAVE_MAX_PX, ST_LATTICE_COLS,
+                    ST_LATTICE_DEPTH_PX, ST_LATTICE_GAIN, ST_LATTICE_LAYERS,
+                    ST_LATTICE_MARGIN, ST_LATTICE_ROWS, ST_LATTICE_SAMPLES,
                     ST_LATTICE_VERT_STRIDE, ST_LATTICE_VERTICALS,
                     ST_LINE_SAMPLES, ST_LT_TWIST_GAIN, ST_LT_TWIST_MAX_RAD,
                     ST_MASS_SPAWN_VFRAC, ST_MASS_TYPES, ST_MAX_MASSES,
@@ -57,8 +57,10 @@ from config import (BH_DEFAULT_POS_FACTOR, BH_DISK_BRIGHTNESS,
                     ST_ORBITER_MASS, ST_ORBITER_RGB, ST_PHYS_DT,
                     ST_PITCH_DEFAULT_RAD, ST_PITCH_TOP_RAD, ST_PN_ENABLED,
                     ST_PN_ITERS, ST_PRUNE_MARGIN, ST_RS_PER_MASS, ST_SPIN_MAX,
-                    ST_SPIN_VIS_SCALE, ST_TIME_SCALES, ST_VIEW_3D_DEFAULT,
-                    ST_YAW_DEFAULT_RAD, ST_ZOOM_DEADZONE, ST_ZOOM_MAX,
+                    ST_SPIN_VIS_SCALE, ST_SYSTEM_ORBIT_FRACS,
+                    ST_SYSTEM_PLANET_MASS, ST_SYSTEM_SPAWN_VFRAC,
+                    ST_TIME_SCALES, ST_VIEW_3D_DEFAULT, ST_YAW_DEFAULT_RAD,
+                    ST_ZOOM_DEADZONE, ST_ZOOM_DEFAULT, ST_ZOOM_MAX,
                     ST_ZOOM_MIN, WAVE_AMP, WAVE_DECAY_TAU_S, WAVE_DEFAULT_KIND,
                     WAVE_DISPLAY_GAIN, WAVE_DISPLAY_MAX_ALPHA, WAVE_FRAME_DT,
                     WAVE_GRAB_PAD_PX, WAVE_GRID_PX, WAVE_MAX_DEBT_S,
@@ -3125,7 +3127,7 @@ class Spacetime:
         # tremor does not shake the scene.
         self._yaw_t = ST_YAW_DEFAULT_RAD
         self._pitch_t = ST_PITCH_DEFAULT_RAD
-        self._zoom_t = 1.0
+        self._zoom_t = ST_ZOOM_DEFAULT
         self._yaw = self._yaw_t
         self._pitch = self._pitch_t
         self._zoom = self._zoom_t
@@ -3164,19 +3166,28 @@ class Spacetime:
         margin = int(self.h * 0.12)
         bw, bh, gap = 96, 46, 8
         x0, y0 = margin, margin
+
+        # 8 buttons per row, then wrap (the picker's precedent): at the
+        # kiosk's 1280 the 9th button would collide with the sim-speed
+        # stepper pinned top-right (speed.minus starts at ~1010 px).
+        def pos(i):
+            return (x0 + (i % 8) * (bw + gap), y0 + (i // 8) * (bh + gap))
+
         self._type_btns = []
         kinds = [(k, spec["label"]) for k, spec in ST_MASS_TYPES.items()]
         kinds.append((ST_ORBITER_KIND, "Orbiter"))
         for i, (kind, label) in enumerate(kinds):
+            bx, by = pos(i)
             btn = Button(
-                x=x0 + i * (bw + gap), y=y0, width=bw, height=bh,
+                x=bx, y=by, width=bw, height=bh,
                 label=label, on_click=(lambda k=kind: self._select(k)),
                 font_scale=0.55,
             )
             self._type_btns.append((f"st.type.{kind}", kind, btn))
         n = len(self._type_btns)
+        bx, by = pos(n)
         self._view_btn = Button(
-            x=x0 + n * (bw + gap), y=y0, width=bw, height=bh,
+            x=bx, y=by, width=bw, height=bh,
             label="3D" if ST_VIEW_3D_DEFAULT else "2D",
             on_click=self._toggle_view, font_scale=0.65,
         )
@@ -3186,16 +3197,29 @@ class Spacetime:
         # earn a square-on view by holding a two-hand push — the one view people
         # actually ask for gets a button. Pressing again returns to the
         # three-quarter view.
+        bx, by = pos(n + 1)
         self._top_btn = Button(
-            x=x0 + (n + 1) * (bw + gap), y=y0, width=bw, height=bh,
+            x=bx, y=by, width=bw, height=bh,
             label="Top", on_click=self._toggle_top, font_scale=0.65,
         )
+        bx, by = pos(n + 2)
         self._preset_btn = Button(
-            x=x0 + (n + 2) * (bw + gap), y=y0, width=bw, height=bh,
+            x=bx, y=by, width=bw, height=bh,
             label="Precess", on_click=self._preset_precession, font_scale=0.5,
         )
+        bx, by = pos(n + 3)
+        self._binary_btn = Button(
+            x=bx, y=by, width=bw, height=bh,
+            label="Binary", on_click=self._preset_binary, font_scale=0.5,
+        )
+        bx, by = pos(n + 4)
+        self._system_btn = Button(
+            x=bx, y=by, width=bw, height=bh,
+            label="System", on_click=self._preset_system, font_scale=0.5,
+        )
+        bx, by = pos(n + 5)
         self._clear_btn = Button(
-            x=x0 + (n + 3) * (bw + gap), y=y0, width=bw, height=bh,
+            x=bx, y=by, width=bw, height=bh,
             label="Clear", on_click=self.clear, font_scale=0.6,
         )
 
@@ -3251,6 +3275,8 @@ class Spacetime:
                 + [("st.view", self._view_btn),
                    ("st.top", self._top_btn),
                    ("st.preset.precess", self._preset_btn),
+                   ("st.preset.binary", self._binary_btn),
+                   ("st.preset.system", self._system_btn),
                    ("st.clear", self._clear_btn)])
 
     def _select(self, kind):
@@ -3318,13 +3344,18 @@ class Spacetime:
                 best, best_d = m, d
         return best
 
-    def _place_orbiter(self, x, y):
+    def _place_orbiter(self, x, y, vfrac=ST_ORB_SPAWN_VFRAC,
+                       m=ST_ORBITER_MASS):
         """Launch a test particle at (x, y) around the nearest mass.
 
-        Tangential launch at ``ST_ORB_SPAWN_VFRAC`` of the local PW circular
-        speed ``v = sqrt(G*M*r)/(r - rs)``. Below 1.0 the launch point is the
-        APOapsis, so the orbit is an ellipse of eccentricity ~``1 - f^2`` — a
-        circle would precess invisibly (a rotating circle looks identical).
+        Tangential launch at ``vfrac`` (default ``ST_ORB_SPAWN_VFRAC``) of the
+        local PW circular speed ``v = sqrt(G*M*r)/(r - rs)``. Below 1.0 the
+        launch point is the APOapsis, so the orbit is an ellipse of
+        eccentricity ~``1 - f^2`` — a circle would precess invisibly (a
+        rotating circle looks identical). The SYSTEM preset passes its own
+        milder ``vfrac`` and a lighter ``m``: three planets sharing one
+        screen must neither cross orbits nor Hill-scatter each other (see
+        the ST_SYSTEM_* config note).
         """
         host = self._nearest_mass(x, y)
         if host is None:
@@ -3340,8 +3371,8 @@ class Spacetime:
             s = r_min / r
             dx, dy, r = dx * s, dy * s, r_min
             x, y = host.x + dx, host.y + dy
-        o = _Orbiter(self._next_id, x, y, 0.0, 0.0)
-        o.vx, o.vy = self._orbit_velocity(o, x, y, ST_ORB_SPAWN_VFRAC)
+        o = _Orbiter(self._next_id, x, y, 0.0, 0.0, m=m)
+        o.vx, o.vy = self._orbit_velocity(o, x, y, vfrac)
         self._next_id += 1
         self.orbiters.append(o)
         if len(self.orbiters) > ST_MAX_ORBITERS:
@@ -3393,6 +3424,62 @@ class Spacetime:
         cx, cy = self.w * 0.5, self.h * 0.5
         self._place_mass(cx, cy, "sun")
         self._place_orbiter(cx + 200, cy)
+
+    def _preset_binary(self):
+        """One press gets the LIGO story: two equal Holes on a mutual orbit,
+        spiralling in by GW drag until the horizons touch and merge.
+
+        The circular seed is solved about the COM against the ACTUAL
+        integrator: seed each hole with the Newtonian value and iterate on
+        the inward acceleration :meth:`_accelerate` reports (the GW drag it
+        adds is tangential, so the radial read stays clean). Neither existing
+        solver fits here — :meth:`_orbit_velocity` assumes a dominant static
+        host, which a comparable-mass pair does not have, and seeding from
+        :meth:`_pair_force` (tried first) left the pair visibly eccentric:
+        that pseudo-potential is the ORBITERS' physics and runs ~23% stronger
+        than the masses' EIH at 20 r_g. Each hole rides at r = sep/2, so
+        ``v = sqrt(a_inward * sep/2)``; opposite tangents make the total
+        momentum exactly zero, so the pair inspirals IN PLACE instead of
+        drifting off the sheet.
+        """
+        self.clear()
+        cx, cy = self.w * 0.5, self.h * 0.5
+        sep = ST_BINARY_SEP_FRAC * self.h
+        a = self._place_mass(cx - sep * 0.5, cy, "bh")
+        b = self._place_mass(cx + sep * 0.5, cy, "bh")
+        v = 0.5 * math.sqrt(ST_ORB_G * (a.m + b.m) / sep)
+        for _ in range(3):
+            a.vx, a.vy = 0.0, -v          # left hole up, right hole down:
+            b.vx, b.vy = 0.0, v           # prograde for the holes' own spin
+            self._accelerate()
+            ux, uy = (a.x - b.x) / sep, (a.y - b.y) / sep   # inward, for b
+            a_in = b.ax * ux + b.ay * uy
+            if a_in <= 0.0:
+                break
+            v = math.sqrt(a_in * sep * 0.5)
+        a.vx, a.vy = 0.0, -v
+        b.vx, b.vy = 0.0, v
+
+    def _preset_system(self):
+        """One press gets the Kepler picture: a Sun with three planets on
+        staggered eccentric orbits, every ellipse slowly precessing.
+
+        Apoapsis radii come from ST_SYSTEM_ORBIT_FRACS and the launch speed
+        from ST_SYSTEM_SPAWN_VFRAC — sized TOGETHER so no orbit crosses its
+        neighbour and the inner periapsis clears the Sun's surface (see the
+        config note: the first cut used the ORBITER eccentricity and the star
+        ate a planet within a few laps). Launch angles are staggered ~125 deg
+        apart so the planets never read as a staged conga line.
+        """
+        self.clear()
+        cx, cy = self.w * 0.5, self.h * 0.5
+        self._place_mass(cx, cy, "sun")
+        for frac, ang in zip(ST_SYSTEM_ORBIT_FRACS, (0.0, 2.2, 4.4)):
+            r = frac * self.h
+            self._place_orbiter(cx + r * math.cos(ang),
+                                cy + r * math.sin(ang),
+                                vfrac=ST_SYSTEM_SPAWN_VFRAC,
+                                m=ST_SYSTEM_PLANET_MASS)
 
     def _mass_at(self, px, py):
         best, best_d = None, None
@@ -3804,34 +3891,46 @@ class Spacetime:
         return ax, ay
 
     def _step(self, dt):
-        """Velocity-Verlet: symplectic, so a bound orbit stays bound over a
-        long exhibit run instead of spiralling out the way RK4 would.
+        """Velocity-Verlet with velocity PREDICTION, because EIH reads v.
 
-        Textbook VV assumes ``a(x)``, but the Kerr force reads velocity (for
-        the prograde/retrograde spin sign), which makes the update implicit.
-        Rather than iterate, the new acceleration is evaluated at the HALF-STEP
-        velocity — the standard explicit variant for weakly velocity-dependent
-        forces. It is a good trade here because the velocity only enters
-        through a tanh that saturates: except for a near-radial plunge the sign
-        is already pinned, so the term is effectively constant across a step.
+        Textbook VV assumes ``a(x)`` and its trapezoidal kick wants the
+        endpoint acceleration ``a(t+dt)`` — which for the velocity-dependent
+        1PN terms means ``v(t+dt)``, making the kick implicit. The velocities
+        are therefore predicted across the whole step with the old
+        acceleration before the field is re-derived, and the corrector then
+        swaps the prediction for the trapezoid. Same number of force
+        evaluations as plain VV; the endpoint just sees an O(dt^2)-accurate
+        velocity instead of a stale one.
+
+        This is load-bearing, not taste: evaluating the endpoint with the
+        STALE pre-kick velocity (the previous version) drops the integrator
+        to FIRST order in the 1PN sector, and the resulting drift is a pump —
+        a circular equal-mass Hole binary widened at +0.8 px/s, faster than
+        the GW drag shrinks it (-0.7 px/s at 200 px), so binaries spiralled
+        OUT. Measured while staging the BINARY preset: Newton-only drift was
+        +0.0001 px/s and the 1PN pump halved with dt, which is what fingered
+        the missing endpoint velocity rather than the equations themselves.
         """
         bodies = self.bodies()
-        # Drift + kick with the CURRENT acceleration, then re-derive the whole
-        # pairwise field once and kick again. Held bodies are pinned by the
-        # hand, so they are moved but never integrated.
+        # Drift + predict + one field re-derivation + corrector kick. Held
+        # bodies are pinned by the hand, so they are moved but never
+        # integrated.
         old = [(b.ax, b.ay) for b in bodies]
         for b in bodies:
             if b is self._grab_mass:
                 continue
             b.x += b.vx * dt + 0.5 * b.ax * dt * dt
             b.y += b.vy * dt + 0.5 * b.ay * dt * dt
+            b.vx += b.ax * dt          # predictor: v(t+dt) to O(dt^2)
+            b.vy += b.ay * dt
         self._accelerate()
         for b, (oax, oay) in zip(bodies, old):
             if b is self._grab_mass:
                 b.vx = b.vy = 0.0
                 continue
-            b.vx += 0.5 * (oax + b.ax) * dt
-            b.vy += 0.5 * (oay + b.ay) * dt
+            # Net result: v += 0.5*(a_old + a_new)*dt — the plain VV kick.
+            b.vx += 0.5 * (b.ax - oax) * dt
+            b.vy += 0.5 * (b.ay - oay) * dt
 
     def _capture(self):
         """Swallow anything that crosses a HORIZON — the visible end of a
@@ -3965,6 +4064,15 @@ class Spacetime:
         while self._time_acc >= ST_PHYS_DT and steps < ST_MAX_SUBSTEPS:
             self._time_acc -= ST_PHYS_DT
             self._step(ST_PHYS_DT)
+            # Merge check per SUBSTEP, not per frame: the end of an inspiral
+            # is the fastest thing in the scene, and a pair checked only at
+            # frame rate can swing INSIDE the contact distance and back out
+            # between checks — the undetected sub-rs periapsis then hands
+            # both bodies an enormous 1PN kick and the "merger" ends with
+            # two holes slingshot off the sheet (observed staging the BINARY
+            # preset). Per substep the approach is <= ~8 px per check against
+            # a 20 px contact disk, so the crossing cannot tunnel through.
+            self._merge_masses()
             steps += 1
         if steps == ST_MAX_SUBSTEPS:
             self._time_acc = 0.0

@@ -216,9 +216,44 @@ def check_spacetime_physics():
     st._prune()
     assert st.masses, "grabbed mass must never be pruned"
 
+    # 9. The preset systems must stage what their buttons promise. BINARY:
+    #    two holes, zero net momentum (it must inspiral IN PLACE), and the
+    #    GW drag must actually take it to merger — with the ~5% mass loss —
+    #    within a bounded stretch of sim time. SYSTEM: a sun and three
+    #    planets that survive several inner-orbit laps without being eaten
+    #    by the star or slung off the sheet.
+    st = Spacetime(1280, 720)
+    st._preset_binary()
+    assert [m.kind for m in st.masses] == ["bh", "bh"], "binary: wrong bodies"
+    px = sum(m.m * m.vx for m in st.masses)
+    py = sum(m.m * m.vy for m in st.masses)
+    assert abs(px) < 1e-6 and abs(py) < 1e-6, "binary preset drifts"
+    m_tot = sum(m.m for m in st.masses)
+    st._scale_idx = len(C.ST_TIME_SCALES) - 1     # fast-forward the inspiral
+    for _ in range(2400):                          # <= ~320 s of sim time
+        st._advance()
+        if len(st.masses) == 1:
+            break
+    assert len(st.masses) == 1, "binary did not inspiral to merger"
+    assert abs(st.masses[0].m - m_tot * (1 - C.ST_MERGE_GW_MASS_LOSS)) < 1e-9, \
+        "merger skipped the GW mass loss"
+
+    st = Spacetime(1280, 720)
+    st._preset_system()
+    assert [m.kind for m in st.masses] == ["sun"], "system: wrong star"
+    assert len(st.orbiters) == 3, "system: expected three planets"
+    sun = st.masses[0]
+    for o in st.orbiters:
+        assert math.hypot(o.x - sun.x, o.y - sun.y) > sun.r_body, \
+            "system: planet spawned inside the star"
+    st._scale_idx = len(C.ST_TIME_SCALES) - 1
+    for _ in range(300):                           # ~40 s: >8 inner laps
+        st._advance()
+    assert len(st.orbiters) == 3, "system: a planet was eaten or slung off"
+
     print("  ok    Spacetime physics (tangency / depth / PW limit / GW rate /"
           " momentum / merger / EIH-vs-GR precession / free pitch /"
-          " off-screen prune)")
+          " off-screen prune / binary + system presets)")
 
 
 def check_magnets_physics():
@@ -389,9 +424,11 @@ def main():
     st._preset_precession()
     st._place_mass(W * 0.75, H * 0.35, "bh")       # spinning body: Kerr paths
     st._place_mass(W * 0.25, H * 0.65, "neutron")  # interior cap path
-    # Every render/camera branch: 2D sheet, 3D lattice, and the Top snap.
+    # Every render/camera branch: 2D sheet, 3D lattice, the Top snap, and
+    # both staged presets (each redraws through update/to_state/draw).
     cases.append(("Spacetime", st, (st._toggle_view, st._toggle_top,
-                                    st._toggle_top, st._toggle_view)))
+                                    st._toggle_top, st._toggle_view,
+                                    st._preset_binary, st._preset_system)))
 
     cases.append(("SchrodingerCat", SchrodingerCat(W, H), ()))
     cases.append(("Puppet", Puppet(W, H), ()))
