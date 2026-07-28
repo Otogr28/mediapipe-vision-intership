@@ -424,12 +424,18 @@ class UIManager:
 
     def wants_pose(self):
         """True when an active feature needs body-pose inference right now —
-        the Vtuber puppet (its arms follow shoulder→elbow→wrist) or the
-        pose-driven 6-7 counter. `main.py` runs the pose detector only when
+        which is the Vtuber puppet alone (its arms follow
+        shoulder→elbow→wrist). `main.py` runs the pose detector only when
         this (or the HALL_POSE=1 override) is set, so the default hand-only
         UI keeps pose OFF — the big CPU win — while selecting Vtuber lights
-        the skeleton up on demand and puts it away again on Reset."""
-        return self._puppet is not None or self._sixseven is not None
+        the skeleton up on demand and puts it away again on Reset.
+
+        The 6-7 counter used to be listed here too. It is hand-only now (see
+        `SixSevenCounter`), which matters beyond the CPU: building the pose
+        detector happens INSIDE the render loop, and on the Jetson that is a
+        multi-second TensorRT engine load — a freeze the whole exhibit would
+        have paid the first time any visitor opened the game."""
+        return self._puppet is not None
 
     def _experiment_palette(self):
         """(id, Button) list the active experiment exposes for its own

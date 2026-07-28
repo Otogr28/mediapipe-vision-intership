@@ -379,16 +379,33 @@ BH_DISK_BRIGHTNESS = 1.0
 # disk's procedural texture.
 BH_DISK_ROTATION_SPEED = 0.8
 
-# 6 7 Counter. Counts each time a wrist transitions from below to above its
-# corresponding elbow — same definition as the original 67counter project. A
-# rising-edge detector with hysteresis avoids re-firing on jitter near the
-# elbow line: the wrist must clear the elbow by `SIXSEVEN_HYSTERESIS` (in
-# normalised image coords, where 1.0 = full frame height) to count, and must
-# fall the same distance below the elbow before another count is allowed on
-# that side. Each arm is tracked independently, so an alternating pump fires
-# two counts per cycle.
-SIXSEVEN_MIN_VISIBILITY = 0.3
-SIXSEVEN_HYSTERESIS = 0.01
+# 6 7 Counter. Counts each time a HAND completes an up-stroke: it drops,
+# then rises again by at least `SIXSEVEN_PUMP_AMP` of its own width. Hands
+# latch independently, so the alternating two-handed gesture scores twice
+# per cycle and one hand alone still scores.
+#
+# The original 67counter definition — "wrist rises above elbow" — was
+# measured on the exhibit and scored two counts, then silence. People do 6-7
+# with their elbows down by the waist and their hands alternating at chest
+# height, so the wrist starts above the elbow and never drops back below it;
+# the latch fired once per arm and could never re-arm. Judging a hand
+# against where that same hand just was carries no posture assumption, and
+# it drops the body model entirely (no ~1.5 CPU cores, and no multi-second
+# TensorRT engine build inside the render loop when a visitor opens the
+# game).
+#
+# The unit is the hand's OWN width (`gestures.hand_scale`), which is what
+# makes one constant cover the whole room: a hand twice as far away is half
+# as wide on screen and its stroke is half as many pixels, so the same
+# physical gesture counts at any distance with no depth estimate. ~0.9 hand
+# widths is roughly 7 cm of travel for an adult, well inside a real pump
+# (15-25 cm) and well outside landmark jitter. Raise it if idle hand-waving
+# scores; lower it if small gestures are ignored.
+SIXSEVEN_PUMP_AMP = 0.9
+# A hand gone longer than this starts its latch over rather than inheriting
+# the old trough — it may come back somewhere unrelated, and that would
+# score a count the visitor never made.
+SIXSEVEN_HAND_GRACE_S = 0.4
 # Frames over which the count-flash animation decays back to 0.
 SIXSEVEN_FLASH_FRAMES = 12
 

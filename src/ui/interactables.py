@@ -36,8 +36,8 @@ from config import (BH_DEFAULT_POS_FACTOR, BH_DISK_BRIGHTNESS,
                     SCAT_GUN_MUZZLE_X_FRAC, SCAT_GUN_W_FRAC,
                     SCAT_PARTICLE_SPEED, SCAT_RECOIL_DECAY, SCAT_SPRITE_DIR,
                     SCAT_TRIGGER_R_PX, SIXSEVEN_BOARD_SIZE,
-                    SIXSEVEN_FLASH_FRAMES, SIXSEVEN_HYSTERESIS,
-                    SIXSEVEN_MIN_VISIBILITY, SIXSEVEN_OVER_S, SIXSEVEN_ROUND_S,
+                    SIXSEVEN_FLASH_FRAMES, SIXSEVEN_HAND_GRACE_S,
+                    SIXSEVEN_OVER_S, SIXSEVEN_PUMP_AMP, SIXSEVEN_ROUND_S,
                     SIXSEVEN_SCORES_FILE, ST_BACKDROP_ALPHA, ST_BACKDROP_RGB,
                     ST_BINARY_SEP_FRAC, ST_CAM_PITCH_POS_GAIN,
                     ST_CAM_PITCH_RATE_GAIN, ST_CAM_POS_RADIUS_PX,
@@ -69,14 +69,16 @@ from config import (BH_DEFAULT_POS_FACTOR, BH_DISK_BRIGHTNESS,
                     WAVE_MAX_SOURCES, WAVE_MAX_SUBSTEPS, WAVE_PHYS_DT,
                     WAVE_RAMP_S, WAVE_SOURCE_TYPES, WAVE_SPEED_PX_S,
                     WAVE_TIME_SCALES)
-from detection.gestures import hand_id, pinch_info, pinch_infos, pinch_state
+from detection.gestures import (hand_id, hand_scale, pinch_info, pinch_infos,
+                                pinch_state)
 from ui.button import Button
 from ui.scores import Scoreboard
 
-POSE_LEFT_ELBOW = 13
-POSE_RIGHT_ELBOW = 14
-POSE_LEFT_WRIST = 15
-POSE_RIGHT_WRIST = 16
+# Wrist landmark in the HAND model (MediaPipe hand landmark 0) — the 6-7
+# counter's height reference. The POSE_*_ELBOW / POSE_*_WRIST body indices
+# that used to live here went with the counter's elbow rule; nothing reads
+# body landmarks by index in this module any more.
+HAND_WRIST = 0
 
 
 FINGERTIP_INDICES = [0, 4, 8, 12, 16, 20]
@@ -337,13 +339,28 @@ def sixseven_scoreboard():
 
 
 class SixSevenCounter:
-    """6 7 gesture counter — port of mannygonzalezj7/67counter, played
+    """6 7 gesture counter — after mannygonzalezj7/67counter, played
     against the clock.
 
-    Watches both arms in the pose landmarks and increments on the rising
-    edge of "wrist above elbow" per side. Each arm latches independently
-    with a hysteresis band (`SIXSEVEN_HYSTERESIS`) so jitter near the
-    elbow line cannot re-fire the count without a clear reset stroke.
+    Counts each time a HAND completes an up-stroke: it drops, then rises
+    again by at least `SIXSEVEN_PUMP_AMP` of its own width. Hands latch
+    independently, so the alternating two-handed gesture scores twice per
+    cycle and somebody using one hand still scores.
+
+    **The reference is the hand's own travel, and that is the whole point.**
+    The original port counted "wrist rises above elbow", which measured on
+    the exhibit as two counts and then silence: people do 6-7 with their
+    elbows down by the waist and their hands alternating at chest height,
+    so the wrist starts above the elbow and never drops back below it — the
+    latch fired once per arm and could never re-arm. Judging a hand against
+    where that same hand just was has no such posture assumption.
+
+    It also needs no body inference. `gestures.hand_scale` gives each hand's
+    own pixel width, so the required stroke is the same physical gesture at
+    any distance without a depth estimate, and the counter rides the hand
+    detector that runs every frame anyway — no pose model, no ~1.5 CPU
+    cores, and no multi-second TensorRT engine build inside the render loop
+    the first time a visitor opens the game.
 
     Around that sits a three-phase round, which is what the scoreboard
     needs to mean anything (see `SIXSEVEN_ROUND_S`):
@@ -366,10 +383,10 @@ class SixSevenCounter:
         self.w = frame_width
         self.h = frame_height
         self.count = 0
-        # Latch state per side: True when that side is currently "armed"
-        # (wrist clearly above elbow) and waiting for a reset stroke.
-        self._left_armed = False
-        self._right_armed = False
+        # Per-hand zigzag latch, keyed by gestures.hand_id:
+        # {"armed": bool, "trough": px, "crest": px, "seen": monotonic}.
+        # See _pump_fired.
+        self._pumps = {}
         # Decay counter for the flash overlay, in frames.
         self._flash = 0
         # Round machine: "ready" -> "running" -> "over" -> "ready".
@@ -406,29 +423,46 @@ class SixSevenCounter:
     def _rearm(self):
         self.count = 0
         self.rank = None
-        self._left_armed = False
-        self._right_armed = False
+        self._pumps.clear()
         self.phase = "ready"
 
-    def _side_armed(self, prev_armed, elbow_lm, wrist_lm):
-        """Hysteresis latch for one arm.
+    def _pump_fired(self, hid, y, scale, now):
+        """Zigzag latch for one hand: True on a completed UP-stroke.
 
-        Returns ``(new_armed, fired)`` where ``fired`` is True only on the
-        frame the wrist *just* crossed above the elbow. Low-visibility
-        landmarks leave the latch unchanged and never fire — so a brief
-        tracking dropout cannot phantom-trigger a count.
+        Each hand is judged against ITS OWN recent travel rather than against
+        a body landmark, which is what makes the counter work in the posture
+        people actually use (see the class docstring). `scale` is
+        `gestures.hand_scale` — a hand's own pixel width — so the required
+        stroke is the same physical gesture whether the visitor is at the
+        screen or a step back, with no distance estimate anywhere.
+
+        `y` is in pixels and grows DOWNWARD, so the hand is high when `y` is
+        small: `trough` is the lowest the hand has been (largest y) and
+        `crest` the highest (smallest y).
         """
-        e_vis = elbow_lm.visibility if elbow_lm.visibility is not None else 1.0
-        w_vis = wrist_lm.visibility if wrist_lm.visibility is not None else 1.0
-        if e_vis < SIXSEVEN_MIN_VISIBILITY or w_vis < SIXSEVEN_MIN_VISIBILITY:
-            return prev_armed, False
+        amp = SIXSEVEN_PUMP_AMP * scale
+        st = self._pumps.get(hid)
+        # A hand that has been gone longer than the grace window starts over:
+        # it may well come back somewhere unrelated, and inheriting the old
+        # trough would score a count the visitor never made.
+        if st is None or now - st["seen"] > SIXSEVEN_HAND_GRACE_S:
+            self._pumps[hid] = {"armed": False, "trough": y, "crest": y,
+                                "seen": now}
+            return False
 
-        dy = elbow_lm.y - wrist_lm.y  # >0 when wrist is above elbow
-        if not prev_armed and dy > SIXSEVEN_HYSTERESIS:
-            return True, True
-        if prev_armed and dy < -SIXSEVEN_HYSTERESIS:
-            return False, False
-        return prev_armed, False
+        st["seen"] = now
+        if not st["armed"]:
+            st["trough"] = max(st["trough"], y)      # how low it got
+            if st["trough"] - y > amp:               # ...and back up by amp
+                st["armed"] = True
+                st["crest"] = y
+                return True
+        else:
+            st["crest"] = min(st["crest"], y)        # how high it got
+            if y - st["crest"] > amp:                # ...and back down by amp
+                st["armed"] = False
+                st["trough"] = y
+        return False
 
     def to_state(self):
         """Serializable snapshot for the web frontend."""
@@ -445,9 +479,11 @@ class SixSevenCounter:
                 "rank": self.rank}
 
     def update(self, hand_result, pose_landmarks):
+        """`pose_landmarks` is accepted for interface symmetry and ignored —
+        this scene is hand-only (see the class docstring)."""
         now = time.monotonic()
 
-        # Advance the clock BEFORE reading the arms, so the pump that lands
+        # Advance the clock BEFORE reading the hands, so the pump that lands
         # after the buzzer belongs to the next round rather than the one
         # already being scored.
         if self.phase == "running" and now >= self._round_end:
@@ -458,23 +494,26 @@ class SixSevenCounter:
         if self._flash > 0:
             self._flash -= 1
 
-        # "over" is a read-only scoreboard: arms move while the player
+        # "over" is a read-only scoreboard: hands move while the player
         # reacts to their score and none of it should count.
-        if not pose_landmarks or self.phase == "over":
+        if hand_result is None or self.phase == "over":
             return
 
-        self._left_armed, left_fired = self._side_armed(
-            self._left_armed,
-            pose_landmarks[POSE_LEFT_ELBOW],
-            pose_landmarks[POSE_LEFT_WRIST],
-        )
-        self._right_armed, right_fired = self._side_armed(
-            self._right_armed,
-            pose_landmarks[POSE_RIGHT_ELBOW],
-            pose_landmarks[POSE_RIGHT_WRIST],
-        )
+        fired = 0
+        for i, lms in enumerate(hand_result.hand_landmarks):
+            scale = hand_scale(lms, self.w, self.h)
+            if scale <= 0.0:
+                continue          # degenerate landmarks: no usable reference
+            if self._pump_fired(hand_id(hand_result, i),
+                                lms[HAND_WRIST].y * self.h, scale, now):
+                fired += 1
 
-        fired = int(left_fired) + int(right_fired)
+        # Forget hands that have been gone a while, so the dict cannot grow
+        # across a long exhibit day.
+        for hid in [k for k, st in self._pumps.items()
+                    if now - st["seen"] > SIXSEVEN_HAND_GRACE_S]:
+            del self._pumps[hid]
+
         if fired:
             # The first pump of a fresh counter is the start signal AND the
             # first point: asking for one gesture to arm the game and

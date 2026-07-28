@@ -488,34 +488,62 @@ def check_schrodinger_logic():
           " serialize+draw)")
 
 
-class _LM:
-    """Minimal stand-in for a MediaPipe pose landmark."""
+class _HandLM:
+    """Minimal stand-in for a MediaPipe hand landmark."""
 
-    def __init__(self, y, visibility=1.0):
-        self.x, self.y, self.z = 0.5, y, 0.0
-        self.visibility = visibility
+    def __init__(self, x, y):
+        self.x, self.y, self.z = x, y, 0.0
 
 
-def _arms(left_up, right_up):
-    """A 33-landmark pose where only the elbows and wrists matter.
+def _hand(wrist_y_px, width_px=90.0, cx_px=640.0):
+    """21 hand landmarks whose knuckle span is `width_px`.
 
-    Image coords: y grows DOWNWARD, so a raised wrist has the smaller y.
+    Only the wrist and the landmarks `gestures.hand_scale` reads matter:
+    5/17 are the index/pinky MCPs (the knuckle span) and 0/9 the palm.
+    Image coords, so y grows DOWNWARD and a raised hand has the smaller y.
     """
-    lms = [_LM(0.5) for _ in range(33)]
-    lms[13] = lms[14] = _LM(0.5)                    # elbows
-    lms[15] = _LM(0.3 if left_up else 0.7)          # left wrist
-    lms[16] = _LM(0.3 if right_up else 0.7)         # right wrist
+    lms = [_HandLM(cx_px / W, wrist_y_px / H) for _ in range(21)]
+    lms[0] = _HandLM(cx_px / W, wrist_y_px / H)
+    lms[5] = _HandLM((cx_px - width_px / 2) / W, wrist_y_px / H)
+    lms[17] = _HandLM((cx_px + width_px / 2) / W, wrist_y_px / H)
+    lms[9] = _HandLM(cx_px / W, (wrist_y_px - width_px * 0.4) / H)
     return lms
 
 
+class _HandResult:
+    """Stand-in for a MediaPipe HandLandmarkerResult."""
+
+    def __init__(self, hands):
+        self.hand_landmarks = hands
+        self.handedness = []
+        self.hand_world_landmarks = []
+
+
+def _pump(counter, hands, travel_px, cycles, width_px=90.0, fps=30.0):
+    """Drive `hands` in antiphase through `cycles` pumps at 1.5 pumps/s."""
+    import math
+    mid = H * 0.5
+    for i in range(int(cycles * fps / 1.5)):
+        ph = 2 * math.pi * 1.5 * i / fps
+        ys = [mid + 0.5 * travel_px * math.sin(ph + k * math.pi)
+              for k in range(hands)]
+        counter.update(_HandResult([_hand(y, width_px) for y in ys]), None)
+
+
 def check_sixseven_round():
-    """The timed round and the high-score table it feeds.
+    """The hand-only pump detector, the timed round, and the score table.
 
     `_exercise` cannot reach any of this: it drives every scene with
-    `update(None, None)`, and with no pose the counter never leaves
+    `update(None, None)`, and with no hands the counter never leaves
     "ready" — so the running/over branches and every scoreboard write
     would go untested, which is exactly the sort of unexercised branch
     the Spacetime NameError hid in.
+
+    The detection assertions are the ones that matter most here. The
+    original "wrist rises above elbow" rule passed every structural test
+    and still scored two counts and then silence on the real exhibit,
+    because nobody does 6-7 with their wrists below their elbows. These
+    pin the gesture the visitor actually makes.
     """
     import tempfile
 
@@ -525,47 +553,85 @@ def check_sixseven_round():
     tmp = tempfile.mkdtemp()
     path = os.path.join(tmp, "scores.json")
     board = Scoreboard(path, 5)
-    c = SixSevenCounter(W, H, board=board)
+    HAND = 90.0
 
-    # A fresh counter is ARMED, not running: the clock must not tick while
-    # somebody is still walking up to the exhibit.
+    def fresh():
+        c = SixSevenCounter(W, H, board=Scoreboard(
+            os.path.join(tempfile.mkdtemp(), "s.json"), 5))
+        c.phase, c._round_end = "running", time.monotonic() + 1e6
+        return c
+
+    # --- the gesture itself ------------------------------------------
+
+    # THE regression: a chest-height alternation, elbows never involved.
+    # The old elbow rule scored 2 here no matter how long you pumped.
+    c = fresh()
+    _pump(c, 2, HAND * 1.6, cycles=10)
+    assert c.count >= 18, \
+        f"chest-height alternation scored {c.count} in 10 two-handed pumps"
+
+    # One hand alone still counts, about half as much.
+    c = fresh()
+    _pump(c, 1, HAND * 1.6, cycles=10)
+    assert 9 <= c.count <= 11, f"one hand scored {c.count} in 10 pumps"
+
+    # Distance invariance — the claim that lets ONE constant cover the
+    # room. The same physical gesture a step further back is half the
+    # pixels and half the hand width, so it must score the same.
+    c = fresh()
+    _pump(c, 2, HAND * 1.6 / 2, cycles=10, width_px=HAND / 2)
+    assert c.count >= 18, f"the same gesture further back scored {c.count}"
+
+    # Below threshold and jitter must score nothing, or an idle visitor
+    # standing with their hands moving would rack up a high score.
+    for travel, label in ((HAND * 0.5, "half a hand width"),
+                          (HAND * 0.1, "jitter")):
+        c = fresh()
+        _pump(c, 2, travel, cycles=10)
+        assert c.count == 0, f"{label} scored {c.count}"
+
+    # A hand gone longer than the grace window must not score on return:
+    # it comes back wherever it likes, and the stale trough would be a
+    # count the visitor never made.
+    c = fresh()
+    c.update(_HandResult([_hand(H * 0.8)]), None)     # low
+    c._pumps[list(c._pumps)[0]]["seen"] -= 10.0       # vanish for 10 s
+    c.update(_HandResult([_hand(H * 0.2)]), None)     # reappear high
+    assert c.count == 0, "a hand reappearing high scored a phantom count"
+
+    # --- the round ----------------------------------------------------
+
+    c = SixSevenCounter(W, H, board=board)
     assert c.phase == "ready", "counter did not start armed"
-    c.update(None, _arms(False, False))
-    assert c.phase == "ready" and c.count == 0, "arms down started the round"
+    c.update(_HandResult([_hand(H * 0.5)]), None)
+    assert c.phase == "ready" and c.count == 0, "a still hand started the round"
 
     # The first pump starts the clock AND scores — one gesture, not two.
-    c.update(None, _arms(True, False))
-    assert c.phase == "running", "first count did not start the clock"
-    assert c.count == 1, f"first pump scored {c.count}, want 1"
+    _pump(c, 1, HAND * 1.6, cycles=1)
+    assert c.phase == "running", "the first count did not start the clock"
+    assert c.count >= 1, "the first pump did not score"
 
-    # Each arm latches independently: a both-arms cycle is worth two.
-    for _ in range(3):
-        c.update(None, _arms(False, False))
-        c.update(None, _arms(True, True))
-    assert c.count == 7, f"count {c.count}, want 7"
-
-    # Low visibility must never phantom-fire.
-    c.update(None, _arms(False, False))
-    blind = _arms(True, True)
-    blind[15].visibility = blind[16].visibility = 0.0
-    c.update(None, blind)
-    assert c.count == 7, "an invisible wrist scored"
+    _pump(c, 2, HAND * 1.6, cycles=6)
+    mid_round = c.count
 
     # The buzzer submits the score and freezes the count.
     c._round_end = time.monotonic() - 0.001
-    c.update(None, _arms(False, False))
+    c.update(_HandResult([_hand(H * 0.5)]), None)
     assert c.phase == "over", "the clock ran out without ending the round"
     assert c.rank == 0, f"the only score on the board ranked {c.rank}"
     scored = c.count
-    c.update(None, _arms(True, True))
-    assert c.count == scored, "arms still counted after time was up"
+    assert scored >= mid_round, "the buzzer lost counts"
+    _pump(c, 2, HAND * 1.6, cycles=3)
+    assert c.count == scored, "hands still counted after time was up"
 
     # Then it re-arms itself for the next player, board intact.
     c._over_until = time.monotonic() - 0.001
-    c.update(None, _arms(False, False))
+    c.update(_HandResult([_hand(H * 0.5)]), None)
     assert c.phase == "ready" and c.count == 0 and c.rank is None, \
         "the counter did not re-arm for the next player"
     assert board.to_state() == [scored], "the board lost the score on re-arm"
+
+    # --- the board ----------------------------------------------------
 
     # The records outlive the process — the whole reason the file exists.
     assert Scoreboard(path, 5).to_state() == [scored], "scores did not persist"
@@ -586,9 +652,10 @@ def check_sixseven_round():
         fh.write("{not json")
     assert Scoreboard(bad, 5).to_state() == [], "a corrupt file was not survived"
 
-    print("  ok    SixSeven round (armed / first pump starts+scores / both"
-          " arms / visibility / buzzer submits / re-arm / persistence /"
-          " ties / cap / corrupt file)")
+    print("  ok    SixSeven round (chest-height alternation / one hand /"
+          " distance invariance / below-threshold + jitter score 0 / no"
+          " phantom on return / first pump starts+scores / buzzer submits /"
+          " re-arm / persistence / ties / cap / corrupt file)")
 
 
 def main():
