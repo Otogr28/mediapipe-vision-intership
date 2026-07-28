@@ -285,7 +285,10 @@ class AttractScreen:
         else:
             _put(frame, ATTRACT_TITLE, w * 0.06, h - band_h + h * 0.105, 1.3,
                  (245, 245, 245), 3)
-        _put(frame, ATTRACT_PROMPT, w * 0.06, h - h * 0.035, 0.62,
+        # Sized to be read from across the hall, not from in front of the
+        # exhibit: by the time small type here is legible you are already
+        # close enough not to need the instruction.
+        _put(frame, ATTRACT_PROMPT, w * 0.06, h - h * 0.035, 1.0,
              (120, 200, 255), 2)
 
         # Slide position, bottom-right. Dots for a handful of slides; past

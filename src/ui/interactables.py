@@ -35,19 +35,21 @@ from config import (BH_DEFAULT_POS_FACTOR, BH_DISK_BRIGHTNESS,
                     SCAT_FLASH_DECAY, SCAT_FRAME_DT, SCAT_GRAB_PAD_PX,
                     SCAT_GUN_MUZZLE_X_FRAC, SCAT_GUN_W_FRAC,
                     SCAT_PARTICLE_SPEED, SCAT_RECOIL_DECAY, SCAT_SPRITE_DIR,
-                    SCAT_TRIGGER_R_PX, SIXSEVEN_FLASH_FRAMES,
-                    SIXSEVEN_HYSTERESIS, SIXSEVEN_MIN_VISIBILITY,
-                    ST_BACKDROP_ALPHA, ST_BACKDROP_RGB, ST_BINARY_SEP_FRAC,
-                    ST_CAM_PITCH_POS_GAIN, ST_CAM_PITCH_RATE_GAIN,
-                    ST_CAM_POS_RADIUS_PX, ST_CAM_RATE_MAX_RAD_S, ST_CAM_SMOOTH,
-                    ST_CAM_YAW_POS_GAIN, ST_CAM_YAW_RATE_GAIN,
-                    ST_CAPTURE_FLASH_DECAY, ST_CURV_REACH_PX, ST_DEFAULT_KIND,
-                    ST_DEPTH_GAIN, ST_FOCAL_PX, ST_FRAME_DT, ST_GRAB_PAD_PX,
-                    ST_GRID_COLS, ST_GRID_MARGIN, ST_GRID_ROWS, ST_GW_ENABLED,
-                    ST_GW_GAIN, ST_GW_HIST_S, ST_GW_STRAIN_GAIN,
-                    ST_GW_WAVE_ENABLED, ST_GW_WAVE_MAX_PX, ST_LATTICE_COLS,
-                    ST_LATTICE_DEPTH_PX, ST_LATTICE_GAIN, ST_LATTICE_LAYERS,
-                    ST_LATTICE_MARGIN, ST_LATTICE_ROWS, ST_LATTICE_SAMPLES,
+                    SCAT_TRIGGER_R_PX, SIXSEVEN_BOARD_SIZE,
+                    SIXSEVEN_FLASH_FRAMES, SIXSEVEN_HYSTERESIS,
+                    SIXSEVEN_MIN_VISIBILITY, SIXSEVEN_OVER_S, SIXSEVEN_ROUND_S,
+                    SIXSEVEN_SCORES_FILE, ST_BACKDROP_ALPHA, ST_BACKDROP_RGB,
+                    ST_BINARY_SEP_FRAC, ST_CAM_PITCH_POS_GAIN,
+                    ST_CAM_PITCH_RATE_GAIN, ST_CAM_POS_RADIUS_PX,
+                    ST_CAM_RATE_MAX_RAD_S, ST_CAM_SMOOTH, ST_CAM_YAW_POS_GAIN,
+                    ST_CAM_YAW_RATE_GAIN, ST_CAPTURE_FLASH_DECAY,
+                    ST_CURV_REACH_PX, ST_DEFAULT_KIND, ST_DEPTH_GAIN,
+                    ST_FOCAL_PX, ST_FRAME_DT, ST_GRAB_PAD_PX, ST_GRID_COLS,
+                    ST_GRID_MARGIN, ST_GRID_ROWS, ST_GW_ENABLED, ST_GW_GAIN,
+                    ST_GW_HIST_S, ST_GW_STRAIN_GAIN, ST_GW_WAVE_ENABLED,
+                    ST_GW_WAVE_MAX_PX, ST_LATTICE_COLS, ST_LATTICE_DEPTH_PX,
+                    ST_LATTICE_GAIN, ST_LATTICE_LAYERS, ST_LATTICE_MARGIN,
+                    ST_LATTICE_ROWS, ST_LATTICE_SAMPLES,
                     ST_LATTICE_VERT_STRIDE, ST_LATTICE_VERTICALS,
                     ST_LINE_SAMPLES, ST_LT_TWIST_GAIN, ST_LT_TWIST_MAX_RAD,
                     ST_MASS_SPAWN_VFRAC, ST_MASS_TYPES, ST_MAX_MASSES,
@@ -69,6 +71,7 @@ from config import (BH_DEFAULT_POS_FACTOR, BH_DISK_BRIGHTNESS,
                     WAVE_TIME_SCALES)
 from detection.gestures import hand_id, pinch_info, pinch_infos, pinch_state
 from ui.button import Button
+from ui.scores import Scoreboard
 
 POSE_LEFT_ELBOW = 13
 POSE_RIGHT_ELBOW = 14
@@ -314,16 +317,52 @@ class BlackHole:
         np.copyto(frame, lensed)
 
 
+_scoreboard_singleton = None
+
+
+def sixseven_scoreboard():
+    """The one shared high-score table, loaded from disk on first use.
+
+    A module singleton rather than one board per counter: pressing the
+    "6 7 Counter" button builds a fresh `SixSevenCounter` every time, and a
+    per-instance board would re-read the file on each spawn — harmless when
+    the file is writable, but on a read-only home it would also throw away
+    the in-memory records of the previous round.
+    """
+    global _scoreboard_singleton
+    if _scoreboard_singleton is None:
+        _scoreboard_singleton = Scoreboard(SIXSEVEN_SCORES_FILE,
+                                           SIXSEVEN_BOARD_SIZE)
+    return _scoreboard_singleton
+
+
 class SixSevenCounter:
-    """6 7 gesture counter — port of mannygonzalezj7/67counter.
+    """6 7 gesture counter — port of mannygonzalezj7/67counter, played
+    against the clock.
 
     Watches both arms in the pose landmarks and increments on the rising
     edge of "wrist above elbow" per side. Each arm latches independently
     with a hysteresis band (`SIXSEVEN_HYSTERESIS`) so jitter near the
     elbow line cannot re-fire the count without a clear reset stroke.
+
+    Around that sits a three-phase round, which is what the scoreboard
+    needs to mean anything (see `SIXSEVEN_ROUND_S`):
+
+    ``ready``    armed and waiting. The FIRST count starts the clock and
+                 scores — there is no start button, because the exhibit is
+                 touchless and the player has just made the exact gesture
+                 the game is about.
+    ``running``  `SIXSEVEN_ROUND_S` seconds of pumping.
+    ``over``     the clock ran out: the score went to the board, and the
+                 board is on screen for `SIXSEVEN_OVER_S` before the
+                 counter re-arms itself for the next player.
+
+    Abandoning a round scores nothing: leaving drops the counter entirely
+    (`UIManager._reset`, which attract mode calls when a visitor walks
+    away), so a half-finished tally can never reach the table.
     """
 
-    def __init__(self, frame_width, frame_height):
+    def __init__(self, frame_width, frame_height, board=None):
         self.w = frame_width
         self.h = frame_height
         self.count = 0
@@ -333,6 +372,43 @@ class SixSevenCounter:
         self._right_armed = False
         # Decay counter for the flash overlay, in frames.
         self._flash = 0
+        # Round machine: "ready" -> "running" -> "over" -> "ready".
+        self.phase = "ready"
+        self._round_end = 0.0     # monotonic deadline while "running"
+        self._over_until = 0.0    # monotonic deadline while "over"
+        # Where the last finished round landed on the board (0-based), or
+        # None when it did not make it. Cleared when the counter re-arms.
+        self.rank = None
+        # Injectable so the smoke test can drive a throwaway board instead
+        # of the player-facing file.
+        self._board = sixseven_scoreboard() if board is None else board
+
+    # --- round machine -------------------------------------------------
+
+    def _remaining(self, now):
+        """Seconds left on the clock — the full round before it starts, so
+        a waiting player can see what they are being given."""
+        if self.phase == "ready":
+            return SIXSEVEN_ROUND_S
+        if self.phase == "running":
+            return max(0.0, self._round_end - now)
+        return 0.0
+
+    def _start_round(self, now):
+        self.phase = "running"
+        self._round_end = now + SIXSEVEN_ROUND_S
+
+    def _finish_round(self, now):
+        self.rank = self._board.submit(self.count)
+        self.phase = "over"
+        self._over_until = now + SIXSEVEN_OVER_S
+
+    def _rearm(self):
+        self.count = 0
+        self.rank = None
+        self._left_armed = False
+        self._right_armed = False
+        self.phase = "ready"
 
     def _side_armed(self, prev_armed, elbow_lm, wrist_lm):
         """Hysteresis latch for one arm.
@@ -359,10 +435,32 @@ class SixSevenCounter:
         flash = (self._flash / SIXSEVEN_FLASH_FRAMES
                  if SIXSEVEN_FLASH_FRAMES else 0.0)
         return {"type": "sixseven", "count": self.count,
-                "flash": round(flash, 3)}
+                "flash": round(flash, 3),
+                "phase": self.phase,
+                "remaining": round(self._remaining(time.monotonic()), 2),
+                "round_s": SIXSEVEN_ROUND_S,
+                # The whole board every frame: five integers is cheaper than
+                # any scheme for shipping it only when it changes.
+                "board": self._board.to_state(),
+                "rank": self.rank}
 
     def update(self, hand_result, pose_landmarks):
-        if not pose_landmarks:
+        now = time.monotonic()
+
+        # Advance the clock BEFORE reading the arms, so the pump that lands
+        # after the buzzer belongs to the next round rather than the one
+        # already being scored.
+        if self.phase == "running" and now >= self._round_end:
+            self._finish_round(now)
+        elif self.phase == "over" and now >= self._over_until:
+            self._rearm()
+
+        if self._flash > 0:
+            self._flash -= 1
+
+        # "over" is a read-only scoreboard: arms move while the player
+        # reacts to their score and none of it should count.
+        if not pose_landmarks or self.phase == "over":
             return
 
         self._left_armed, left_fired = self._side_armed(
@@ -376,33 +474,64 @@ class SixSevenCounter:
             pose_landmarks[POSE_RIGHT_WRIST],
         )
 
-        if left_fired:
-            self.count += 1
-            self._flash = SIXSEVEN_FLASH_FRAMES
-        if right_fired:
-            self.count += 1
+        fired = int(left_fired) + int(right_fired)
+        if fired:
+            # The first pump of a fresh counter is the start signal AND the
+            # first point: asking for one gesture to arm the game and
+            # another to play it would just cost every player a count they
+            # thought they had made.
+            if self.phase == "ready":
+                self._start_round(now)
+            self.count += fired
             self._flash = SIXSEVEN_FLASH_FRAMES
 
-        if self._flash > 0:
-            self._flash -= 1
+    @staticmethod
+    def _clock(seconds):
+        """m:ss for the round clock — the browser formats the same way."""
+        total = int(math.ceil(max(0.0, seconds)))
+        return f"{total // 60}:{total % 60:02d}"
 
     def draw(self, frame):
+        """cv2 fallback for window/stream mode.
+
+        Layout mirrored by hand in `web/src/hud/SixSeven.tsx`, which is what
+        the exhibit actually shows (web mode). Keep the two in step: same
+        rows, same order, same words.
+        """
         flash_t = self._flash / SIXSEVEN_FLASH_FRAMES if SIXSEVEN_FLASH_FRAMES else 0.0
-
-        label = "6 7"
-        count_text = str(self.count)
         font = cv2.FONT_HERSHEY_SIMPLEX
-        label_scale = 0.9
-        count_scale = 2.2 + 0.4 * flash_t
-        label_thick = 2
-        count_thick = 4
+        board = self._board.to_state()
 
-        (lw, lh), _ = cv2.getTextSize(label, font, label_scale, label_thick)
+        if self.phase == "ready":
+            status = "RAISE AN ARM TO START"
+        elif self.phase == "running":
+            status = "6 7"
+        else:
+            status = "TIME" if self.rank is None else f"NEW #{self.rank + 1}"
+
+        clock_text = self._clock(self._remaining(time.monotonic()))
+        count_text = str(self.count)
+        rows = [(f"{i + 1}.", str(s)) for i, s in enumerate(board)]
+
+        status_scale, status_thick = 0.62, 2
+        clock_scale, clock_thick = 1.0, 2
+        count_scale, count_thick = 2.2 + 0.4 * flash_t, 4
+        head_scale, head_thick = 0.55, 1
+        row_scale, row_thick = 0.7, 2
+
+        (sw, sh), _ = cv2.getTextSize(status, font, status_scale, status_thick)
+        (kw, kh), _ = cv2.getTextSize(clock_text, font, clock_scale, clock_thick)
         (cw, ch), _ = cv2.getTextSize(count_text, font, count_scale, count_thick)
+        (bw, bh), _ = cv2.getTextSize("BEST", font, head_scale, head_thick)
+        row_h = cv2.getTextSize("0", font, row_scale, row_thick)[0][1]
 
-        pad_x, pad_y, gap = 24, 18, 10
-        box_w = max(lw, cw) + pad_x * 2
-        box_h = lh + ch + gap + pad_y * 2
+        pad_x, pad_y, gap = 26, 16, 10
+        rows_h = (len(rows) * (row_h + 9)) if rows else 0
+        # "BEST" divider + its rows only exist once somebody has scored —
+        # a fresh exhibit shows a counter, not an empty table.
+        board_h = (gap + bh + 8 + rows_h) if rows else 0
+        box_w = max(sw, kw, cw, 190) + pad_x * 2
+        box_h = sh + gap + kh + gap + ch + board_h + pad_y * 2
         box_x = (self.w - box_w) // 2
         box_y = 12
 
@@ -420,15 +549,41 @@ class SixSevenCounter:
         cv2.rectangle(frame, (box_x, box_y), (box_x + box_w, box_y + box_h),
                       border, 2)
 
-        lx = box_x + (box_w - lw) // 2
-        ly = box_y + pad_y + lh
-        cv2.putText(frame, label, (lx, ly), font, label_scale,
-                    (200, 200, 200), label_thick, cv2.LINE_AA)
+        def centered(text, y, scale, thick, colour):
+            (tw, _th), _ = cv2.getTextSize(text, font, scale, thick)
+            cv2.putText(frame, text, (box_x + (box_w - tw) // 2, y), font,
+                        scale, colour, thick, cv2.LINE_AA)
 
-        cx = box_x + (box_w - cw) // 2
-        cy = ly + gap + ch
-        cv2.putText(frame, count_text, (cx, cy), font, count_scale,
-                    (255, 255, 255), count_thick, cv2.LINE_AA)
+        y = box_y + pad_y + sh
+        centered(status, y, status_scale, status_thick, (200, 200, 200))
+        # The clock goes amber in the last five seconds — the same "act now"
+        # colour the pinch cursor uses while a gesture is closing.
+        y += gap + kh
+        late = self.phase == "running" and self._remaining(time.monotonic()) <= 5.0
+        centered(clock_text, y, clock_scale, clock_thick,
+                 (77, 184, 255) if late else (170, 170, 170))
+        y += gap + ch
+        centered(count_text, y, count_scale, count_thick, (255, 255, 255))
+
+        if not rows:
+            return
+
+        y += gap + bh
+        centered("BEST", y, head_scale, head_thick, (154, 163, 178))
+        cv2.line(frame, (box_x + pad_x, y + 6), (box_x + box_w - pad_x, y + 6),
+                 (90, 96, 108), 1)
+
+        for i, (num, score) in enumerate(rows):
+            y += row_h + 9
+            # The player's own row is the only one in green, so they can find
+            # it without reading five numbers.
+            mine = self.rank == i
+            colour = (164, 230, 99) if mine else (220, 220, 220)
+            cv2.putText(frame, num, (box_x + pad_x, y), font, row_scale,
+                        (154, 163, 178), row_thick, cv2.LINE_AA)
+            (nw, _nh), _ = cv2.getTextSize(score, font, row_scale, row_thick)
+            cv2.putText(frame, score, (box_x + box_w - pad_x - nw, y), font,
+                        row_scale, colour, row_thick, cv2.LINE_AA)
 
 
 # --- Slingshot projectile experiment (SI units) -------------------------

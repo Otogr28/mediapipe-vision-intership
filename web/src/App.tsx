@@ -6,6 +6,7 @@ import { MagnetsLayer } from "./gl/MagnetsLayer";
 import { Attract } from "./hud/Attract";
 import { Buttons } from "./hud/Buttons";
 import { DebugHud } from "./hud/DebugHud";
+import { Gallery } from "./hud/Gallery";
 import { Greeting } from "./hud/Greeting";
 import { HintPanel } from "./hud/HintPanel";
 import { HudLayer } from "./hud/HudLayer";
@@ -16,7 +17,11 @@ import { AVATARS } from "./gl/avatars";
 import { isVrmReady } from "./gl/vrmState";
 import { setSkeletonView } from "./overlay/debugView";
 import { OverlayCanvas } from "./overlay/OverlayCanvas";
-import type { SixSevenObject, SlingshotObject } from "./state/types";
+import type {
+  GalleryObject,
+  SixSevenObject,
+  SlingshotObject,
+} from "./state/types";
 import { useAppState } from "./state/useAppState";
 
 // Lazy so three.js + three-vrm (the biggest dependency) only download when
@@ -110,6 +115,9 @@ export function App() {
     state?.objects.some((o) => o.type === "magnets") ?? false;
   const hasVtuber =
     state?.objects.some((o) => o.type === "vtuber") ?? false;
+  const gallery = state?.objects.find(
+    (o): o is GalleryObject => o.type === "gallery",
+  );
   // The backend's "Avatar" pinch button owns which model is shown (rides
   // session.avatar_index); `urlAvatar` only covers mock backends that omit it.
   const avatarIdx = (() => {
@@ -144,6 +152,14 @@ export function App() {
         )}
         {hasMagnets && (
           <MagnetsLayer pairRef={pairRef} frameW={frameW} frameH={frameH} />
+        )}
+        {/* Below the overlay canvas on purpose: the cursor and the skeleton
+            have to draw OVER the photographs, since seeing where the exhibit
+            thinks your hand is is the whole feedback loop while dragging. */}
+        {gallery && (
+          <HudLayer frameW={frameW} frameH={frameH}>
+            <Gallery gallery={gallery} />
+          </HudLayer>
         )}
         <OverlayCanvas pairRef={pairRef} frameW={frameW} frameH={frameH} />
         {hasVtuber && !skeletonView && (

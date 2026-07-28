@@ -232,9 +232,10 @@ body {
 /* ---- 6-7 counter card ------------------------------------------------ */
 
 .sixseven {
-  padding: 14px 34px 18px;
+  padding: 14px 30px 16px;
   text-align: center;
   transition: border-color 200ms ease;
+  min-width: 250px;
 }
 
 .six-label {
@@ -243,11 +244,63 @@ body {
   margin-bottom: 2px;
 }
 
+.six-clock {
+  font-size: 26px;
+  color: var(--ink-dim);
+  line-height: 1.2;
+  transition: color 200ms ease;
+}
+
+/* Last five seconds of the round. */
+.six-clock-late {
+  color: var(--amber);
+}
+
 .six-count {
   font-size: 64px;
   font-weight: 500;
   line-height: 1.1;
   transition: transform 120ms ease;
+}
+
+/* ---- 6-7 high-score table -------------------------------------------- */
+
+.six-board {
+  margin-top: 12px;
+  padding-top: 8px;
+  border-top: 1px solid var(--hairline);
+  text-align: left;
+}
+
+.six-board-head {
+  font-size: 12px;
+  color: var(--ink-dim);
+  margin-bottom: 5px;
+  text-align: center;
+}
+
+.six-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 24px;
+  font-size: 19px;
+  line-height: 1.5;
+  color: var(--ink);
+}
+
+/* The player's own row — the only green one, so it is findable at a
+   glance instead of by reading five numbers. */
+.six-row-mine {
+  color: var(--go);
+  font-weight: 500;
+}
+
+.six-rank {
+  color: var(--ink-dim);
+}
+
+.six-row-mine .six-rank {
+  color: var(--go);
 }
 
 /* ---- slingshot panels ------------------------------------------------ */
@@ -510,6 +563,60 @@ body {
   .fh-ripple { animation: none; }
 }
 
+/* ---- photo gallery (Gallery.tsx) ------------------------------------- */
+/* A strip of cards in frame-pixel coordinates, mounted in its own HudLayer
+   BELOW the overlay canvas so the cursor and skeleton draw over it. Every
+   child is `position: absolute` via `.hud-layer > *`. */
+
+.gallery-scrim {
+  position: absolute;
+  inset: 0;
+  /* Matches the 0.45 multiply the cv2 renderer does: the cards become the
+     subject without hiding the visitor, who still needs to see themselves
+     to believe the screen is following their hand. */
+  background: rgba(4, 6, 10, 0.55);
+}
+
+.gallery-card {
+  object-fit: cover;
+  border: 2px solid rgba(237, 241, 247, 0.35);
+  box-shadow: 0 18px 48px rgba(0, 0, 0, 0.55);
+  user-select: none;
+  -webkit-user-drag: none;
+  /* No CSS transition on left/top: Python owns the strip's position and
+     sends it every frame, so a transition would fight the state stream. */
+}
+
+.gallery-card.current {
+  border-color: var(--ink);
+}
+
+.gallery-hint,
+.gallery-title,
+.gallery-count {
+  left: 0;
+  right: 0;
+  text-align: center;
+}
+
+.gallery-hint {
+  font-size: 22px;
+  color: var(--amber);
+}
+
+.gallery-title {
+  font-family: var(--font-label);
+  font-weight: 600;
+  font-size: 34px;
+  color: var(--ink);
+}
+
+.gallery-count {
+  font-size: 22px;
+  color: var(--ink-dim);
+  font-variant-numeric: tabular-nums;
+}
+
 /* ---- attract slideshow (Attract.tsx) --------------------------------- */
 /* Opaque and above every scene layer: while nobody is there the exhibit is
    a display, not a camera. */
@@ -573,9 +680,14 @@ body {
   max-width: 46ch;
 }
 
+/* The one line telling somebody walking past that the screen is not a
+   poster, so it is sized to be read from across the hall rather than from
+   in front of the exhibit — by the time you can read small type here, you
+   are already close enough not to need the instruction. */
 .attract-prompt {
-  margin-top: 22px;
-  font-size: clamp(12px, 1.3vw, 18px);
+  margin-top: 26px;
+  font-size: clamp(20px, 2.6vw, 40px);
+  letter-spacing: 0.06em;
   color: var(--ink);
   animation: attract-breathe 3.4s ease-in-out infinite;
 }

@@ -8,9 +8,9 @@ Run from the repo root (needs the repo venv for cv2/numpy):
 
     uv run python web/scripts/mock_backend.py [scene]
 
-Scenes: menu (default), attract, greeting, sphere, sixseven, slingshot,
-blackhole, picker, orbitals, orbaim, waves, charges, magnets, spacetime,
-vtuber, schrodinger.
+Scenes: menu (default), attract, greeting, gallery, sphere, sixseven,
+slingshot, blackhole, picker, orbitals, orbaim, waves, charges, magnets,
+spacetime, vtuber, schrodinger.
 Then point the vite dev server at it:  npm run dev  (same port 8092).
 """
 
@@ -315,7 +315,7 @@ def scene_state(t):
         # Same three-slide window the real backend sends — see
         # AttractScreen.to_state(); the full list never rides the payload.
         base["session"]["attract"] = {
-            "title": "Physics Hall",
+            "title": "Physics and Engineering Life",   # config.ATTRACT_TITLE
             "prompt": "Step closer to control this display with your hand",
             "index": index,
             "count": len(ATTRACT_SLIDES),
@@ -337,12 +337,48 @@ def scene_state(t):
 
     elif SCENE == "menu":
         bw, bh, gap = 260, 70, 16
-        sx = (W - 2 * bw - gap) // 2
+        sx = (W - 3 * bw - 2 * gap) // 2
         base["buttons"] = [
             btn("menu.interactables", "Games", sx, margin, bw, bh, hovered=hover),
             btn("menu.experiments", "Experiments", sx + bw + gap, margin, bw, bh),
+            btn("menu.gallery", "Gallery", sx + 2 * (bw + gap), margin, bw, bh),
         ]
         base["session"]["hint"] = {"visible": True}
+
+    elif SCENE == "gallery":
+        # The photo strip, scrolled continuously so the card layout, the
+        # neighbours peeking in and the caption row can all be judged in one
+        # screenshot. Geometry mirrors ui/gallery.py's card_rect.
+        base["session"]["state"] = "gallery"
+        n = max(len(ATTRACT_SLIDES), 1)
+        card_h = int(round(H * 0.60))
+        card_w = min(int(round(card_h * 16 / 9)), int(round(W * 0.62)))
+        card_h = int(round(card_w / (16 / 9)))
+        card_x, card_y = (W - card_w) // 2, int(round(H * 0.10))
+        stride = card_w + int(round(W * 0.035))
+        position = (t * 0.35) % n
+        index = int(round(position)) % n
+        lo, hi = max(index - 2, 0), min(index + 2, n - 1)
+        nav_w, nav_h = 120, 54
+        base["buttons"] = [
+            btn("gallery.prev", "< Prev", W // 2 - nav_w - 20,
+                H - margin - nav_h, nav_w, nav_h),
+            btn("gallery.next", "Next >", W // 2 + 20, H - margin - nav_h,
+                nav_w, nav_h),
+            btn("reset", "Reset", W - 130 - margin, H - 50 - margin, 130, 50),
+        ]
+        base["objects"] = [{
+            "type": "gallery",
+            "index": index,
+            "position": round(position, 3),
+            "count": len(ATTRACT_SLIDES),
+            "grabbed": False,
+            "card": [card_x, card_y, card_w, card_h],
+            "stride": stride,
+            "slides": [
+                dict(ATTRACT_SLIDES[i], index=i) for i in range(lo, hi + 1)
+            ] if ATTRACT_SLIDES else [],
+        }]
 
     elif SCENE in ("sphere", "sixseven"):
         base["session"]["state"] = "interactables"
@@ -359,9 +395,27 @@ def scene_state(t):
                 "r": 40, "grabbed": int(t) % 4 == 0,
             }]
         else:
+            # Walk the whole round machine on a 24 s cycle — 4 s armed, 14 s
+            # running, 6 s showing the board — so one `shot.mjs` pass at a
+            # chosen offset can catch any phase, including the "over" screen
+            # with the player's row highlighted.
+            round_s, cycle = 14.0, 24.0
+            c = t % cycle
+            if c < 4.0:
+                phase, remaining, count, rank = "ready", round_s, 0, None
+            elif c < 4.0 + round_s:
+                phase = "running"
+                remaining = round_s - (c - 4.0)
+                count = int((c - 4.0) * 2.2)
+                rank = None
+            else:
+                phase, remaining, count, rank = "over", 0.0, 30, 2
             base["objects"] = [{
-                "type": "sixseven", "count": int(t) % 30,
+                "type": "sixseven", "count": count,
                 "flash": max(0.0, 1.0 - (t % 1.0) * 2),
+                "phase": phase, "remaining": round(remaining, 2),
+                "round_s": round_s,
+                "board": [41, 38, 30, 19, 12], "rank": rank,
             }]
 
     elif SCENE == "picker":

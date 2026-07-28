@@ -22,6 +22,7 @@ laptop's 3.12 would show up.
 
 import os
 import sys
+import time
 import traceback
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(
@@ -29,6 +30,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(
 
 import numpy as np  # noqa: E402
 
+from ui.gallery import Gallery  # noqa: E402
 from ui.interactables import (BlackHole, BouncingSphere, Charges,  # noqa: E402
                               Magnets, Orbitals, Puppet, SchrodingerCat,
                               SixSevenCounter, Slingshot, Spacetime, Waves)
@@ -60,6 +62,101 @@ def _exercise(name, obj, frames=30, toggles=()):
         toggle()
         surface(f"{name}[toggle {i}]")
     return True
+
+
+def _fake_slides(n):
+    """A slide list that does not depend on this machine's gallery folder.
+
+    `path` points at nothing, which is deliberate: `Gallery._image` must
+    survive an unreadable file (a photograph deleted while somebody is
+    browsing) by drawing a placeholder rather than raising inside the
+    render loop.
+    """
+    return [{"key": f"p{i}", "path": f"/nonexistent/p{i}.jpg",
+             "src": f"/attract/p{i}.jpg", "title": "", "caption": ""}
+            for i in range(n)]
+
+
+def check_gallery_navigation():
+    """Where a drag leaves the strip, which is the whole interaction.
+
+    Snap-to-nearest, the flick that carries one further, and the clamp at
+    both ends. None of it raises if it is wrong — the gallery just moves to
+    the wrong photograph or refuses to move at all, which no import check
+    and no draw() call would notice.
+    """
+    print("\n--- gallery navigation " + "-" * 46)
+    fails = []
+
+    def check(cond, msg):
+        if not cond:
+            fails.append(msg)
+        print(f"  {'ok  ' if cond else 'FAIL'} {msg}")
+
+    # Driven through `_release()` with the strip parked at a known position
+    # rather than by simulating hand landmarks: the decision under test is
+    # "given where the drag ended and how fast, which photograph wins", and
+    # posing that directly makes each case exact instead of approximate.
+    from config import GALLERY_FLICK_V
+
+    gal = Gallery(W, H, slides=_fake_slides(10))
+    gal.index = gal.position = 0
+
+    gal.position = 1.6
+    gal._vel = 0.0
+    gal._release()
+    check(gal.index == 2, f"a drag past halfway snaps forward (got {gal.index})")
+
+    gal.index, gal.position, gal._vel = 2, 2.3, 0.0
+    gal._release()
+    check(gal.index == 2, f"a drag short of halfway snaps back (got {gal.index})")
+
+    gal.index, gal.position = 2, 2.3
+    gal._vel = GALLERY_FLICK_V + 0.5
+    gal._release()
+    check(gal.index == 3,
+          f"a fast flick carries one further even from 2.3 (got {gal.index})")
+
+    gal.index, gal.position = 5, 4.7
+    gal._vel = -(GALLERY_FLICK_V + 0.5)
+    gal._release()
+    check(gal.index == 4, f"...and backwards from 4.7 (got {gal.index})")
+
+    gal.index, gal.position, gal._vel = 0, 0.0, -(GALLERY_FLICK_V + 5)
+    gal._release()
+    check(gal.index == 0, f"the first photograph clamps (got {gal.index})")
+
+    gal.index, gal.position, gal._vel = 9, 9.0, GALLERY_FLICK_V + 5
+    gal._release()
+    check(gal.index == 9, f"the last photograph clamps (got {gal.index})")
+
+    gal.step(-99)
+    check(gal.index == 0, f"Prev clamps at the start (got {gal.index})")
+    gal.step(+99)
+    check(gal.index == 9, f"Next clamps at the end (got {gal.index})")
+
+    # The payload must not grow with the folder — that is the reason it
+    # carries a window at all.
+    import json
+    big = Gallery(W, H, slides=_fake_slides(500))
+    big.index = big.position = 250
+    small = Gallery(W, H, slides=_fake_slides(5))
+    small.index = small.position = 2
+    nbig = len(json.dumps(big.to_state()))
+    nsmall = len(json.dumps(small.to_state()))
+    check(nbig < nsmall * 1.4,
+          f"a 500-photo folder ships like a 5-photo one "
+          f"({nbig} B vs {nsmall} B)")
+
+    # An empty folder must not divide by zero or index past the end.
+    empty = Gallery(W, H, slides=[])
+    empty.update(None, None)
+    empty.step(+1)
+    json.dumps(empty.to_state())
+    empty.draw(np.full((H, W, 3), 120, np.uint8))
+    check(empty.index == 0, "an empty gallery folder is harmless")
+
+    assert not fails, f"{len(fails)} gallery navigation failure(s)"
 
 
 def check_spacetime_physics():
@@ -391,6 +488,109 @@ def check_schrodinger_logic():
           " serialize+draw)")
 
 
+class _LM:
+    """Minimal stand-in for a MediaPipe pose landmark."""
+
+    def __init__(self, y, visibility=1.0):
+        self.x, self.y, self.z = 0.5, y, 0.0
+        self.visibility = visibility
+
+
+def _arms(left_up, right_up):
+    """A 33-landmark pose where only the elbows and wrists matter.
+
+    Image coords: y grows DOWNWARD, so a raised wrist has the smaller y.
+    """
+    lms = [_LM(0.5) for _ in range(33)]
+    lms[13] = lms[14] = _LM(0.5)                    # elbows
+    lms[15] = _LM(0.3 if left_up else 0.7)          # left wrist
+    lms[16] = _LM(0.3 if right_up else 0.7)         # right wrist
+    return lms
+
+
+def check_sixseven_round():
+    """The timed round and the high-score table it feeds.
+
+    `_exercise` cannot reach any of this: it drives every scene with
+    `update(None, None)`, and with no pose the counter never leaves
+    "ready" — so the running/over branches and every scoreboard write
+    would go untested, which is exactly the sort of unexercised branch
+    the Spacetime NameError hid in.
+    """
+    import tempfile
+
+    from ui.interactables import SixSevenCounter
+    from ui.scores import Scoreboard
+
+    tmp = tempfile.mkdtemp()
+    path = os.path.join(tmp, "scores.json")
+    board = Scoreboard(path, 5)
+    c = SixSevenCounter(W, H, board=board)
+
+    # A fresh counter is ARMED, not running: the clock must not tick while
+    # somebody is still walking up to the exhibit.
+    assert c.phase == "ready", "counter did not start armed"
+    c.update(None, _arms(False, False))
+    assert c.phase == "ready" and c.count == 0, "arms down started the round"
+
+    # The first pump starts the clock AND scores — one gesture, not two.
+    c.update(None, _arms(True, False))
+    assert c.phase == "running", "first count did not start the clock"
+    assert c.count == 1, f"first pump scored {c.count}, want 1"
+
+    # Each arm latches independently: a both-arms cycle is worth two.
+    for _ in range(3):
+        c.update(None, _arms(False, False))
+        c.update(None, _arms(True, True))
+    assert c.count == 7, f"count {c.count}, want 7"
+
+    # Low visibility must never phantom-fire.
+    c.update(None, _arms(False, False))
+    blind = _arms(True, True)
+    blind[15].visibility = blind[16].visibility = 0.0
+    c.update(None, blind)
+    assert c.count == 7, "an invisible wrist scored"
+
+    # The buzzer submits the score and freezes the count.
+    c._round_end = time.monotonic() - 0.001
+    c.update(None, _arms(False, False))
+    assert c.phase == "over", "the clock ran out without ending the round"
+    assert c.rank == 0, f"the only score on the board ranked {c.rank}"
+    scored = c.count
+    c.update(None, _arms(True, True))
+    assert c.count == scored, "arms still counted after time was up"
+
+    # Then it re-arms itself for the next player, board intact.
+    c._over_until = time.monotonic() - 0.001
+    c.update(None, _arms(False, False))
+    assert c.phase == "ready" and c.count == 0 and c.rank is None, \
+        "the counter did not re-arm for the next player"
+    assert board.to_state() == [scored], "the board lost the score on re-arm"
+
+    # The records outlive the process — the whole reason the file exists.
+    assert Scoreboard(path, 5).to_state() == [scored], "scores did not persist"
+
+    # Ranking rules: a tie leaves the earlier holder on top, the table is
+    # capped, and a score below the table gets no rank at all.
+    b2 = Scoreboard(os.path.join(tmp, "b2.json"), 3)
+    assert b2.submit(10) == 0
+    assert b2.submit(10) == 1, "a tie stole the earlier holder's rank"
+    assert b2.submit(50) == 0 and b2.to_state() == [50, 10, 10]
+    assert b2.submit(1) is None, "a score off the bottom still got a rank"
+    assert len(b2.to_state()) == 3, "the board grew past its size"
+
+    # A corrupt file reads as an empty board. An unattended kiosk must not
+    # die because a JSON file lost a brace.
+    bad = os.path.join(tmp, "bad.json")
+    with open(bad, "w", encoding="utf-8") as fh:
+        fh.write("{not json")
+    assert Scoreboard(bad, 5).to_state() == [], "a corrupt file was not survived"
+
+    print("  ok    SixSeven round (armed / first pump starts+scores / both"
+          " arms / visibility / buzzer submits / re-arm / persistence /"
+          " ties / cap / corrupt file)")
+
+
 def main():
     cases = []
 
@@ -399,7 +599,29 @@ def main():
 
     # BlackHole takes a GL renderer; None is the web-mode path (no GL context).
     cases.append(("BlackHole", BlackHole(W, H, None), ()))
-    cases.append(("SixSevenCounter", SixSevenCounter(W, H), ()))
+    # A counter whose board already has rows, so draw() covers the table
+    # (an empty board skips it entirely) — and both non-"ready" phases, so
+    # the clock and the "your row" highlight are drawn too. The throwaway
+    # board keeps the test off the player-facing ~/hall-scores.json.
+    import tempfile
+
+    from ui.scores import Scoreboard
+    six_board = Scoreboard(os.path.join(tempfile.mkdtemp(), "s.json"), 5)
+    for s in (41, 38, 23, 19, 12):
+        six_board.submit(s)
+    six = SixSevenCounter(W, H, board=six_board)
+
+    def six_running():
+        # Far-future deadlines: _exercise calls update() after each toggle,
+        # and an expired clock would advance the phase straight back out of
+        # the branch being covered.
+        six.phase, six._round_end = "running", time.monotonic() + 1e6
+
+    def six_over():
+        six.phase, six.rank = "over", 2
+        six._over_until = time.monotonic() + 1e6
+
+    cases.append(("SixSevenCounter", six, (six_running, six_over)))
     cases.append(("Slingshot", Slingshot(W, H), ()))
 
     orb = Orbitals(W, H)
@@ -433,7 +655,21 @@ def main():
     cases.append(("SchrodingerCat", SchrodingerCat(W, H), ()))
     cases.append(("Puppet", Puppet(W, H), ()))
 
+    # The gallery is not in ui/interactables.py but it obeys the same
+    # update/to_state/draw contract, and main.py calls all three on it.
+    # Fed a synthetic slide list so the check does not depend on what
+    # happens to be in the gallery folder on this machine.
+    gal = Gallery(W, H, slides=_fake_slides(5))
+    gal.index = 2
+    gal.position = 2.0
+    cases.append(("Gallery", gal, ()))
+
     failed = []
+    try:
+        check_gallery_navigation()
+    except Exception:
+        failed.append('Gallery navigation')
+        print('  FAIL  Gallery navigation\n' + traceback.format_exc())
     try:
         check_spacetime_physics()
     except Exception:
@@ -449,6 +685,11 @@ def main():
     except Exception:
         failed.append('SchrodingerCat logic')
         print('  FAIL  SchrodingerCat logic\n' + traceback.format_exc())
+    try:
+        check_sixseven_round()
+    except Exception:
+        failed.append('SixSeven round')
+        print('  FAIL  SixSeven round\n' + traceback.format_exc())
     for name, obj, toggles in cases:
         try:
             _exercise(name, obj, toggles=toggles)

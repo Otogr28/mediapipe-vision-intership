@@ -4,7 +4,7 @@ import time
 import cv2
 
 from config import (ATTRACT_ENABLED, ATTRACT_IDLE_S, DEBUG_HUD, DEMO_GESTURE,
-                    GESTURE_MODE, HINT_TEXT, POSE_ENABLED, QR_BOX_FRAC, QR_DIR,
+                    GESTURE_MODE, HINT_TEXT, QR_BOX_FRAC, QR_DIR,
                     QR_MARGIN_FRAC, START_VTUBER)
 from detection.gestures import (hand_id, pinch_info, pinch_infos, reserve_hand,
                                 update_pinches)
@@ -13,6 +13,7 @@ from ui.attract import AttractScreen, Greeting
 from ui.button import Button
 from ui.cursor import PinchCursor
 from ui.debug_hud import DebugHUD
+from ui.gallery import Gallery
 from ui.hints import GestureHint, IntroOverlay
 from ui.interactables import (BlackHole, BouncingSphere, Charges, Magnets,
                               Orbitals, Puppet, SchrodingerCat,
@@ -66,6 +67,11 @@ class UIManager:
         self._qr_exp = None
         self._qr_key = None
         self._sixseven = None
+        # The photo gallery, live only while `state == "gallery"`. Built on
+        # entry rather than at boot so it re-reads the gallery folder each
+        # time somebody opens it — a photograph copied onto the device shows
+        # up for the next visitor without a restart.
+        self._gallery = None
         # The vtuber puppet, live only while the user spawns it in the
         # "interactables" state (None otherwise).
         self._puppet = None
@@ -118,7 +124,7 @@ class UIManager:
         fw, fh = self.frame_w, self.frame_h
         margin = int(fh * EDGE_MARGIN_FRAC)
 
-        num_btns = 2
+        num_btns = 3
         gap = 16
         total_w = num_btns * MENU_BTN_W + (num_btns - 1) * gap
         start_x = (fw - total_w) // 2
@@ -135,6 +141,30 @@ class UIManager:
             width=MENU_BTN_W, height=MENU_BTN_H,
             label="Experiments",
             on_click=lambda: self._set_state("experiments"),
+        )
+        self._menu_gallery_btn = Button(
+            x=start_x + (MENU_BTN_W + gap) * 2, y=top_y,
+            width=MENU_BTN_W, height=MENU_BTN_H,
+            label="Gallery",
+            on_click=self._open_gallery,
+        )
+
+        # Gallery Prev/Next, centred under the card. Kept well inside the
+        # frame (EDGE_MARGIN_FRAC) like every other pinch target, and clear
+        # of the card itself so pressing one is never mistaken for grabbing
+        # the strip — the hand reservation already guarantees they cannot
+        # both fire, but overlapping them would still look wrong.
+        nav_w, nav_h = 120, 54
+        nav_y = fh - margin - nav_h
+        self._gallery_prev_btn = Button(
+            x=fw // 2 - nav_w - 20, y=nav_y, width=nav_w, height=nav_h,
+            label="< Prev",
+            on_click=lambda: self._step_gallery(-1),
+        )
+        self._gallery_next_btn = Button(
+            x=fw // 2 + 20, y=nav_y, width=nav_w, height=nav_h,
+            label="Next >",
+            on_click=lambda: self._step_gallery(+1),
         )
 
         self._sphere_btn = Button(
@@ -268,6 +298,17 @@ class UIManager:
     def _set_state(self, new_state):
         self.state = new_state
 
+    def _open_gallery(self):
+        # Rebuilt on every entry, so it re-reads the gallery folder: a
+        # photograph copied onto the device is browsable for the next
+        # visitor without restarting the kiosk.
+        self._gallery = Gallery(self.frame_w, self.frame_h)
+        self._set_state("gallery")
+
+    def _step_gallery(self, delta):
+        if self._gallery is not None:
+            self._gallery.step(delta)
+
     def _add_sphere(self):
         self.spheres.append(BouncingSphere(self.frame_w, self.frame_h))
 
@@ -318,6 +359,7 @@ class UIManager:
         self.spheres.clear()
         self._active_experiment = None
         self._sixseven = None
+        self._gallery = None
         self._puppet = None
         self._show_points = False
         self._points_btn.selected = False
@@ -412,15 +454,29 @@ class UIManager:
 
         if self.state == "menu":
             return [("menu.interactables", self._menu_interactables_btn),
-                    ("menu.experiments", self._menu_experiments_btn)]
+                    ("menu.experiments", self._menu_experiments_btn),
+                    ("menu.gallery", self._menu_gallery_btn)]
+
+        if self.state == "gallery":
+            # Prev/Next are the discoverable half of the navigation; the drag
+            # is the good half. Both are live at once and cannot collide,
+            # since a hand over either button is reserved before the gallery
+            # is updated (see _reserve_ui_hands).
+            return [("gallery.prev", self._gallery_prev_btn),
+                    ("gallery.next", self._gallery_next_btn),
+                    ("reset", self._reset_btn)]
 
         if self.state == "interactables":
+            # The 6-7 counter is pose-driven, and this button used to be
+            # hidden unless HALL_POSE=1 — which is 0 on the exhibit, so the
+            # game was unreachable there. The gate was never needed:
+            # `wants_pose()` reports the live counter and `main.py` builds
+            # body inference on demand for it, exactly as it does for the
+            # Vtuber (which was never gated). Spawning costs a one-time
+            # model-load hitch; Reset puts pose away again.
             out = [("spawn.sphere", self._sphere_btn),
-                   ("spawn.vtuber", self._vtuber_btn)]
-            if POSE_ENABLED:
-                # The 6-7 counter is pose-driven; without body inference its
-                # button would spawn a counter that can never count.
-                out.append(("spawn.sixseven", self._sixseven_btn))
+                   ("spawn.vtuber", self._vtuber_btn),
+                   ("spawn.sixseven", self._sixseven_btn)]
             if self._puppet is not None:
                 out.append(("points", self._points_btn))
                 out.append(("avatar", self._avatar_btn))
@@ -540,6 +596,10 @@ class UIManager:
             if self._active_experiment is not None:
                 self._active_experiment.update(hand_result, pose_landmarks)
 
+        elif self.state == "gallery":
+            if self._gallery is not None:
+                self._gallery.update(hand_result, pose_landmarks)
+
         if self._detect_interaction():
             self._has_interacted = True
         # Person presence for the onboarding hint: pose when available,
@@ -559,6 +619,8 @@ class UIManager:
         if self.state == "experiments":
             return (self._active_experiment is not None
                     and self._active_experiment.grabbed)
+        if self.state == "gallery":
+            return self._gallery is not None and self._gallery.grabbed
         return False
 
     def to_state(self):
@@ -591,6 +653,9 @@ class UIManager:
             # The puppet renders last so its dim backdrop sits over the scene.
             if self._puppet is not None:
                 objects.append(self._puppet.to_state())
+
+        elif self.state == "gallery" and self._gallery is not None:
+            objects = [self._gallery.to_state()]
 
         elif self.state == "experiments" and self._active_experiment is not None:
             exp_state = self._active_experiment.to_state()
@@ -735,6 +800,10 @@ class UIManager:
             if self._active_experiment is not None:
                 self._active_experiment.draw(frame)
                 self._draw_qr_plate(frame)
+
+        elif self.state == "gallery":
+            if self._gallery is not None:
+                self._gallery.draw(frame)
 
         for _bid, btn in self._active_buttons():
             btn.draw(frame)

@@ -392,6 +392,25 @@ SIXSEVEN_HYSTERESIS = 0.01
 # Frames over which the count-flash animation decays back to 0.
 SIXSEVEN_FLASH_FRAMES = 12
 
+# The counter is played as a TIMED ROUND, and the round is what makes the
+# scoreboard mean anything: an unbounded tally rewards whoever stands in
+# front of the camera longest, so the "record" would just be the longest
+# visit. A fixed window turns it into a rate, which is a real contest.
+# The round starts on the first count (no button — the exhibit is
+# touchless and the gesture the player already made is the best trigger),
+# so the clock only ever measures time spent actually pumping.
+SIXSEVEN_ROUND_S = 30.0
+# How long the final score + board stay up before the counter re-arms for
+# the next player. Long enough to read five rows and point at your own.
+SIXSEVEN_OVER_S = 8.0
+SIXSEVEN_BOARD_SIZE = 5      # rows kept on the high-score table
+# Where those records live. OUTSIDE the repo on purpose: the Jetson
+# updates itself with `git reset --hard` (see deploy/hall-app), which
+# would wipe any file tracked here, and the scores are the one piece of
+# exhibit state that should survive both an update and a reboot.
+SIXSEVEN_SCORES_FILE = os.path.expanduser(
+    os.environ.get("HALL_SCORES_FILE", "~/hall-scores.json"))
+
 # Onboarding / intro overlay.
 # A brief "how to interact" splash shown once at startup (Nintendo-style),
 # plus a persistent bottom-right hint that appears while a person is
@@ -511,7 +530,7 @@ GREETING_SUBTITLE = "This display is controlled with your hand"
 # past that the screen is not a poster, so it says what to do, not what the
 # exhibit is.
 ATTRACT_PROMPT = "Step closer to control this display with your hand"
-ATTRACT_TITLE = "Physics Hall"
+ATTRACT_TITLE = "Physics and Engineering Life"
 
 # ---------------------------------------------------------------------------
 # Presence: is somebody standing CLOSE TO the exhibit?
@@ -574,6 +593,55 @@ PRESENCE_POSE_EXIT_SPAN = 0.30
 # The enter thresholds must hold this long before presence is asserted, so a
 # door swinging or a light switching does not wake the exhibit.
 PRESENCE_ENTER_S = 0.6
+
+# ---------------------------------------------------------------------------
+# Gallery (`ui/gallery.py`) — the third menu entry, next to Games and
+# Experiments. It browses the SAME folder the idle slideshow reads
+# (ATTRACT_GALLERY_DIR), so there is one place to put photographs and two ways
+# to see them: unattended as a slideshow, on demand as something you flip
+# through with your hand.
+#
+# The interaction is the app's existing "close your hand and drag" vocabulary
+# applied to a strip of cards — grab anywhere, pull sideways, let go and it
+# settles on the nearest photograph. Prev/Next buttons sit under it for
+# whoever does not discover the drag; the button press and the drag cannot
+# both fire, because a hand over a live button is reserved (see
+# `gestures.reserve_hand`).
+
+# Cards, not full-bleed photographs. Two reasons, both about the visitor:
+# the neighbours peeking in at either edge are what say "there are more, and
+# they move sideways" without a word of instruction, and leaving the camera
+# visible around the card keeps them looking at themselves, which is the only
+# feedback that says the screen is tracking their hand.
+GALLERY_CARD_H_FRAC = 0.60      # card height, fraction of the frame
+GALLERY_CARD_ASPECT = 16 / 9    # card width / height
+GALLERY_GAP_FRAC = 0.035        # gap between cards, fraction of frame WIDTH
+# Top of the card. High rather than centred: the column underneath has to
+# hold the caption, the counter and the Prev/Next row, and EDGE_MARGIN_FRAC
+# already claims the bottom tenth of the frame for those buttons.
+GALLERY_CARD_TOP_FRAC = 0.10
+
+# Hand travel that advances one photograph, as a fraction of frame width.
+# Deliberately well under 1: EDGE_MARGIN_FRAC exists because the landmark
+# model degrades near the border, so a gesture that needs a full-width sweep
+# dies half way. A quarter of the frame is a comfortable forearm movement
+# from anywhere a hand is likely to start.
+GALLERY_DRAG_FRAC = 0.25
+
+# Release faster than this (photographs per second) advances a whole card even
+# if the drag never reached the halfway point — the flick everybody already
+# expects from a phone.
+GALLERY_FLICK_V = 1.8
+
+# Exponential approach rate (1/s) back to the settled photograph after a
+# release. High enough to feel like a snap, low enough to read as motion so
+# the visitor sees WHICH way it went.
+GALLERY_SNAP_RATE = 9.0
+
+# Neighbours either side kept in the state payload. 2 covers the card peeking
+# in at each edge plus one more for a fast flick; the folder can hold any
+# number of photographs and the payload must not scale with it.
+GALLERY_WINDOW = 2
 # Background EMA time constant (s) while nobody is present. Long enough to
 # ignore a passing cloud, short enough to relearn a moved chair.
 PRESENCE_BG_TAU_S = 12.0

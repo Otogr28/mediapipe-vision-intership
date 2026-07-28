@@ -77,10 +77,31 @@ export interface SphereObject {
   grabbed: boolean;
 }
 
+/**
+ * The 6-7 arm-pump counter, played as a timed round against a persistent
+ * high-score table. Mirrors `SixSevenCounter.to_state()` in
+ * `src/ui/interactables.py`.
+ */
 export interface SixSevenObject {
   type: "sixseven";
   count: number;
+  /** 1.0 right after a count, decaying to 0 over SIXSEVEN_FLASH_FRAMES. */
   flash: number;
+  /**
+   * "ready"   — armed; the first pump starts the clock and scores.
+   * "running" — the round is on.
+   * "over"    — time up; the score went to the board, which is on screen
+   *             for SIXSEVEN_OVER_S before the counter re-arms itself.
+   */
+  phase: "ready" | "running" | "over";
+  /** Seconds left. The full round while "ready", 0 while "over". */
+  remaining: number;
+  /** Round length (s), so the browser can draw the clock as a fraction. */
+  round_s: number;
+  /** Top scores, best first — SIXSEVEN_BOARD_SIZE rows at most. */
+  board: number[];
+  /** Where this round landed in `board` (0-based), or null if it missed. */
+  rank: number | null;
 }
 
 export interface BlackHoleObject {
@@ -404,8 +425,45 @@ export interface SchrodingerObject {
   caption: string;
 }
 
+/** One card in the gallery strip. */
+export interface GallerySlide {
+  /** absolute position in the folder — the strip is laid out from this */
+  index: number;
+  /** served by the backend out of the gallery folder, percent-encoded */
+  src: string;
+  /** "" for a gallery photograph; only the experiment stills are titled */
+  title: string;
+  caption: string;
+}
+
+/**
+ * The photo gallery (`ui/gallery.py`), live while `session.state ===
+ * "gallery"`. Python owns the photo list, where the strip is, and the card
+ * geometry; the browser lays card `i` out at
+ * `card[0] + (i - position) * stride`.
+ *
+ * `slides` is a WINDOW around the current card, never the folder — it can
+ * hold any number of photographs and this ships at STATE_FPS.
+ */
+export interface GalleryObject {
+  type: "gallery";
+  /** the settled photograph (an integer) */
+  index: number;
+  /** where the strip actually is; differs from `index` mid-drag and while
+   *  easing back after a release */
+  position: number;
+  count: number;
+  grabbed: boolean;
+  /** [x, y, w, h] of the centre card in frame pixels */
+  card: [number, number, number, number];
+  /** frame pixels between one card's left edge and the next */
+  stride: number;
+  slides: GallerySlide[];
+}
+
 export type SceneObject =
   | SphereObject
+  | GalleryObject
   | SixSevenObject
   | BlackHoleObject
   | SlingshotObject
@@ -507,7 +565,7 @@ export interface AppState {
   /** metric 3D skeleton for the vtuber rig; null unless pose is running */
   pose_world?: PoseWorld | null;
   session: {
-    state: "menu" | "interactables" | "experiments";
+    state: "menu" | "interactables" | "experiments" | "gallery";
     experiment:
       | "black_hole"
       | "slingshot"
