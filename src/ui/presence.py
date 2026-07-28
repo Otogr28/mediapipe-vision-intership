@@ -1,12 +1,12 @@
-"""Is somebody standing in front of the exhibit?
+"""Is somebody standing CLOSE TO the exhibit?
 
 The question attract mode turns on (see ``ui/attract.py``): with nobody there
 the display runs a slideshow, and when a visitor walks up it greets them and
-goes live. Getting that wrong in either direction is visible from across the
+goes live. Getting it wrong in either direction is visible from across the
 hall, so the answer is built from three signals rather than one:
 
 1. **A tracked hand.** Free — the hand detector runs every frame anyway — and
-   unambiguous. Somebody with a hand in frame is a visitor.
+   unambiguous.
 2. **Motion against a slowly-learned background.** This is the signal that
    catches the normal case: a person walking up with their hands down, who
    the hand detector cannot see at all. The frame is reduced to a
@@ -15,6 +15,25 @@ hall, so the answer is built from three signals rather than one:
 3. **A detected pose**, when some other feature already has body inference
    running. Never turned on *for* presence — pose is the app's biggest CPU
    cost and motion answers the same question for free.
+
+**Every one of them is gated on size**, because the exhibit is armed for
+somebody within reach of it and not for the corridor behind them. A camera
+has no depth, but a fixed camera does not need one: things get bigger as they
+come closer, so how much of the frame a person occupies *is* the distance
+estimate. Hence a hand must measure ``PRESENCE_HAND_SPAN`` before it counts,
+and the motion signal is judged on the largest connected **blob** rather than
+on a raw count of changed pixels.
+
+That blob is the part worth understanding. Changed pixels are grouped, the
+biggest group is measured, and it has to be both large and **tall** —
+``PRESENCE_ENTER_SPAN`` of the frame's height. Height is what separates near
+from far: somebody at the screen runs from the bottom edge to near the top,
+while the same person at the end of the corridor is a short patch no matter
+how briskly they move. It also throws out things that are not people at all,
+since a flickering lamp, a monitor behind or leaves in a window scatter
+changes over the frame without ever forming one tall blob. The bare
+changed-fraction test this replaced could not tell any of that apart, and
+woke the exhibit for all of it.
 
 The background is an EMA that adapts **only while nobody is present**. That
 one detail is what makes a visitor who walks up and then stands perfectly
@@ -28,11 +47,6 @@ half-exposed frame or two on open; seeded as the background, every later
 frame reads as motion. Somebody who happens to be standing there during the
 warm-up is learned as scenery, and is then noticed the moment they move or
 raise a hand.
-
-Distance is handled by the size of the disturbance rather than by any depth
-estimate: somebody at the display fills a large part of the frame, somebody
-crossing the corridor behind them does not. Hence two thresholds, a strict
-one to wake up and a loose one to stay awake.
 """
 
 import time
@@ -41,16 +55,64 @@ import cv2
 import numpy as np
 
 from config import (PRESENCE_BG_TAU_S, PRESENCE_ENTER_FRAC, PRESENCE_ENTER_S,
-                    PRESENCE_EXIT_FRAC, PRESENCE_GRID_W, PRESENCE_PIXEL_DELTA,
-                    PRESENCE_WARMUP_S)
+                    PRESENCE_ENTER_SPAN, PRESENCE_EXIT_FRAC,
+                    PRESENCE_EXIT_SPAN, PRESENCE_GRID_W,
+                    PRESENCE_HAND_EXIT_SPAN, PRESENCE_HAND_SPAN,
+                    PRESENCE_PIXEL_DELTA, PRESENCE_POSE_EXIT_SPAN,
+                    PRESENCE_POSE_SPAN, PRESENCE_WARMUP_S)
+
+# Speckle filter for the motion mask. On a 64px-wide thumbnail one pixel is a
+# big chunk of the room, so a 3x3 open only removes isolated sensor noise —
+# but that noise is exactly what would otherwise glue two far-apart patches
+# into one "tall" blob through a diagonal chain.
+_OPEN_KERNEL = np.ones((3, 3), np.uint8)
+
+
+def _hand_span(hand_result):
+    """Longest side of the biggest hand's bounding box, in frame fractions.
+
+    0.0 when there is no hand. Landmarks are normalized to the frame, so this
+    is directly comparable to ``PRESENCE_HAND_SPAN`` without knowing the
+    capture resolution — and it is the same number whichever backend
+    (MediaPipe or the ONNX one) produced the landmarks.
+    """
+    if hand_result is None or not hand_result.hand_landmarks:
+        return 0.0
+    best = 0.0
+    for lms in hand_result.hand_landmarks:
+        if not lms:
+            continue
+        xs = [lm.x for lm in lms]
+        ys = [lm.y for lm in lms]
+        best = max(best, max(xs) - min(xs), max(ys) - min(ys))
+    return float(best)
+
+
+def _pose_span(pose_landmarks):
+    """Height of the visible pose landmarks' bounding box, in frame
+    fractions. 0.0 when there is no pose.
+
+    Height rather than the longest side: a person is tall, and a raised arm
+    would otherwise make a distant visitor measure as wide as a near one.
+    """
+    if not pose_landmarks:
+        return 0.0
+    ys = [lm.y for lm in pose_landmarks
+          if getattr(lm, "visibility", 1.0) >= 0.5]
+    if len(ys) < 2:
+        return 0.0
+    return float(max(ys) - min(ys))
 
 
 class PresenceDetector:
-    """Rolling answer to "is anybody there?".
+    """Rolling answer to "is anybody standing at this thing?".
 
     Call :meth:`update` once per frame with whatever the pipeline already
-    has. Read :attr:`present` (hysteretic, instantaneous) and
-    :attr:`motion_frac` (the raw evidence, for the debug HUD).
+    has. Read :attr:`present` (hysteretic, instantaneous) and the measured
+    evidence (:attr:`blob_frac`, :attr:`blob_span`, :attr:`hand_span`) for
+    the debug HUD — those three are what you tune the thresholds against on
+    the device, since no synthetic test can tell you what a real hall looks
+    like to a real camera.
 
     The caller owns how long absence must last before acting on it — the
     manager holds the exhibit live for ``ATTRACT_IDLE_S`` after the last
@@ -59,7 +121,16 @@ class PresenceDetector:
 
     def __init__(self):
         self.present = False
+        # Raw changed-pixel fraction. No longer a threshold input — kept
+        # because it is the one number that says "the camera is producing a
+        # picture at all", which is worth seeing on the HUD.
         self.motion_frac = 0.0
+        # The largest connected blob of change: its area and its height, both
+        # as fractions of the frame. These are what decide the motion signal.
+        self.blob_frac = 0.0
+        self.blob_span = 0.0
+        self.hand_span = 0.0
+        self.pose_span = 0.0
         # What last asserted presence: "hand", "pose", "motion" or None.
         self.source = None
         self._bg = None
@@ -76,6 +147,25 @@ class PresenceDetector:
             small = cv2.cvtColor(small, cv2.COLOR_BGR2GRAY)
         return small.astype(np.float32)
 
+    def _measure_motion(self, small):
+        """Fill in ``motion_frac`` / ``blob_frac`` / ``blob_span``."""
+        diff = np.abs(small - self._bg) > PRESENCE_PIXEL_DELTA
+        self.motion_frac = float(np.count_nonzero(diff)) / diff.size
+
+        mask = cv2.morphologyEx(diff.astype(np.uint8), cv2.MORPH_OPEN,
+                                _OPEN_KERNEL)
+        n, _labels, stats, _cent = cv2.connectedComponentsWithStats(mask, 8)
+        if n <= 1:
+            self.blob_frac = 0.0
+            self.blob_span = 0.0
+            return
+        # Row 0 is the background label; the rest are blobs of change.
+        areas = stats[1:, cv2.CC_STAT_AREA]
+        biggest = 1 + int(np.argmax(areas))
+        self.blob_frac = float(stats[biggest, cv2.CC_STAT_AREA]) / mask.size
+        self.blob_span = float(stats[biggest, cv2.CC_STAT_HEIGHT]) \
+            / mask.shape[0]
+
     def update(self, frame, hand_result=None, pose_landmarks=None, now=None):
         """Advance one frame; returns :attr:`present`.
 
@@ -91,18 +181,14 @@ class PresenceDetector:
             self._first_t = now
         warming = (now - self._first_t) < PRESENCE_WARMUP_S
 
-        has_hand = (hand_result is not None
-                    and len(hand_result.hand_landmarks) > 0)
-        has_pose = pose_landmarks is not None
+        self.hand_span = _hand_span(hand_result)
+        self.pose_span = _pose_span(pose_landmarks)
 
         if frame is not None:
             small = self._thumbnail(frame)
             if self._bg is None or self._bg.shape != small.shape:
                 self._bg = small.copy()
-            self.motion_frac = float(
-                np.count_nonzero(
-                    np.abs(small - self._bg) > PRESENCE_PIXEL_DELTA)
-            ) / small.size
+            self._measure_motion(small)
             if (warming or not self.present) and dt > 0.0:
                 # Learn the empty room, and ONLY the empty room: adapting
                 # while somebody is standing there would quietly absorb them.
@@ -111,36 +197,63 @@ class PresenceDetector:
                 tau = 0.3 if warming else PRESENCE_BG_TAU_S
                 self._bg += (small - self._bg) * min(dt / tau, 1.0)
 
-        if has_hand or has_pose:
+        # Each signal is read against the strict threshold while absent and
+        # the loose one while present. That is the hysteresis: it takes a
+        # clear arrival to wake the exhibit, and a clear departure to release
+        # it, with no band in between where it oscillates.
+        near = not self.present
+        hand_ok = self.hand_span >= (PRESENCE_HAND_SPAN if near
+                                     else PRESENCE_HAND_EXIT_SPAN)
+        pose_ok = self.pose_span >= (PRESENCE_POSE_SPAN if near
+                                     else PRESENCE_POSE_EXIT_SPAN)
+        motion_ok = (
+            self.blob_frac >= (PRESENCE_ENTER_FRAC if near
+                               else PRESENCE_EXIT_FRAC)
+            and self.blob_span >= (PRESENCE_ENTER_SPAN if near
+                                   else PRESENCE_EXIT_SPAN))
+
+        if hand_ok or pose_ok:
+            # No dwell time on these two: a measurable hand or body is not
+            # something a swinging door produces.
             self.present = True
-            self.source = "hand" if has_hand else "pose"
+            self.source = "hand" if hand_ok else "pose"
             self._enter_since = None
             return self.present
 
         if warming:
             # Motion means nothing yet — the background is still settling.
+            # Hold whatever was decided rather than clearing it, so a hand
+            # seen during warm-up is not dropped a frame later.
             return self.present
 
-        if self.motion_frac >= PRESENCE_ENTER_FRAC:
-            # A door swinging or a light switching also moves pixels, so the
-            # evidence has to hold before it counts as somebody arriving.
-            if self._enter_since is None:
-                self._enter_since = now
-            if now - self._enter_since >= PRESENCE_ENTER_S:
-                self.present = True
+        if motion_ok:
+            if self.present:
+                # Already awake and still seeing a person-sized disturbance.
                 self.source = "motion"
+            else:
+                # A door swinging or a light switching also moves pixels, so
+                # the evidence has to hold before it counts as an arrival.
+                if self._enter_since is None:
+                    self._enter_since = now
+                if now - self._enter_since >= PRESENCE_ENTER_S:
+                    self.present = True
+                    self.source = "motion"
         else:
             self._enter_since = None
-            if self.present and self.motion_frac < PRESENCE_EXIT_FRAC:
-                self.present = False
-                self.source = None
+            self.present = False
+            self.source = None
 
         return self.present
 
     def to_state(self):
-        """Debug-block payload: what the exhibit thinks it can see."""
+        """Debug-block payload: what the exhibit thinks it can see, and how
+        big it measures — the numbers ``HALL_DEBUG=1`` puts on screen so the
+        thresholds can be tuned against the actual room."""
         return {
             "present": self.present,
             "motion": round(self.motion_frac, 4),
+            "blob": round(self.blob_frac, 4),
+            "span": round(self.blob_span, 3),
+            "hand": round(self.hand_span, 3),
             "source": self.source,
         }

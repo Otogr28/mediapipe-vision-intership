@@ -24,11 +24,12 @@ import subprocess
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from urllib.parse import unquote
 
 import cv2
 
-from config import (ATTRACT_DIR, OUTPUT_MODE, STATE_FPS, STREAM_BIND,
-                    STREAM_PORT, STREAM_QUALITY, WEB_DIST_DIR)
+from config import (OUTPUT_MODE, STATE_FPS, STREAM_BIND, STREAM_PORT,
+                    STREAM_QUALITY, WEB_DIST_DIR)
 
 
 class WindowSink:
@@ -230,9 +231,11 @@ class WebSink(MjpegSink):
       same latest-only pattern as the MJPEG loop: a slow client skips
       snapshots instead of building a backlog.
     * ``GET /attract/<name>`` — the attract-mode slideshow photographs, out
-      of ``ATTRACT_DIR``. Served from there rather than bundled into
-      ``web/dist`` because they are already committed once for the exhibit
-      website and ``web/dist`` travels to the Jetson in every ``git pull``.
+      of whatever ``ui.attract.slides_dir()`` currently resolves to (the
+      device's gallery folder, or the repo's experiment stills). Served from
+      a directory rather than bundled into ``web/dist`` because ``web/dist``
+      travels to the Jetson in every ``git pull``, and the whole point of the
+      gallery is that changing it is a file copy.
     * Static serving of the built frontend (``web/dist``) at ``/``.
 
     ``present()`` still streams the frame — but ``main.py`` passes the RAW
@@ -241,16 +244,33 @@ class WebSink(MjpegSink):
 
     def __init__(self, bind="auto", port=8092, quality=80, fps=30,
                  state_fps=STATE_FPS, dist_dir=WEB_DIST_DIR,
-                 attract_dir=ATTRACT_DIR):
+                 attract_dir=None):
         # Set before super().__init__ — the HTTP server starts serving in
         # there, and its handler reads these through the `sink` closure.
         self._state_fps = max(int(state_fps), 1)
         self._dist_dir = os.path.realpath(dist_dir) if dist_dir else None
+        # None means "ask ui.attract every time", which is what production
+        # wants: the gallery folder can appear, fill up or empty out while
+        # the exhibit runs, and the route has to follow the slide list rather
+        # than a directory latched at startup. A caller (a test) may pin one.
         self._attract_dir = (os.path.realpath(attract_dir)
                              if attract_dir else None)
         self._state = None       # latest state JSON (bytes)
         self._state_seq = 0
         super().__init__(bind=bind, port=port, quality=quality, fps=fps)
+
+    def _attract_root(self):
+        """Absolute directory the ``/attract/`` route serves out of.
+
+        Imported lazily: `ui.attract` pulls in the UI layer, and `output` is
+        the sink module — a module-level import would tie the two together
+        for nothing, since only this one route needs it.
+        """
+        if self._attract_dir is not None:
+            return self._attract_dir
+        from ui.attract import slides_dir
+        directory = slides_dir()
+        return os.path.realpath(directory) if directory else None
 
     def publish_state(self, data):
         """Store this frame's state JSON (bytes) for /state clients.
@@ -291,11 +311,14 @@ class WebSink(MjpegSink):
                 kiosk re-requests every time the exhibit goes idle, and
                 re-sending a quarter of a megabyte per slide per visitor is
                 work the Orin does not need to do."""
-                root = sink._attract_dir
+                root = sink._attract_root()
                 if root is None:
                     self.send_error(404)
                     return
-                name = os.path.basename(path)
+                # unquote: gallery filenames come off a phone or a camera and
+                # routinely carry spaces and parentheses, which `build_slides`
+                # percent-encoded on the way out.
+                name = os.path.basename(unquote(path))
                 full = os.path.realpath(os.path.join(root, name))
                 if not (full.startswith(root + os.sep)
                         and os.path.isfile(full)):

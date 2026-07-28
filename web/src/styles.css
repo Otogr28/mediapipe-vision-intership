@@ -600,6 +600,17 @@ body {
   background: var(--ink);
 }
 
+/* Position readout for a gallery folder, where dots would be a smear. Same
+   corner, same weight — it replaces .attract-dots past MAX_DOTS slides. */
+.attract-count {
+  position: absolute;
+  right: 5%;
+  bottom: 6%;
+  font-size: clamp(11px, 1.1vw, 15px);
+  color: var(--ink-dim);
+  font-variant-numeric: tabular-nums;
+}
+
 @keyframes attract-breathe {
   50% { opacity: 0.45; }
 }

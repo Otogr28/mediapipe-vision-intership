@@ -181,3 +181,26 @@ The Jetson now runs as a self-updating appliance:
 Day-to-day workflow: change code on the laptop → `cd web && npm run build`
 (if the frontend changed) → commit + push to main → done. `deploy.sh`
 (rsync) remains only for models and first-time provisioning.
+
+## The idle slideshow's photographs (`push-photos.sh`)
+
+The attract-mode slideshow reads `~/hall-photos` on the Jetson — a plain
+folder, whatever is in it. The app rescans it once a minute, so **adding a
+photograph is a file copy**: no restart, no redeploy, no commit. If the folder
+is missing or empty the app falls back to the repo's eight experiment stills
+(`docs/img`), which is what keeps a fresh checkout from showing black.
+
+```bash
+deploy/hall-app/push-photos.sh                     # the default photo folder
+deploy/hall-app/push-photos.sh ~/Pictures/hall     # some other folder
+HALL_PHOTO_STAGE_ONLY=/tmp/stage deploy/hall-app/push-photos.sh   # check it locally, send nothing
+```
+
+It downscales (long side 1920, q85, EXIF rotation applied then stripped) into a
+staging folder and rsyncs that with `--delete`, so the device mirrors the laptop
+folder rather than accumulating. 145 MB of phone photographs come out around
+33 MB, and the Orin stops decoding 4000×3000 images to draw them at 1280×720.
+
+These are **not in git, on purpose** — they are photographs of people and this
+repository is public. The trade is that a reflashed Jetson needs this run again.
+Point the app somewhere else with `HALL_ATTRACT_DIR`.

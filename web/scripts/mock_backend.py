@@ -20,6 +20,7 @@ import os
 import sys
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from urllib.parse import quote, unquote
 
 import cv2
 import numpy as np
@@ -38,8 +39,15 @@ HINT_TEXT = ("Pinch your fingers to interact" if DEMO_GESTURE == "pinch"
 
 # Attract slides. Served straight off disk by this mock's /attract/ route,
 # the same path the real WebSink serves them from.
-ATTRACT_DIR = os.path.join(os.path.dirname(os.path.dirname(
-    os.path.dirname(os.path.abspath(__file__)))), "docs", "img")
+#
+# HALL_ATTRACT_DIR points this at a real gallery folder, which is how you
+# preview the many-photographs case (counter instead of dots, no captions)
+# without a camera or a Jetson:
+#   HALL_ATTRACT_DIR=~/Pictures/hall uv run python web/scripts/mock_backend.py attract
+ATTRACT_DIR = os.path.expanduser(os.environ["HALL_ATTRACT_DIR"]) \
+    if os.environ.get("HALL_ATTRACT_DIR") else os.path.join(
+        os.path.dirname(os.path.dirname(
+            os.path.dirname(os.path.abspath(__file__)))), "docs", "img")
 _SLIDE_TEXT = {
     "black_hole": ("Black Hole",
                    "Light bends around a mass so dense it has no surface"),
@@ -57,9 +65,10 @@ _SLIDE_TEXT = {
                     "Measure the atom and the cat stops being both"),
 }
 ATTRACT_SLIDES = [
-    {"src": "/attract/" + name,
-     "title": _SLIDE_TEXT.get(os.path.splitext(name)[0],
-                              (os.path.splitext(name)[0], ""))[0],
+    # An untitled slide is the gallery case, matching ui/attract.py: only the
+    # eight experiment stills have text, camera filenames get none.
+    {"src": "/attract/" + quote(name),
+     "title": _SLIDE_TEXT.get(os.path.splitext(name)[0], ("", ""))[0],
      "caption": _SLIDE_TEXT.get(os.path.splitext(name)[0], ("", ""))[1]}
     for name in sorted(os.listdir(ATTRACT_DIR))
     if name.lower().endswith((".jpg", ".jpeg", ".png", ".webp"))
@@ -291,20 +300,29 @@ def scene_state(t):
     if SCENE == "attract":
         # The idle exhibit. Slides advance on the mock's own clock at the
         # real ATTRACT_SLIDE_S / ATTRACT_FADE_S, so the cross-fade can be
-        # judged without waiting out a 25 s absence in front of a camera.
-        slide_s, fade_s = 7.0, 1.2
+        # judged without waiting out a 30 s absence in front of a camera.
+        slide_s, fade_s = 6.5, 1.2
         n = max(len(ATTRACT_SLIDES), 1)
         index = int(t // slide_s) % n
         into = t % slide_s
         faded = into >= fade_s or t < slide_s
+        prev = index if faded else (index - 1) % n
+
+        def _slide(i):
+            return ATTRACT_SLIDES[i % n] if ATTRACT_SLIDES else None
+
         base["session"]["phase"] = "attract"
+        # Same three-slide window the real backend sends — see
+        # AttractScreen.to_state(); the full list never rides the payload.
         base["session"]["attract"] = {
             "title": "Physics Hall",
             "prompt": "Step closer to control this display with your hand",
             "index": index,
-            "prev": index if faded else (index - 1) % n,
+            "count": len(ATTRACT_SLIDES),
             "fade": 1.0 if faded else round(into / fade_s, 3),
-            "slides": ATTRACT_SLIDES,
+            "current": _slide(index),
+            "previous": None if prev == index else _slide(prev),
+            "next": _slide(index + 1) if len(ATTRACT_SLIDES) > 1 else None,
         }
 
     elif SCENE == "greeting":
@@ -855,7 +873,9 @@ class Handler(BaseHTTPRequestHandler):
                                   "fist_close_ratio": 1.05,
                                   "fist_release_ratio": 1.30,
                                   "presence": {"present": True,
-                                               "motion": 0.12,
+                                               "motion": 0.18,
+                                               "blob": 0.16, "span": 0.62,
+                                               "hand": 0.22,
                                                "source": "hand"}},
                     }
                     state.update(scene_state(t))
@@ -865,7 +885,8 @@ class Handler(BaseHTTPRequestHandler):
             except (BrokenPipeError, ConnectionResetError):
                 pass
         elif self.path.startswith("/attract/"):
-            full = os.path.join(ATTRACT_DIR, os.path.basename(self.path))
+            full = os.path.join(ATTRACT_DIR,
+                                os.path.basename(unquote(self.path)))
             if not os.path.isfile(full):
                 self.send_error(404)
                 return

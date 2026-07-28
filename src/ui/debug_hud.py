@@ -18,7 +18,8 @@ import cv2
 
 from config import (FIST_CLOSE_RATIO, FIST_RELEASE_RATIO, GESTURE_MODE,
                     HALL_INFERENCE, PINCH_CLOSE_RATIO, PINCH_RELEASE_RATIO,
-                    PRESENCE_ENTER_FRAC, PRESENCE_EXIT_FRAC)
+                    PRESENCE_ENTER_FRAC, PRESENCE_ENTER_SPAN,
+                    PRESENCE_HAND_SPAN)
 from detection import detectors, gestures
 
 FONT = cv2.FONT_HERSHEY_SIMPLEX
@@ -55,8 +56,9 @@ class DebugHUD:
 
     def draw(self, frame, presence=None):
         """``presence`` is ``PresenceDetector.to_state()`` when attract mode
-        is running — the one number (motion fraction vs its thresholds) that
-        makes PRESENCE_ENTER_FRAC tunable against the real room."""
+        is running — the measured blob size, blob height and hand size next
+        to the thresholds they have to clear, which is what makes the "is
+        somebody CLOSE" gates tunable against the real room."""
         now = time.monotonic()
         if self._last_draw_t is not None:
             dt = now - self._last_draw_t
@@ -91,13 +93,17 @@ class DebugHUD:
                     (x0 + PAD, ty), FONT, 0.38, COL_DIM, 1, cv2.LINE_AA)
 
         if presence is not None:
+            # Both gates on one line, each next to the threshold it has to
+            # clear: blob area, blob height and hand size are what decide
+            # "somebody is CLOSE", and tuning them means watching these three
+            # numbers while walking towards and away from the camera.
             ty += LINE_H
             cv2.putText(frame,
                         f"presence {'YES' if presence['present'] else 'no '}"
                         f" via {presence['source'] or '--'}"
-                        f"   motion {presence['motion']:.3f}"
-                        f"  enter >{PRESENCE_ENTER_FRAC}"
-                        f"  exit <{PRESENCE_EXIT_FRAC}",
+                        f"   blob {presence['blob']:.3f}>{PRESENCE_ENTER_FRAC}"
+                        f"  tall {presence['span']:.2f}>{PRESENCE_ENTER_SPAN}"
+                        f"  hand {presence['hand']:.2f}>{PRESENCE_HAND_SPAN}",
                         (x0 + PAD, ty), FONT, 0.38,
                         COL_CLOSED if presence["present"] else COL_DIM, 1,
                         cv2.LINE_AA)

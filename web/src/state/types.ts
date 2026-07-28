@@ -428,11 +428,19 @@ export interface DebugState {
   release_ratio: number;
   fist_close_ratio?: number;
   fist_release_ratio?: number;
-  /** what attract mode's presence detector currently sees */
+  /** what attract mode's presence detector currently sees. Every number is
+   *  a fraction of the frame, and each is a proxy for DISTANCE — see
+   *  src/ui/presence.py. */
   presence?: {
     present: boolean;
-    /** fraction of the frame differing from the learned background */
+    /** raw fraction of the frame differing from the learned background */
     motion: number;
+    /** area of the largest connected blob of change */
+    blob: number;
+    /** height of that blob — the near/far discriminator */
+    span: number;
+    /** longest side of the biggest tracked hand's bounding box */
+    hand: number;
     source: "hand" | "pose" | "motion" | null;
   } | null;
 }
@@ -449,21 +457,36 @@ export type GestureMode = "pinch" | "fist" | "either";
 export type SessionPhase = "attract" | "greeting" | "live";
 
 export interface AttractSlide {
-  /** served by the backend out of ATTRACT_DIR (see output.WebSink) */
+  /** served by the backend out of the gallery folder (see output.WebSink);
+   *  the filename is percent-encoded, since gallery files come straight off
+   *  a camera and carry spaces */
   src: string;
+  /** "" for a gallery photograph — only the experiment stills are titled */
   title: string;
   caption: string;
 }
 
+/**
+ * The slideshow carries a WINDOW, not the whole list: the gallery folder can
+ * hold any number of photographs and this block ships at STATE_FPS, so
+ * Python sends only what has to be on screen. `next` exists purely so the
+ * browser can keep it mounted at zero opacity and have it decoded before its
+ * turn — the Orin takes visibly long to decode a fresh JPEG.
+ */
 export interface AttractState {
   title: string;
   prompt: string;
+  /** 0-based position in the folder, for the "12 / 82" counter */
   index: number;
-  /** slide being faded OUT; equals `index` when there is no fade */
-  prev: number;
-  /** 1.0 = fully on `index` */
+  /** how many slides the folder holds */
+  count: number;
+  /** 1.0 = fully on `current` */
   fade: number;
-  slides: AttractSlide[];
+  current: AttractSlide | null;
+  /** the slide being faded OUT; null when there is no cross-fade */
+  previous: AttractSlide | null;
+  /** preload target; null when there is only one slide */
+  next: AttractSlide | null;
 }
 
 export interface GreetingState {

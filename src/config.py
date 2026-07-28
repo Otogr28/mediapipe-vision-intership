@@ -443,18 +443,41 @@ ATTRACT_ENABLED = os.environ.get("HALL_ATTRACT", "1") == "1"
 # Seconds of continuous absence before the exhibit goes back to the slideshow.
 # Long enough to survive a visitor stepping out of frame to fetch a friend,
 # short enough that the display is not left mid-experiment for the next one.
-ATTRACT_IDLE_S = 25.0
+ATTRACT_IDLE_S = 30.0
 
 # Seconds per slide, and the cross-fade between them.
-ATTRACT_SLIDE_S = 7.0
+ATTRACT_SLIDE_S = 6.5
 ATTRACT_FADE_S = 1.2
 
-# Slideshow source: one image per experiment, repo-root relative. These are
-# the same photographs the exhibit website uses for its cards, so the plate on
-# the wall, the site and the idle screen all show the same picture of each
-# experiment. Files are matched by stem against ATTRACT_SLIDE_TEXT below;
-# an unknown stem still shows, captioned by its filename.
+# Slideshow source, in priority order.
+#
+# ATTRACT_GALLERY_DIR is a plain folder of photographs OUTSIDE the repo: on
+# the exhibit machine, dropping a .jpg in there puts it in the rotation, and
+# deleting one takes it out. Nothing to edit, nothing to commit, nothing to
+# rebuild — which is the whole point, since whoever refreshes the photos in
+# the hall is not going to be editing Python. `deploy/hall-app/push-photos.sh`
+# fills it from a folder on the laptop.
+#
+# The gallery is deliberately not in git: it holds photographs of people, and
+# this repository is public. That also means a fresh checkout has none, so
+# ATTRACT_DIR (the eight experiment stills the exhibit website already uses)
+# is the fallback whenever the gallery is missing or empty — a laptop running
+# the app still gets a slideshow instead of a black screen.
+ATTRACT_GALLERY_DIR = os.path.expanduser(
+    os.environ.get("HALL_ATTRACT_DIR", "~/hall-photos"))
 ATTRACT_DIR = "docs/img"
+
+# How often the slideshow re-reads its directory. Adding a photograph to the
+# gallery should not need a restart of a machine that lives behind a plinth,
+# so the list is rescanned while the exhibit is idle; a new file joins the
+# rotation within a minute of being copied in.
+ATTRACT_RESCAN_S = 60.0
+
+# Above this many slides the position dots become a smear, so the renderers
+# switch to a plain "12 / 82" counter. A gallery folder crosses this the
+# moment somebody empties a phone into it; the eight experiment stills do not.
+# Keep in sync with MAX_DOTS in web/src/hud/Attract.tsx (the browser renderer).
+ATTRACT_MAX_DOTS = 12
 
 # Title + one-line caption per slide, keyed by the image stem (which is also
 # the `session.experiment` key, so a slide and its QR page always agree).
@@ -491,16 +514,23 @@ ATTRACT_PROMPT = "Step closer to control this display with your hand"
 ATTRACT_TITLE = "Physics Hall"
 
 # ---------------------------------------------------------------------------
-# Presence: is somebody standing in front of the exhibit?
+# Presence: is somebody standing CLOSE TO the exhibit?
 #
-# Three signals, cheapest first, OR-ed together:
+# "Close" is the operative word. The exhibit is armed for somebody within
+# reach of it, not for the corridor traffic behind them: waking up for every
+# person who walks past means the slideshow is never on screen, the app
+# resets itself under whoever is actually using it, and the greeting plays to
+# an empty room. So each of the three signals below carries its own SIZE gate,
+# and size is the distance estimate — a fixed camera has no depth, but
+# everything gets bigger as it comes closer, which is enough.
 #
-#   1. A tracked HAND. Free — the hand detector runs every frame anyway — and
-#      unambiguous: a hand in frame is a visitor.
-#   2. Frame MOTION against a slowly-learned background. This is the signal
-#      that catches somebody walking up with their hands down, which is how
-#      people actually approach a display. Costs ~0.2 ms/frame: the frame is
-#      reduced to a PRESENCE_GRID_W-wide grayscale thumbnail first.
+#   1. A tracked HAND, big enough in frame. Free (the hand detector runs every
+#      frame anyway) and unambiguous: a hand you can measure is a hand within
+#      arm's reach of the screen.
+#   2. Frame MOTION against a slowly-learned background — the signal that
+#      catches somebody walking up with their hands down, which is how people
+#      actually approach a display. Costs ~0.2 ms/frame: the frame is reduced
+#      to a PRESENCE_GRID_W-wide grayscale thumbnail first.
 #   3. A detected POSE, when some other feature already has pose running.
 #      Never turned on for presence alone — body inference is the app's
 #      biggest CPU cost and motion answers the same question for free.
@@ -510,13 +540,38 @@ ATTRACT_TITLE = "Physics Hall"
 # instead of being absorbed into the background after a few seconds.
 PRESENCE_GRID_W = 64            # thumbnail width in px (height keeps aspect)
 PRESENCE_PIXEL_DELTA = 18       # per-pixel gray difference counted as "changed"
-# Fraction of the thumbnail that must differ from the background. Distance is
-# the reason there are two: somebody at the display fills a large part of the
-# frame, somebody crossing the corridor behind them does not. Enter is the
-# strict one; presence then persists down to the looser exit threshold.
-PRESENCE_ENTER_FRAC = 0.07
-PRESENCE_EXIT_FRAC = 0.025
-# The enter threshold must hold this long before presence is asserted, so a
+
+# --- motion ---
+# The changed pixels are grouped into blobs and only the LARGEST one is
+# judged, on two counts: how much of the frame it covers, and how TALL it is.
+# Height is what separates near from far. A person at the screen runs from the
+# bottom edge to near the top; the same person four metres back is a short
+# patch high in the frame no matter how briskly they move, and a scatter of
+# small changes (a flickering lamp, a screen behind, leaves outside a window)
+# never forms one tall blob at all. A bare changed-pixel fraction, which is
+# what this used to be, cannot tell those apart.
+PRESENCE_ENTER_FRAC = 0.14      # blob area, as a fraction of the frame
+PRESENCE_ENTER_SPAN = 0.55      # blob height, as a fraction of frame height
+# Looser thresholds to STAY present. Hysteresis, so somebody standing at the
+# exhibit does not drop out every time they lean back.
+PRESENCE_EXIT_FRAC = 0.06
+PRESENCE_EXIT_SPAN = 0.35
+
+# --- hand ---
+# Longest side of the hand's bounding box, as a fraction of the frame. A hand
+# held out at the screen measures ~0.2-0.35 of frame height at 720p; the same
+# hand three metres away measures under 0.08. Everything the UI does needs the
+# hand near the camera anyway, so this gate costs a real visitor nothing.
+PRESENCE_HAND_SPAN = 0.16
+PRESENCE_HAND_EXIT_SPAN = 0.10
+
+# --- pose ---
+# Height of the visible pose landmarks' bounding box. Only consulted when some
+# other feature already pays for body inference (HALL_POSE=1, or the Vtuber).
+PRESENCE_POSE_SPAN = 0.45
+PRESENCE_POSE_EXIT_SPAN = 0.30
+
+# The enter thresholds must hold this long before presence is asserted, so a
 # door swinging or a light switching does not wake the exhibit.
 PRESENCE_ENTER_S = 0.6
 # Background EMA time constant (s) while nobody is present. Long enough to

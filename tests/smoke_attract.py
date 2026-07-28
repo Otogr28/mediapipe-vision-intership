@@ -85,10 +85,50 @@ def empty_room():
 
 
 def visitor(frame):
-    """The same room with somebody filling a good part of it."""
+    """The same room with somebody CLOSE: one tall blob, most of the height."""
     out = frame.copy()
     out[H // 4:, W // 4:3 * W // 4] = 210
     return out
+
+
+def distant_visitor(frame):
+    """Somebody down the corridor: a small patch, high in the frame.
+
+    The exhibit must ignore this. It is the case that made attract mode
+    useless before the size gates — every passer-by woke the display, so the
+    slideshow was never on screen and the app reset itself under whoever was
+    actually standing at it.
+    """
+    out = frame.copy()
+    top = H // 8
+    out[top:top + H // 5, W // 2:W // 2 + W // 10] = 210
+    return out
+
+
+def flicker(frame):
+    """Scattered change covering a LOT of the frame but forming no tall blob
+    — a screen behind, a strip light, sun through leaves. Its total changed
+    fraction beats the old threshold; its largest blob does not."""
+    out = frame.copy()
+    for row in range(6):
+        for col in range(10):
+            y = int(H * (0.05 + 0.15 * row))
+            x = int(W * (0.02 + 0.098 * col))
+            out[y:y + H // 20, x:x + W // 20] = 210
+    return out
+
+
+class _LM:
+    """Landmark stand-in — the detectors only ever expose .x/.y/.z."""
+
+    def __init__(self, x, y, z=0.0):
+        self.x, self.y, self.z = x, y, z
+
+
+def scaled_hand(landmarks, scale, cx=0.5, cy=0.5):
+    """The same posed hand, smaller in frame — i.e. further from the camera."""
+    return [_LM(cx + (lm.x - cx) * scale, cy + (lm.y - cy) * scale,
+                getattr(lm, "z", 0.0)) for lm in landmarks]
 
 
 class _HandResult:
@@ -140,11 +180,68 @@ def check_presence():
         det.update(room, now=t)
     _check(not det.present, "the room emptying reads as absent again")
 
-    # A hand alone is enough, with no motion signal at all.
+    # A hand alone is enough, with no motion signal at all — as long as it is
+    # big enough in frame to be a hand at the screen.
     det2 = PresenceDetector()
     det2.update(None, hand_result=_HandResult(), now=CLOCK[0])
     _check(det2.present and det2.source == "hand",
-           "a tracked hand asserts presence with no frame at all")
+           "a hand held at the screen asserts presence with no frame at all")
+
+
+def check_distance():
+    """The size gates: only somebody CLOSE wakes the exhibit.
+
+    Synthetic frames cannot tell you whether PRESENCE_ENTER_SPAN is right for
+    the hall (tune that on the device with HALL_DEBUG=1). What they can prove
+    is the shape of the rule — that a small disturbance and a scattered one
+    are both rejected while a tall one is accepted — which is what separates
+    a visitor at the screen from the corridor behind them.
+    """
+    print("\n--- distance gates " + "-" * 50)
+    room = empty_room()
+
+    def settled():
+        det = PresenceDetector()
+        t = CLOCK[0]
+        for _ in range(int((PRESENCE_WARMUP_S + 2.0) * 30)):
+            t += 1 / 30
+            det.update(room, now=t)
+        return det, t
+
+    def feed(det, t, frame, seconds=PRESENCE_ENTER_S + 1.0):
+        for _ in range(int(seconds * 30)):
+            t += 1 / 30
+            det.update(frame, now=t)
+        return t
+
+    det, t = settled()
+    feed(det, t, distant_visitor(room))
+    _check(not det.present,
+           f"somebody far down the corridor is ignored "
+           f"(blob {det.blob_frac:.3f}, tall {det.blob_span:.2f})")
+
+    det, t = settled()
+    feed(det, t, flicker(room))
+    _check(det.motion_frac >= 0.14,
+           f"...the flicker frame DOES move a lot of pixels "
+           f"({det.motion_frac:.3f}) — the old test would have woken on it")
+    _check(not det.present,
+           f"scattered flicker with no tall blob is ignored "
+           f"(blob {det.blob_frac:.3f}, tall {det.blob_span:.2f})")
+
+    det, t = settled()
+    feed(det, t, visitor(room))
+    _check(det.present,
+           f"somebody at the screen still wakes it "
+           f"(blob {det.blob_frac:.3f}, tall {det.blob_span:.2f})")
+
+    # ...and the same gate on the hand signal.
+    small = _HandResult(scaled_hand(make_hand(curl=0.0), 0.3))
+    det = PresenceDetector()
+    det.update(None, hand_result=small, now=CLOCK[0])
+    _check(not det.present,
+           f"a hand across the room is not a visitor "
+           f"(span {det.hand_span:.2f})")
 
 
 def check_phases():
@@ -234,19 +331,83 @@ def check_renderers():
         _check(len(payload) < 20000,
                f"{phase}: state payload stays small ({len(payload)} B)")
 
-    slides = ui._attract.to_state()["slides"]
-    _check(bool(slides),
-           f"the slideshow found images in ATTRACT_DIR ({len(slides)} slides)")
-    _check(all(s["src"].startswith("/attract/") for s in slides),
-           "every slide is served from the /attract/ route")
+    att = ui._attract.to_state()
+    _check(att["count"] > 0,
+           f"the slideshow found images ({att['count']} slides)")
+    _check(att["current"] is not None
+           and att["current"]["src"].startswith("/attract/"),
+           "the current slide is served from the /attract/ route")
+    _check("slides" not in att,
+           "the payload carries a window, not the whole folder")
+
+
+def check_gallery():
+    """The gallery folder: what makes adding a photograph a file copy.
+
+    Written against a temporary directory rather than the device's real one,
+    since the point is the RULE (a folder with images wins, an empty or
+    missing one falls back to the repo stills) and not what happens to be on
+    this machine.
+    """
+    print("\n--- gallery folder " + "-" * 50)
+    import shutil
+    import tempfile
+
+    import config
+    from ui import attract as attract_mod
+
+    tmp = tempfile.mkdtemp(prefix="hall-gallery-")
+    original = config.ATTRACT_GALLERY_DIR
+    try:
+        # Empty folder -> the repo's experiment stills, captions and all.
+        config.ATTRACT_GALLERY_DIR = tmp
+        attract_mod.ATTRACT_GALLERY_DIR = tmp
+        _check(attract_mod.slides_dir() == config.ATTRACT_DIR,
+               "an empty gallery falls back to the repo stills")
+        _check(any(s["title"] for s in attract_mod.build_slides()),
+               "...which still carry their experiment captions")
+
+        # A file straight off a phone: spaces, parentheses, upper-case
+        # extension, plus the zero-byte file a half-finished copy leaves.
+        source = os.path.join(config.ATTRACT_DIR, "waves.jpg")
+        for name in ("hall (1).JPG", "20250919_171142.jpg"):
+            shutil.copyfile(source, os.path.join(tmp, name))
+        open(os.path.join(tmp, "truncated.jpg"), "wb").close()
+
+        _check(attract_mod.slides_dir() == tmp,
+               "a gallery with photographs in it wins")
+        slides = attract_mod.build_slides()
+        _check(len(slides) == 2,
+               f"the zero-byte file is skipped ({len(slides)} slides, want 2)")
+        _check(all(s["title"] == "" and s["caption"] == "" for s in slides),
+               "gallery photographs get no camera-filename caption")
+        spaced = [s for s in slides if "hall" in s["src"]]
+        _check(bool(spaced) and " " not in spaced[0]["src"]
+               and "%20" in spaced[0]["src"],
+               f"spaces are percent-encoded for the route "
+               f"({spaced[0]['src'] if spaced else '--'})")
+
+        # And the rescan: a photograph copied in joins without a restart.
+        screen = attract_mod.AttractScreen(W, H)
+        _check(len(screen.slides) == 2, "the screen picked up the gallery")
+        shutil.copyfile(source, os.path.join(tmp, "zzz_new.jpg"))
+        screen.enter(CLOCK[0])
+        _check(len(screen.slides) == 3,
+               "a photograph copied in joins the rotation on the next rescan")
+    finally:
+        config.ATTRACT_GALLERY_DIR = original
+        attract_mod.ATTRACT_GALLERY_DIR = original
+        shutil.rmtree(tmp, ignore_errors=True)
 
 
 def main():
     install_clock()
     try:
         check_presence()
+        check_distance()
         check_phases()
         check_renderers()
+        check_gallery()
     finally:
         restore_clock()
     print()
