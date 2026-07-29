@@ -264,6 +264,18 @@ HAND_VIEW_MIN = float(os.environ.get("HALL_HAND_VIEW_MIN", "0.35"))
 # at exhibit distance the full-frame scan position is the one likely to miss it.
 HAND_VIEW_LOST = int(os.environ.get("HALL_HAND_VIEW_LOST", "5"))
 HAND_VIEW_GROW = float(os.environ.get("HALL_HAND_VIEW_GROW", "1.7"))
+# One window per HAND, taking turns. While fewer than NUM_HANDS are tracked,
+# every Nth turn goes to a scan position instead of a tracked window, so a
+# second hand entering is found without dropping the first. 3 leaves a lone
+# hand refreshed on two turns out of three; lower finds the second hand sooner
+# and costs the first one frames.
+HAND_VIEW_SEEK = int(os.environ.get("HALL_HAND_VIEW_SEEK", "3"))
+# How long a hand's last landmarks stay in the published result while its
+# window is not the one being looked at. It has to cover at least one full
+# rotation (two hands = every other frame) or a hand would blink out on the
+# frames belonging to the other one; too long and a hand that has actually
+# left lingers. `gestures` applies its own grace window on top of this.
+HAND_VIEW_HOLD_MS = float(os.environ.get("HALL_HAND_VIEW_HOLD_MS", "400"))
 
 # Contrast processing on the frame handed to the model (`preprocess.py`).
 # Default OFF because it was MEASURED not to help: over the same 12 real frames

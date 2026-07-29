@@ -7,10 +7,11 @@ from mediapipe.tasks.python import vision
 from capture import (FreshestFrame, apply_camera_controls, device_path,
                      resolve_camera_source, restore_auto_exposure)
 from config import (CAMERA_CONTROLS, CAMERA_STALL_S, DEBUG_HUD,
-                    HAND_VIEW_ENABLED, HAND_VIEW_GROW, HAND_VIEW_LOST,
-                    HAND_VIEW_MIN, HAND_VIEW_PAD, HAND_VIEW_SCALE,
-                    POSE_ENABLED, POSE_SMOOTHING, PREPROCESS_SPEC,
-                    SELECTED_CAMERA, STATE_FPS, WINDOW_HEIGHT, WINDOW_WIDTH)
+                    HAND_VIEW_ENABLED, HAND_VIEW_GROW, HAND_VIEW_HOLD_MS,
+                    HAND_VIEW_LOST, HAND_VIEW_MIN, HAND_VIEW_PAD,
+                    HAND_VIEW_SCALE, HAND_VIEW_SEEK, NUM_HANDS, POSE_ENABLED,
+                    POSE_SMOOTHING, PREPROCESS_SPEC, SELECTED_CAMERA,
+                    STATE_FPS, WINDOW_HEIGHT, WINDOW_WIDTH)
 from detection import detectors
 from detection.detectors import build_hand_detector, build_pose_detector
 from detection.pose_smoother import PoseSmoother
@@ -132,7 +133,9 @@ def main():
     # no help. See both modules for the numbers.
     viewport = (HandViewport(scale=HAND_VIEW_SCALE, pad=HAND_VIEW_PAD,
                              min_scale=HAND_VIEW_MIN,
-                             lost_frames=HAND_VIEW_LOST, grow=HAND_VIEW_GROW)
+                             lost_frames=HAND_VIEW_LOST, grow=HAND_VIEW_GROW,
+                             max_hands=NUM_HANDS, seek_every=HAND_VIEW_SEEK,
+                             hold_ms=HAND_VIEW_HOLD_MS)
                 if HAND_VIEW_ENABLED else None)
     preprocess = Preprocessor(PREPROCESS_SPEC)
     # Said out loud at startup: this layer is invisible when it works, and when

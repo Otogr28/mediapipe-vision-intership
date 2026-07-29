@@ -41,6 +41,9 @@ import numpy as np
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(
     os.path.abspath(__file__))), "src"))
 
+from config import (HAND_VIEW_GROW, HAND_VIEW_HOLD_MS,  # noqa: E402,E501
+                    HAND_VIEW_LOST, HAND_VIEW_MIN, HAND_VIEW_PAD,
+                    HAND_VIEW_SCALE, HAND_VIEW_SEEK, NUM_HANDS)
 from detection import detectors  # noqa: E402
 from detection.detectors import build_hand_detector  # noqa: E402
 from hand_view import HandViewport  # noqa: E402
@@ -152,7 +155,13 @@ def score(feeder, frames, pre, zoom, box=None, use_viewport=False,
         t0 = time.monotonic()
         img = pre(img)
         total_ms += (time.monotonic() - t0) * 1000.0
-        viewport = HandViewport() if use_viewport else None
+        # Built from config, not from defaults, so a HALL_HAND_VIEW_* sweep
+        # measures the settings the app would actually ship with.
+        viewport = HandViewport(
+            scale=HAND_VIEW_SCALE, pad=HAND_VIEW_PAD, min_scale=HAND_VIEW_MIN,
+            lost_frames=HAND_VIEW_LOST, grow=HAND_VIEW_GROW,
+            max_hands=NUM_HANDS, seek_every=HAND_VIEW_SEEK,
+            hold_ms=HAND_VIEW_HOLD_MS) if use_viewport else None
         feeder.flush(img.shape)
         best = []
         for _ in range(repeats):
