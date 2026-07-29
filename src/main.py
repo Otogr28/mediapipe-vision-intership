@@ -6,16 +6,12 @@ from mediapipe.tasks.python import vision
 
 from capture import (FreshestFrame, apply_camera_controls, device_path,
                      resolve_camera_source, restore_auto_exposure)
-from config import (CAMERA_CONTROLS, CAMERA_STALL_S, DEBUG_HUD,
-                    HAND_VIEW_ENABLED, HAND_VIEW_GROW, HAND_VIEW_HOLD_MS,
-                    HAND_VIEW_LOST, HAND_VIEW_MIN, HAND_VIEW_PAD,
-                    HAND_VIEW_SCALE, HAND_VIEW_SEEK, NUM_HANDS, POSE_ENABLED,
-                    POSE_SMOOTHING, PREPROCESS_SPEC, SELECTED_CAMERA,
-                    STATE_FPS, WINDOW_HEIGHT, WINDOW_WIDTH)
+from config import (CAMERA_CONTROLS, CAMERA_STALL_S, DEBUG_HUD, POSE_ENABLED,
+                    POSE_SMOOTHING, PREPROCESS_SPEC, PROC_WIDTH,
+                    SELECTED_CAMERA, STATE_FPS, WINDOW_HEIGHT, WINDOW_WIDTH)
 from detection import detectors
 from detection.detectors import build_hand_detector, build_pose_detector
 from detection.pose_smoother import PoseSmoother
-from hand_view import HandViewport
 from output import make_sink
 from preprocess import Preprocessor
 from rendering.drawing import draw_connections, draw_landmarks, toMpImage
@@ -102,6 +98,18 @@ def main():
         return
     frame_h, frame_w = probe.shape[:2]
 
+    # What the app WORKS in, which can be smaller than what it CAPTURES: a
+    # bigger capture buys the visitor a sharper picture of themselves, and
+    # downscaling it once per frame keeps the detectors, the presence test and
+    # every pixel constant on the frame size they were tuned at (see
+    # config.PROC_WIDTH). The height is derived from the capture's real aspect
+    # so the browser's overlay stays lined up with the video it is drawn over.
+    proc_w, proc_h = frame_w, frame_h
+    if 0 < PROC_WIDTH < frame_w:
+        proc_w = PROC_WIDTH
+        proc_h = max(2, int(round(frame_h * PROC_WIDTH / frame_w)) // 2 * 2)
+    downscale = (proc_w, proc_h) != (frame_w, frame_h)
+
     # Wrap the capture so the loop always gets the newest frame. This is the
     # real cure for the "camera delay": a background thread drains the capture
     # continuously and keeps only the latest frame, so when the render loop is
@@ -115,36 +123,30 @@ def main():
     camera = FreshestFrame(camera, loop=_is_file,
                            fps=_file_fps if _file_fps and _file_fps > 1 else 0.0)
 
-    sink = make_sink(frame_w, frame_h)
+    sink = make_sink(proc_w, proc_h)
     # Web mode is detected by capability, not config: the WebSink takes the
     # per-frame state JSON, the browser renders all UI, and the backend
     # neither draws on the frame nor creates a GL context.
     publish_state = getattr(sink, "publish_state", None)
-    ui = UIManager(frame_w, frame_h, gpu_effects=publish_state is None)
+    ui = UIManager(proc_w, proc_h, gpu_effects=publish_state is None)
 
     pose_connections = vision.PoseLandmarksConnections.POSE_LANDMARKS
     hand_connections = vision.HandLandmarksConnections.HAND_CONNECTIONS
 
-    # What the hand detector is SHOWN. Both of these sit between the camera and
-    # the model and neither touches the frame the visitor sees: `hand_view`
-    # feeds the detector a window of the frame so a distant hand is a big
-    # enough fraction of it to be found at all (the measured fix), and
-    # `preprocess` is the contrast knob, off by default because it measured as
-    # no help. See both modules for the numbers.
-    viewport = (HandViewport(scale=HAND_VIEW_SCALE, pad=HAND_VIEW_PAD,
-                             min_scale=HAND_VIEW_MIN,
-                             lost_frames=HAND_VIEW_LOST, grow=HAND_VIEW_GROW,
-                             max_hands=NUM_HANDS, seek_every=HAND_VIEW_SEEK,
-                             hold_ms=HAND_VIEW_HOLD_MS)
-                if HAND_VIEW_ENABLED else None)
+    # What the hand detector is SHOWN. `preprocess` is the contrast knob, off
+    # by default because it measured as no help; see the module for the numbers.
     preprocess = Preprocessor(PREPROCESS_SPEC)
     # Said out loud at startup: this layer is invisible when it works, and when
     # it misbehaves the symptom is "the model stopped finding hands", which is
     # indistinguishable from every other cause unless the log says it was on.
-    print("hand detector input: %s · preprocess %s"
-          % ("viewport scale %.2f (scan+lock)" % HAND_VIEW_SCALE
-             if viewport is not None else "full frame",
-             preprocess.describe()), flush=True)
+    print("hand detector input: full frame · preprocess %s"
+          % preprocess.describe(), flush=True)
+    # Same reason: a picture that is sharper than the app's own coordinate
+    # space is invisible when it works, and reads as "the overlay drifted"
+    # when it does not.
+    print("capture %dx%d · app+model %dx%d%s"
+          % (frame_w, frame_h, proc_w, proc_h,
+             " (downscaled per frame)" if downscale else ""), flush=True)
 
     global last_timestamp_ms
     last_error = None
@@ -189,6 +191,17 @@ def main():
                     break
                 flip_frame = cv2.flip(src=frame, flipCode=1)
 
+                # From here on `view_frame` is the visitor's picture at
+                # capture resolution and `flip_frame` is what the app reasons
+                # about. INTER_AREA because this is a downscale and it is the
+                # filter that averages the pixels it drops — a hand thins out
+                # and loses contrast against the window under INTER_LINEAR,
+                # and the hand's readability is the whole problem here.
+                view_frame = flip_frame
+                if downscale:
+                    flip_frame = cv2.resize(flip_frame, (proc_w, proc_h),
+                                            interpolation=cv2.INTER_AREA)
+
                 timestamps_ms = max(int((time.monotonic() - start_time) * 1000), last_timestamp_ms + 1)
                 last_timestamp_ms = timestamps_ms
 
@@ -208,30 +221,16 @@ def main():
                         print("pose detector build failed; staying hand-only",
                               flush=True)
                 if need_pose and pose_detector is not None:
-                    # Pose gets the WHOLE frame: it is a body model and the
-                    # hand viewport would cut the body in half.
                     pose_detector.detect_async(image=toMpImage(frame=flip_frame),
                                                timestamp_ms=timestamps_ms)
                     pose_result, pose_received_t = detectors.latest_pose_packet
                 else:
                     pose_result, pose_received_t = None, None
 
-                # Hands get a WINDOW of the frame (hand_view.py): at exhibit
-                # distance a hand is too small a fraction of the full frame for
-                # the palm detector to find, and this is the only lever on that
-                # ratio that leaves the camera and the visible picture alone.
-                hand_frame = flip_frame if viewport is None \
-                    else viewport.view(flip_frame, timestamps_ms)
-                hand_detector.detect_async(image=toMpImage(frame=preprocess(hand_frame)),
+                hand_detector.detect_async(image=toMpImage(frame=preprocess(flip_frame)),
                                            timestamp_ms=timestamps_ms)
 
-                hand_result, hand_received_t, hand_ts = \
-                    detectors.latest_hand_packet
-                # Landmarks arrive normalized to the window they were found in,
-                # and that window is one or two frames old by now — remap with
-                # the one that produced THIS result, not the current one.
-                if viewport is not None:
-                    hand_result = viewport.remap(hand_result, hand_ts)
+                hand_result, hand_received_t = detectors.latest_hand_packet
 
                 # Smooth the body: feed the One-Euro smoother on each NEW pose
                 # result, then sample its filtered + velocity-extrapolated output
@@ -285,7 +284,12 @@ def main():
                     publish_state(build_state(ui, hand_result, pose_landmarks,
                                               pose_world_landmarks))
 
-                sink.present(flip_frame)
+                # Web mode presents the full-resolution picture (the browser
+                # draws the UI over it from the state payload). Window and
+                # stream present the frame Python just drew on, which is the
+                # proc one — their overlay is in proc coordinates.
+                sink.present(view_frame if publish_state is not None
+                             else flip_frame)
                 if sink.should_quit():
                     break
             except Exception:

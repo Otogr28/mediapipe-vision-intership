@@ -15,13 +15,10 @@ latest_pose_result = None
 # smoother can extrapolate by the result's true age.
 latest_pose_packet = (None, None)
 latest_hand_result = None
-# (result, receive time.monotonic(), submitted timestamp_ms) published as ONE
-# tuple assignment so a reader can never pair a new result with an old time —
-# the callbacks run on MediaPipe's (or the GPU backend's) worker thread, not
-# the render loop. The submitted timestamp rides along because `hand_view.py`
-# has to remap the landmarks with the WINDOW that produced them, and by the
-# time a result arrives the current window has usually moved on.
-latest_hand_packet = (None, None, None)
+# (result, receive time.monotonic()) published as ONE tuple assignment so a
+# reader can never pair a new result with an old time — the callbacks run on
+# MediaPipe's (or the GPU backend's) worker thread, not the render loop.
+latest_hand_packet = (None, None)
 
 # EMA of the interval between hand-result callbacks -> detector FPS.
 _HAND_DT_EMA_ALPHA = 0.1
@@ -50,7 +47,7 @@ def on_hand_result(result, output_image, timestamp_ms):
     global latest_hand_result, latest_hand_packet, _hand_dt_ema, _hand_last_t
     now = time.monotonic()
     latest_hand_result = result
-    latest_hand_packet = (result, now, timestamp_ms)
+    latest_hand_packet = (result, now)
     if _hand_last_t is not None:
         dt = now - _hand_last_t
         _hand_dt_ema = (dt if _hand_dt_ema == 0.0 else

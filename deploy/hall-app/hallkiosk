@@ -21,11 +21,23 @@ APP_DIR="${HALL_APP_DIR:-$HOME/HalLMediaPipe}"
 PORT="${HALL_STREAM_PORT:-8092}"
 export DISPLAY="${DISPLAY:-:0}"
 export HALL_OUTPUT=web
-# 720p kiosk profile: at 1080p the Orin saturates (python JPEG encode +
-# Firefox MJPEG decode + canvas compositing all scale with pixels; the
-# models do NOT — they resize internally). 720p cuts pixel work ~2.25x.
-export HALL_CAPTURE_W="${HALL_CAPTURE_W:-1280}"
-export HALL_CAPTURE_H="${HALL_CAPTURE_H:-720}"
+# Kiosk profile: capture 1080p for the PICTURE, work in 720p for everything
+# else (HALL_PROC_W — see config.PROC_WIDTH). The monitor is 1440p, so a 720p
+# capture is visibly soft on a visitor looking at themselves.
+#
+# The old note here said "at 1080p the Orin saturates", and it was right about
+# the profile it described: back then 1080p meant the WHOLE pipeline at 1080p,
+# overlay canvas and all. Under the split only the JPEG encode (python) and the
+# JPEG decode (Firefox) scale up; the overlay canvas, the WebGL scene layers
+# and every model still run at 720p, and the models never cared in the first
+# place (they resize their input internally).
+#
+# 2560x1440 is available on the MX Brio and would match the panel 1:1. It is
+# 4x the pixel work of 720p rather than 2.25x, so it goes in only after a
+# frame-rate check on the device (HALL_DEBUG=1 prints render FPS).
+export HALL_CAPTURE_W="${HALL_CAPTURE_W:-1920}"
+export HALL_CAPTURE_H="${HALL_CAPTURE_H:-1080}"
+export HALL_PROC_W="${HALL_PROC_W:-1280}"
 # Lighter JPEGs: q60 encodes ~faster on ARM and decodes faster in Firefox;
 # indistinguishable at kiosk viewing distance.
 export HALL_STREAM_QUALITY="${HALL_STREAM_QUALITY:-60}"

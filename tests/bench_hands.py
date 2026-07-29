@@ -41,12 +41,8 @@ import numpy as np
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(
     os.path.abspath(__file__))), "src"))
 
-from config import (HAND_VIEW_GROW, HAND_VIEW_HOLD_MS,  # noqa: E402,E501
-                    HAND_VIEW_LOST, HAND_VIEW_MIN, HAND_VIEW_PAD,
-                    HAND_VIEW_SCALE, HAND_VIEW_SEEK, NUM_HANDS)
 from detection import detectors  # noqa: E402
 from detection.detectors import build_hand_detector  # noqa: E402
-from hand_view import HandViewport  # noqa: E402
 from preprocess import Preprocessor  # noqa: E402
 from rendering.drawing import toMpImage  # noqa: E402
 
@@ -110,26 +106,16 @@ class Feeder:
         self.detector = detector
         self.t_ms = 0
 
-    def feed(self, frame, viewport=None, ts=None):
-        """Push one frame, wait for its result, return the hand landmarks.
-
-        With a viewport, the frame is windowed exactly as `main.py` windows it
-        and the answer is remapped back, so what is measured is the shipping
-        layer rather than a hand-picked crop.
-        """
-        detectors.latest_hand_packet = (None, None, None)
+    def feed(self, frame):
+        """Push one frame, wait for its result, return the hand landmarks."""
+        detectors.latest_hand_packet = (None, None)
         self.t_ms += 33
-        shown = frame if viewport is None else viewport.view(frame, self.t_ms)
-        self.detector.detect_async(image=toMpImage(frame=shown),
+        self.detector.detect_async(image=toMpImage(frame=frame),
                                    timestamp_ms=self.t_ms)
         deadline = time.monotonic() + WAIT_S
         while time.monotonic() < deadline:
-            result, _t, got_ts = detectors.latest_hand_packet
+            result, _t = detectors.latest_hand_packet
             if result is not None:
-                if viewport is not None:
-                    result = viewport.remap(result, got_ts)
-                    if result is None:
-                        return []
                 return getattr(result, "hand_landmarks", None) or []
             time.sleep(0.002)
         return []
@@ -140,14 +126,8 @@ class Feeder:
             self.feed(black)
 
 
-def score(feeder, frames, pre, zoom, box=None, use_viewport=False,
-          repeats=REPEATS):
-    """Run every frame through one variant. Returns (rows, ms_per_frame).
-
-    With ``use_viewport`` each frame gets a FRESH `HandViewport`, so what is
-    measured is acquisition from cold through the shipping layer: the scan has
-    to find the hand by itself, with no help from a crop chosen by hand.
-    """
+def score(feeder, frames, pre, zoom, box=None, repeats=REPEATS):
+    """Run every frame through one variant. Returns (rows, ms_per_frame)."""
     rows = []
     total_ms = 0.0
     for name, raw in frames:
@@ -155,17 +135,10 @@ def score(feeder, frames, pre, zoom, box=None, use_viewport=False,
         t0 = time.monotonic()
         img = pre(img)
         total_ms += (time.monotonic() - t0) * 1000.0
-        # Built from config, not from defaults, so a HALL_HAND_VIEW_* sweep
-        # measures the settings the app would actually ship with.
-        viewport = HandViewport(
-            scale=HAND_VIEW_SCALE, pad=HAND_VIEW_PAD, min_scale=HAND_VIEW_MIN,
-            lost_frames=HAND_VIEW_LOST, grow=HAND_VIEW_GROW,
-            max_hands=NUM_HANDS, seek_every=HAND_VIEW_SEEK,
-            hold_ms=HAND_VIEW_HOLD_MS) if use_viewport else None
         feeder.flush(img.shape)
         best = []
         for _ in range(repeats):
-            hands = feeder.feed(img, viewport)
+            hands = feeder.feed(img)
             if len(hands) > len(best):
                 best = hands
             if len(best) >= 2:
@@ -188,12 +161,8 @@ def main():
     ap.add_argument("--crop", default=None,
                     help="x0,y0,x1,y1 in the MIRRORED frame — aims the zoom "
                          "at one hand instead of the centre")
-    ap.add_argument("--viewport", action="store_true",
-                    help="run the shipping hand_view layer (scan + lock + "
-                         "remap) instead of full-frame inference")
     ap.add_argument("--repeats", type=int, default=REPEATS,
-                    help="frames offered per still before giving up; the "
-                         "viewport scan needs one per position")
+                    help="frames offered per still before giving up")
     ap.add_argument("--variants", default=None,
                     help="comma-separated specs, overriding the built-in list")
     args = ap.parse_args()
@@ -210,9 +179,8 @@ def main():
 
     box = tuple(int(v) for v in args.crop.split(",")) if args.crop else None
     print("backend HALL_INFERENCE=%s · %d frames from %s · zoom %.2f · crop %s"
-          " · viewport %s"
           % (os.environ.get("HALL_INFERENCE", "mediapipe"), len(frames),
-             args.dir, args.zoom, box, "on" if args.viewport else "off"))
+             args.dir, args.zoom, box))
     detector = build_hand_detector()
     feeder = Feeder(detector)
     try:
@@ -227,7 +195,7 @@ def main():
         for spec in variants:
             pre = Preprocessor(spec)
             rows, ms = score(feeder, frames, pre, args.zoom, box,
-                             args.viewport, args.repeats)
+                             args.repeats)
             hit = sum(1 for _n, c, _s in rows if c > 0)
             hands = sum(c for _n, c, _s in rows)
             detail = "".join(str(c) for _n, c, _s in rows)

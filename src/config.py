@@ -158,6 +158,35 @@ DEBUG_HUD = os.environ.get("HALL_DEBUG", "0") == "1"
 WINDOW_WIDTH = int(os.environ.get("HALL_CAPTURE_W", "1920"))
 WINDOW_HEIGHT = int(os.environ.get("HALL_CAPTURE_H", "1080"))
 
+# Width of the frame the APP works in, when that should be smaller than the
+# frame it captures. `0` (the default) means they are the same image, which is
+# how everything here ran until now.
+#
+# The exhibit monitor is 1440p and the kiosk captured 720p, so the visitor sees
+# a soft picture of themselves. Capture can go up — the MX Brio offers MJPG to
+# 4K — without touching detection at all, because inference cost does not
+# depend on the frame size: both models resize their own input internally (the
+# palm detector to 192x192). What scales with the frame is the JPEG encode
+# here, the JPEG decode in Firefox, and every pixel constant that was tuned at
+# 720p (the wave grid's 8 px/cell, the ripple decay lengths, the presence
+# thumbnail). So the capture is raised for the picture only, and one resize per
+# frame hands the detectors, the presence motion test and the UI's coordinate
+# space (`UIManager`, and therefore the whole `/state` payload) the same
+# HALL_PROC_W-wide frame they always got. Nothing downstream can tell.
+#
+# The height is DERIVED from the true capture aspect instead of configured: the
+# browser sizes its stage from `state.frame` and stretches the video across it,
+# so a proc frame of a different aspect would leave every cursor and button
+# sitting a few percent off the hand pointing at it.
+#
+# This does something in web mode only. Window and stream draw the overlay onto
+# the frame they present, and that overlay is in proc coordinates, so those
+# modes present the downscaled frame and gain nothing from a bigger capture.
+#
+# The cost (a bigger encode, plus one INTER_AREA resize) is CPU on the Orin and
+# has to be measured there, not here — `hallkiosk` carries the deployed pair.
+PROC_WIDTH = int(os.environ.get("HALL_PROC_W", "0"))
+
 
 def _cam_ctrl(name):
     """Read one HALL_CAM_* knob; unset means 'leave the camera alone'."""
@@ -236,46 +265,28 @@ CAMERA_CONTROLS = {
 }
 
 
-# --- What the DETECTOR is shown (see src/hand_view.py, src/preprocess.py) ---
+# --- What the DETECTOR is shown (see src/preprocess.py) ---
 #
-# The exhibit's hand-detection failure was measured, on the real camera's own
-# frames with the real GPU pipeline (`tests/bench_hands.py`), and it is a SIZE
-# problem rather than a light problem: a hand 8.6 % of the frame wide was found
-# in 1 frame of 12, and the identical pixels cropped to 21.5 % of the frame were
-# found in 12 of 12. So the detector is fed a WINDOW of the frame, which is the
-# one lever that changes that ratio without moving the camera, cropping what the
-# visitor sees, or touching brightness.
-HAND_VIEW_ENABLED = os.environ.get("HALL_HAND_VIEW", "1") != "0"
-# Tile size as a fraction of the frame, while scanning for a hand. 0.5 doubles
-# the hand's share of what the model sees, which is the far side of the
-# measured cliff.
-HAND_VIEW_SCALE = float(os.environ.get("HALL_HAND_VIEW_SCALE", "0.5"))
-# How much bigger than the tracked hands the locked window is. Hands MOVE, and
-# the detector's answer is a frame or two old by the time it arrives, so a
-# window fitted to where the hand was is already wrong. Generous on purpose.
-HAND_VIEW_PAD = float(os.environ.get("HALL_HAND_VIEW_PAD", "2.5"))
-# Floor on the locked window, as a fraction of the frame. A window tight around
-# a hand loses it the moment it travels, and the landmark model needs context
-# around the hand to place the wrist.
-HAND_VIEW_MIN = float(os.environ.get("HALL_HAND_VIEW_MIN", "0.35"))
-# Consecutive empty results before the lock is abandoned for a full scan, and
-# how much the search widens on each of them. Widening rather than jumping
-# straight back to scanning: a hand that moved fast is near where it was, and
-# at exhibit distance the full-frame scan position is the one likely to miss it.
-HAND_VIEW_LOST = int(os.environ.get("HALL_HAND_VIEW_LOST", "5"))
-HAND_VIEW_GROW = float(os.environ.get("HALL_HAND_VIEW_GROW", "1.7"))
-# One window per HAND, taking turns. While fewer than NUM_HANDS are tracked,
-# every Nth turn goes to a scan position instead of a tracked window, so a
-# second hand entering is found without dropping the first. 3 leaves a lone
-# hand refreshed on two turns out of three; lower finds the second hand sooner
-# and costs the first one frames.
-HAND_VIEW_SEEK = int(os.environ.get("HALL_HAND_VIEW_SEEK", "3"))
-# How long a hand's last landmarks stay in the published result while its
-# window is not the one being looked at. It has to cover at least one full
-# rotation (two hands = every other frame) or a hand would blink out on the
-# frames belonging to the other one; too long and a hand that has actually
-# left lingers. `gestures` applies its own grace window on top of this.
-HAND_VIEW_HOLD_MS = float(os.environ.get("HALL_HAND_VIEW_HOLD_MS", "400"))
+# The detector gets the whole frame. Two layers that sat between the camera and
+# the model have been tried and removed, and both are worth not rebuilding
+# blind:
+#
+# * `src/auto_exposure.py` (deleted 2026-07-29) drove brightness, which is the
+#   axis measured to make things worse — see CAMERA_CONTROLS above.
+# * `src/hand_view.py` (deleted 2026-07-29) fed the detector a WINDOW of the
+#   frame, one per hand, taking turns. On STILLS it was a large win (a hand
+#   8.6 % of the frame wide was found in 1 frame of 12; the identical pixels at
+#   21.5 % of the frame in 12 of 12), but on the LIVE exhibit the operator
+#   judged the tracking worse than full-frame inference and had it removed. The
+#   stills could not show what the turn-taking costs: a hand's landmarks
+#   refreshed every other frame at best, repeated in between, so what the
+#   scoreboard counted as a detection was a frozen cursor to the visitor.
+#
+# The size finding itself still stands and is still unsolved: the palm detector
+# resizes its input to 192x192, so a hand 110 px wide in a 1280-wide frame
+# arrives about 16 px across. Any new attempt at it must keep every hand's
+# landmarks fresh on EVERY frame, and must be judged on a moving visitor rather
+# than on stills.
 
 # Contrast processing on the frame handed to the model (`preprocess.py`).
 # Default OFF because it was MEASURED not to help: over the same 12 real frames
