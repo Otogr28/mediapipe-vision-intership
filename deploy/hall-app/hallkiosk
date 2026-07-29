@@ -13,7 +13,7 @@
 # Closing the browser (Alt+F4) stops the backend too. A laptop can watch the
 # same session at http://<jetson-tailscale-ip>:8092/ while the kiosk runs.
 #
-# Note: the camera-stream service and this app both want the C920 — run
+# Note: the camera-stream service and this app both want the webcam — run
 # `camctl off` first if the always-on stream is holding the camera.
 set -euo pipefail
 
@@ -44,11 +44,13 @@ if [ ! -f "$APP_DIR/web/dist/index.html" ]; then
   exit 1
 fi
 
-# Wait for the camera to be released by a previous instance: reopening
-# the C920 while the old process still holds it can wedge the V4L2 driver
-# and freeze the new backend (see hall-update.sh's watchdog).
+# Wait for the camera to be released by a previous instance: reopening it
+# while the old process still holds it can wedge the V4L2 driver and freeze
+# the new backend (see hall-update.sh's watchdog). Every /dev/video* node is
+# checked rather than a fixed one — the number is enumeration order, not a
+# property of the camera, and swapping cameras moves it.
 for _ in $(seq 1 20); do
-  fuser /dev/video0 >/dev/null 2>&1 || break
+  fuser /dev/video* >/dev/null 2>&1 || break
   sleep 0.5
 done
 

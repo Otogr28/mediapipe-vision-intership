@@ -2,9 +2,10 @@
 # Launch the HalLMediaPipe interactive app on the Jetson's local display.
 #
 # The app opens a GUI window (camera feed + skeleton overlay + pinch-driven
-# UI) and reads the Logitech C920 on /dev/video0, so a monitor AND the camera
-# must be attached to the Jetson. This is a foreground interactive app, not a
-# service: press 'q' in the window to quit.
+# UI) and reads the USB webcam (a Logitech MX Brio), so a monitor AND the
+# camera must be attached to the Jetson. The /dev/video* node is found at
+# startup rather than fixed, so swapping cameras needs no config change.
+# This is a foreground interactive app, not a service: press 'q' to quit.
 #
 #   hallrun                 # from a terminal on the Jetson desktop
 #   DISPLAY=:0 hallrun      # over SSH, draw on the attached monitor
@@ -13,7 +14,7 @@
 # (wraps this script with HALL_OUTPUT=web and opens Chromium fullscreen), or
 # run `HALL_OUTPUT=web hallrun` and open http://<jetson>:8092/ yourself.
 #
-# Note: the camera-stream service and this app both want the C920 — only one
+# Note: the camera-stream service and this app both want the webcam — only one
 # can hold it at a time. Run `camctl off` before launching if the stream is on.
 set -euo pipefail
 

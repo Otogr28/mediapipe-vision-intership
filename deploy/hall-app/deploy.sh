@@ -12,7 +12,7 @@
 #      reuse those instead of building them from source under uv.
 #
 # Nothing auto-starts. The app is interactive: run `hallrun` (cv2 window) or
-# `hallkiosk` (browser UI fullscreen) ON the Jetson (monitor + C920 attached).
+# `hallkiosk` (browser UI fullscreen) ON the Jetson (monitor + webcam attached).
 #
 # Override the target with:  JETSON_HOST=jetson@<ip> deploy/hall-app/deploy.sh
 set -euo pipefail
@@ -61,7 +61,7 @@ echo "   launchers: \$HOME/.local/bin/hallrun, \$HOME/.local/bin/hallkiosk"
 REMOTE
 
 echo
-echo ">> done. To run the app (on the Jetson, monitor + C920 attached):"
+echo ">> done. To run the app (on the Jetson, monitor + webcam attached):"
 echo "     hallrun                                  # cv2 window (classic mode)"
 echo "     hallkiosk                                # browser UI, fullscreen kiosk"
 echo "   or push it onto the local monitor over SSH:"

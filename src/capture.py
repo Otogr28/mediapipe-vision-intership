@@ -1,3 +1,9 @@
+import fcntl
+import glob
+import os
+import re
+import struct
+import sys
 import threading
 import time
 
@@ -89,3 +95,94 @@ class FreshestFrame:
         self._running = False
         self._thread.join(timeout=1.0)
         self._cap.release()
+
+
+# --- camera selection -------------------------------------------------------
+# A webcam's /dev/video<N> number is not a property of the camera: it comes
+# from enumeration order, and a modern UVC camera claims TWO consecutive nodes
+# — the capture node and a metadata node that opens fine and then delivers
+# nothing. Swapping the exhibit's C920 for an MX Brio left the Brio on
+# /dev/video1+2 with no /dev/video0 at all, so the app's hardcoded index 0
+# failed to open and the kiosk crash-looped. Nobody is standing at the exhibit
+# to edit an env var when that happens (it updates itself from git), so the app
+# asks the kernel which nodes can actually capture instead of trusting a number.
+
+_V4L2_CAP_VIDEO_CAPTURE = 0x00000001
+# VIDIOC_QUERYCAP = _IOR('V', 0, struct v4l2_capability); the struct is 104
+# bytes, of which we want two u32s: capabilities (device-wide) and device_caps
+# (THIS node — what separates a capture node from a metadata one).
+_VIDIOC_QUERYCAP = 0x80685600
+_QUERYCAP_SIZE = 104
+_CAPS_OFFSET = 84
+
+_STREAM_SCHEMES = ("http://", "https://", "rtsp://", "udp://", "tcp://")
+_DEVICE_PATH_RE = re.compile(r"/dev/video(\d+)\Z")
+
+
+def node_captures_video(path):
+    """True if this ``/dev/video*`` node reports a video-capture capability.
+
+    The check is a single ioctl — no streaming is started, so it is safe to
+    run against a node another process is already using.
+    """
+    try:
+        fd = os.open(path, os.O_RDWR | os.O_NONBLOCK)
+    except OSError:
+        return False
+    try:
+        buf = bytearray(_QUERYCAP_SIZE)
+        fcntl.ioctl(fd, _VIDIOC_QUERYCAP, buf, True)
+        caps, device_caps = struct.unpack_from("<II", buf, _CAPS_OFFSET)
+        # device_caps is zero on kernels older than 3.4; fall back to the
+        # device-wide capabilities there (worst case we pick a metadata node
+        # on an ancient kernel, which is not one we ever run on).
+        return bool((device_caps or caps) & _V4L2_CAP_VIDEO_CAPTURE)
+    except (OSError, struct.error):
+        return False
+    finally:
+        os.close(fd)
+
+
+def list_capture_devices():
+    """Indices of every ``/dev/video*`` node that can deliver frames, ascending."""
+    found = []
+    for path in glob.glob("/dev/video*"):
+        match = _DEVICE_PATH_RE.match(path)
+        if match and node_captures_video(path):
+            found.append(int(match.group(1)))
+    return sorted(found)
+
+
+def resolve_camera_source(value):
+    """Turn a HALL_CAMERA value into ``(source, kind)`` for ``VideoCapture``.
+
+    ``kind`` is ``"v4l2"`` for a local webcam (which ``main.py`` opens through
+    the V4L2 backend with an explicit MJPG mode), ``"stream"`` for a network
+    URL, or ``"file"`` for a recorded clip — the last two go to OpenCV's
+    default backend untouched.
+
+    A bare index is CHECKED against the kernel: when ``/dev/video<N>`` is
+    missing or is a metadata-only node, the first real capture node stands in
+    and the substitution is printed. An explicit ``/dev/videoN`` path is
+    honoured as given, so a machine with two cameras can still pin one.
+    """
+    text = str(value)
+    if text.startswith(_STREAM_SCHEMES):
+        return text, "stream"
+    if _DEVICE_PATH_RE.match(text):
+        return text, "v4l2"
+    if not text.isdigit():
+        return text, "file"
+
+    index = int(text)
+    if sys.platform != "linux":
+        return index, "v4l2"
+    if node_captures_video("/dev/video%d" % index):
+        return index, "v4l2"
+    available = list_capture_devices()
+    if not available:
+        print("No V4L2 capture device found — is the camera plugged in?")
+        return index, "v4l2"
+    print("Camera %d is not a capture device; using /dev/video%d instead"
+          % (index, available[0]))
+    return available[0], "v4l2"

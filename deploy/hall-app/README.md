@@ -10,7 +10,9 @@ headless MJPEG feed for watching the camera from the laptop.
 ## Requirements on the Jetson
 
 - A **monitor** attached (the app opens a GUI window — it is not a stream).
-- The **Logitech C920** on `/dev/video0`.
+- A **USB webcam** attached (currently a Logitech MX Brio). The app finds the
+  `/dev/video*` node itself at startup, so a camera swap needs no config change
+  — pin one explicitly with `HALL_CAMERA=/dev/videoN` only if two are plugged in.
 - System Python 3.10 with `mediapipe` + `opencv` (ship on the Yahboom image);
   `moderngl` is installed by the deploy into the user site.
 
@@ -43,14 +45,14 @@ Note the updater will overwrite rsync'd code on the next push to `main`.
 
 The app is a foreground interactive program (press `q` to quit), **not** a
 service — it does not auto-start, and the camera is only on while it runs (the
-C920's hardware LED makes that obvious).
+webcam's hardware LED makes that obvious).
 
 ```bash
 hallrun                                   # from a terminal on the Jetson desktop
 ssh jetson@100.91.206.114 'DISPLAY=:0 ~/.local/bin/hallrun'   # over SSH, onto the monitor
 ```
 
-> The C920 can't be held by two things at once. If the camera-stream is on,
+> The webcam can't be held by two things at once. If the camera-stream is on,
 > run `camctl off` first (see `../camera-stream/`).
 
 ## Remote inference (laptop camera → Jetson → laptop browser)

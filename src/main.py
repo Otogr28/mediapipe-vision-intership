@@ -4,7 +4,7 @@ import traceback
 import cv2
 from mediapipe.tasks.python import vision
 
-from capture import FreshestFrame
+from capture import FreshestFrame, resolve_camera_source
 from config import (CAMERA_STALL_S, POSE_ENABLED, POSE_SMOOTHING,
                     SELECTED_CAMERA, STATE_FPS, WINDOW_HEIGHT, WINDOW_WIDTH)
 from detection import detectors
@@ -17,12 +17,6 @@ from web.state import build_state
 
 start_time = time.monotonic()
 last_timestamp_ms = -1
-
-
-def _camera_source(value):
-    """Resolve the configured camera source: a device index ('0' -> 0) or a
-    stream URL / device path, which is passed to OpenCV unchanged."""
-    return int(value) if str(value).isdigit() else value
 
 
 def main():
@@ -45,15 +39,19 @@ def main():
     pose_detector = build_pose_detector() if POSE_ENABLED else None
     hand_detector = build_hand_detector()
 
-    source = _camera_source(SELECTED_CAMERA)
-    if isinstance(source, int):
+    # The index is resolved against the kernel rather than taken on trust: a
+    # camera swap renumbers /dev/video*, and a UVC camera's second node is
+    # metadata that opens without ever yielding a frame (see capture.py).
+    source, kind = resolve_camera_source(SELECTED_CAMERA)
+    if kind == "v4l2":
         # A local webcam: force the V4L2 backend. OpenCV's default backend on
         # the Jetson is GStreamer, which IGNORES the FOURCC/FPS requests and
-        # opens the C920 in a raw full-resolution mode that delivers only ~2
+        # opens the camera in a raw full-resolution mode that delivers only ~2
         # fps (a ~500 ms blocking read) — that, not inference, was the app's
         # real bottleneck. V4L2 + MJPG honours the requests and gives 30 fps.
-        # MJPG must be requested before the resolution: the C920 only offers
-        # 1920x1080 in MJPG; its raw YUYV modes top out at 640x480.
+        # MJPG must be requested before the resolution: the C920 only offered
+        # 1920x1080 in MJPG (its raw YUYV modes topped out at 640x480), and
+        # MJPG is what keeps the USB bandwidth sane on the MX Brio too.
         camera = cv2.VideoCapture(source, cv2.CAP_V4L2)
         camera.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
         camera.set(cv2.CAP_PROP_FRAME_WIDTH, WINDOW_WIDTH)
@@ -90,8 +88,7 @@ def main():
     # A local video FILE (not a device index, not a network stream URL) is a
     # testing source: loop it and pace it to its native fps so the app can be
     # driven from a recorded clip. Webcam/stream sources read flat out as before.
-    _is_file = isinstance(source, str) and not source.startswith(
-        ("http://", "https://", "rtsp://", "udp://", "tcp://"))
+    _is_file = kind == "file"
     _file_fps = camera.get(cv2.CAP_PROP_FPS) if _is_file else 0.0
     camera = FreshestFrame(camera, loop=_is_file,
                            fps=_file_fps if _file_fps and _file_fps > 1 else 0.0)
