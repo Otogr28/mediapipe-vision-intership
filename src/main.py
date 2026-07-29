@@ -4,8 +4,11 @@ import traceback
 import cv2
 from mediapipe.tasks.python import vision
 
-from capture import FreshestFrame, resolve_camera_source
-from config import (CAMERA_STALL_S, POSE_ENABLED, POSE_SMOOTHING,
+from auto_exposure import SubjectExposure
+from capture import (FreshestFrame, apply_camera_controls, device_path,
+                     resolve_camera_source, restore_auto_exposure)
+from config import (CAMERA_AE, CAMERA_AE_ENABLED, CAMERA_CONTROLS,
+                    CAMERA_STALL_S, DEBUG_HUD, POSE_ENABLED, POSE_SMOOTHING,
                     SELECTED_CAMERA, STATE_FPS, WINDOW_HEIGHT, WINDOW_WIDTH)
 from detection import detectors
 from detection.detectors import build_hand_detector, build_pose_detector
@@ -70,6 +73,31 @@ def main():
     if not camera.isOpened():
         print(f"Cant access to camera {source!r}")
         return
+
+    if kind == "v4l2":
+        # Exposure/gain/crop, applied only where HALL_CAM_* asked for it. This
+        # runs AFTER the open because setting the capture format resets some
+        # UVC controls, and it runs HERE rather than from a shell script
+        # because the kiosk restarts itself and a camera re-enumeration would
+        # otherwise silently drop back to the backlit picture.
+        apply_camera_controls(device_path(source), CAMERA_CONTROLS)
+
+    # Software exposure metering (HALL_CAM_AE=1): the camera's own automatic
+    # exposure meters the whole frame, which at this exhibit means it meters a
+    # wall of windows and renders the visitor as a silhouette. Only for a local
+    # camera — there is nothing to drive on a remote stream or a video file.
+    auto_exposure = None
+    if CAMERA_AE_ENABLED and kind == "v4l2":
+        auto_exposure = SubjectExposure(device_path(source), CAMERA_AE)
+        if not auto_exposure.ok:
+            auto_exposure = None
+    elif kind == "v4l2" and CAMERA_CONTROLS.get("auto_exposure") is None:
+        # Not metering this run, and nobody asked for a manual exposure: give
+        # the camera its own automatic mode back. A previous run WITH the
+        # software loop left it pinned in Manual, and that setting outlives the
+        # process — so skipping this is how a restart inherits a frozen
+        # exposure and stops responding to the room entirely.
+        restore_auto_exposure(device_path(source))
 
     # Read one frame to learn the true frame size — a network source reports 0
     # from CAP_PROP_* until the first frame is decoded — then size the UI to it.
@@ -208,6 +236,17 @@ def main():
                 # top of it.
                 ui.update(hand_result, pose_landmarks, hand_received_t,
                           frame=flip_frame)
+
+                # Meter the exposure on the visitor. AFTER ui.update, because
+                # it reuses the motion blob presence just computed as the ROI
+                # of last resort, and BEFORE any drawing, because it must
+                # measure the camera image rather than the skeleton painted
+                # over it. Rate-limited internally (see auto_exposure.py).
+                if auto_exposure is not None:
+                    auto_exposure.update(flip_frame, hand_result,
+                                         ui.presence_blob_rect())
+                    if DEBUG_HUD:
+                        auto_exposure.report()
 
                 # Web mode streams the RAW frame — the browser draws the
                 # skeleton and all UI from the published state instead.

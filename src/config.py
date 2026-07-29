@@ -158,6 +158,145 @@ DEBUG_HUD = os.environ.get("HALL_DEBUG", "0") == "1"
 WINDOW_WIDTH = int(os.environ.get("HALL_CAPTURE_W", "1920"))
 WINDOW_HEIGHT = int(os.environ.get("HALL_CAPTURE_H", "1080"))
 
+
+def _cam_ctrl(name):
+    """Read one HALL_CAM_* knob; unset means 'leave the camera alone'."""
+    raw = os.environ.get("HALL_CAM_" + name.upper(), "").strip()
+    return int(raw) if raw else None
+
+
+# Camera image controls, applied by `capture.apply_camera_controls()` AFTER the
+# device is open. Every one is unset by default, so a camera nobody configured
+# keeps its own factory behaviour.
+#
+# These exist for ONE reason: the exhibit camera looks into a wall of windows
+# and cannot be moved, so the visitor stands in front of the brightest thing in
+# the room. Automatic exposure meters that daylight and renders the person as a
+# silhouette, which is what the hand-landmark model cannot read. There is no
+# HDR control to reach for — Logitech's RightLight lives in their desktop
+# software, and over UVC on Linux the MX Brio exposes only what is below.
+#
+# **The digital crop (`zoom`/`pan`/`tilt`) is ruled out by the operator**, and
+# the ruling is a design decision rather than a preference to re-litigate: the
+# visitor sees this camera feed behind every scene, so a cropped, tighter frame
+# changes what the exhibit LOOKS like. Do not propose zooming as the backlight
+# fix again. The knobs stay exposed below because they are part of the camera,
+# not because they are the answer here.
+#
+# So the whole job falls to metering for the person and letting the windows
+# blow out, which is what a video call in front of a window already looks like:
+#
+#   1. `backlight` (compensation, already 1 by default on the Brio) biases the
+#      camera's own metering toward the middle. It is coarse; a wall of windows
+#      is several stops brighter than an indoor face, which is more than a
+#      center-weighted mode is built to swallow.
+#   2. `auto_exposure` = 1 switches to Manual, and then `exposure` (3-2047, in
+#      units of 100 us) plus `gain` (0-255) pin the picture to indoor light.
+#      Raise `exposure` before `gain` — gain is noise — but keep it under ~250
+#      (25 ms), because a longer shutter smears a MOVING hand and hand tracking
+#      is the whole application. Leave `dynamic_fps` at 0 so the camera cannot
+#      buy brightness by dropping to 15 fps.
+#
+# The open risk with 2 is that a fixed exposure does not track the daylight, so
+# a value chosen at noon is wrong at dusk. If that drift turns out to matter
+# on-site, the fix is a small software metering loop in the app: sample the
+# middle of the frame every second or so and nudge `exposure`/`gain` to hold it
+# in range. That is the auto-exposure the camera will not give us, metered on
+# the visitor instead of on the windows, and it costs a mean over a thumbnail.
+# It is deliberately NOT built yet — whether the drift matters is a measurement
+# nobody has taken, and building it first would be guessing.
+#
+# Tune on-device with `deploy/hall-app/camtune.sh`, which sweeps one control
+# through a range against the live camera and pulls back one frame per value.
+CAMERA_CONTROLS = {
+    "power_line": _cam_ctrl("power_line"),   # 1 = 50 Hz, 2 = 60 Hz
+    "backlight": _cam_ctrl("backlight"),     # 0/1 backlight compensation
+    "brightness": _cam_ctrl("brightness"),   # 0-255
+    "contrast": _cam_ctrl("contrast"),       # 0-255
+    "saturation": _cam_ctrl("saturation"),   # 0-255
+    "sharpness": _cam_ctrl("sharpness"),     # 0-255
+    "gain": _cam_ctrl("gain"),               # 0-255
+    "auto_exposure": _cam_ctrl("auto_exposure"),  # 1 = manual, 3 = auto
+    "exposure": _cam_ctrl("exposure"),       # 3-2047, needs auto_exposure=1
+    "dynamic_fps": _cam_ctrl("dynamic_fps"),  # 0 keeps 30 fps in dim light
+    "auto_wb": _cam_ctrl("auto_wb"),         # 0/1
+    "wb": _cam_ctrl("wb"),                   # 2800-7500 K, needs auto_wb=0
+    "autofocus": _cam_ctrl("autofocus"),     # 0/1
+    "focus": _cam_ctrl("focus"),             # 0-255, needs autofocus=0
+    "zoom": _cam_ctrl("zoom"),               # 100-400 (digital crop)
+    "pan": _cam_ctrl("pan"),                 # +/-72000, step 3600
+    "tilt": _cam_ctrl("tilt"),               # +/-72000, step 3600
+}
+
+
+class _AutoExposureConfig:
+    """Software exposure metering (`HALL_CAM_AE=1`, see `auto_exposure.py`).
+
+    Off by default. The exhibit turns it on in `hallkiosk` because that is
+    where the backlit window wall is; leaving it off elsewhere means a laptop
+    webcam is never quietly switched out of its own automatic exposure.
+
+    The defaults are reasoned, not measured against the hall — every one is
+    overridable so a tuning pass needs no code change:
+
+    * ``target`` 120 of 255 is a mid-grey a person reads well at; skin under
+      indoor light lands near it, and it leaves headroom before clipping.
+    * ``tolerance`` 12 is the dead zone. Without one the loop chases sensor
+      noise forever and the picture visibly breathes.
+    * ``exposure_max`` 250 is a 25 ms shutter. Exposure is the low-noise way
+      to buy light, but past roughly this a MOVING hand smears, and hand
+      tracking is the whole application, so the rest is bought with gain.
+    * ``step`` 0.35 and ``gain_step`` 16 cap one tick's correction, so a
+      visitor walking in front of a window ramps instead of strobing.
+    * ``settle_s`` 0.4 covers the few frames a UVC camera takes to act on a
+      new exposure. Measuring inside that window reads the OLD picture and
+      doubles down, which is the classic way these loops oscillate.
+    """
+
+    def __init__(self):
+        self.target = float(os.environ.get("HALL_CAM_AE_TARGET", "120"))
+        self.tolerance = float(os.environ.get("HALL_CAM_AE_TOLERANCE", "12"))
+        self.interval_s = float(os.environ.get("HALL_CAM_AE_INTERVAL_S", "0.5"))
+        self.settle_s = float(os.environ.get("HALL_CAM_AE_SETTLE_S", "0.4"))
+        self.exposure_min = int(os.environ.get("HALL_CAM_AE_EXPOSURE_MIN", "20"))
+        self.exposure_max = int(os.environ.get("HALL_CAM_AE_EXPOSURE_MAX", "250"))
+        self.gain_max = int(os.environ.get("HALL_CAM_AE_GAIN_MAX", "200"))
+        self.gain_step = int(os.environ.get("HALL_CAM_AE_GAIN_STEP", "16"))
+        self.step = float(os.environ.get("HALL_CAM_AE_STEP", "0.35"))
+        # How much bigger than the detected hands/blob the metered box is.
+        # Padding buys context around a small target, and costs background:
+        # every pixel of window pulled into the box is a pixel arguing the
+        # scene is bright. Kept just over 1 for that reason.
+        self.roi_pad = float(os.environ.get("HALL_CAM_AE_ROI_PAD", "1.15"))
+        # WHICH pixel of the box counts as "the subject". The region around a
+        # backlit visitor is bimodal — dark person, blown window — so the mean
+        # sits between the two and reads as correctly exposed while the person
+        # is still a silhouette. Not a hypothetical: metering the mean settled
+        # the exhibit at exposure 117 with the visitor unreadable.
+        #
+        # The percentile has to sit BELOW the smallest fraction of the box the
+        # subject reliably fills, or the reading falls through into the window
+        # whenever the box frames loosely. Measured against a box wobbling
+        # between 30 % and 70 % subject (`tests/smoke_exposure.py`), with the
+        # target at 120: percentile 40 left the subject at 56-65, percentile 30
+        # at 75-84, and percentile 25 landed it at 131 and held it there.
+        self.meter_percentile = float(
+            os.environ.get("HALL_CAM_AE_PERCENTILE", "25"))
+        # EMA on the measurement, damping the fact that the metered REGION
+        # jitters frame to frame (the motion box redraws, hands wander over
+        # bright and dark background), so the reading moves even in steady
+        # light. A dead zone cannot absorb that, because it is the INPUT that
+        # is jumping. Honest scope: the gain sweeping 16 -> 144 -> 16 on the
+        # exhibit is explained by the mean-metering bug above, and the smoke
+        # test's wobbling ROI passes with the percentile fix and no smoothing
+        # at all. This is kept as cheap insurance against real sensor noise,
+        # which is messier than any synthetic scene, not as a proven fix.
+        self.smooth = float(os.environ.get("HALL_CAM_AE_SMOOTH", "0.35"))
+
+
+CAMERA_AE_ENABLED = os.environ.get("HALL_CAM_AE", "0") == "1"
+CAMERA_AE = _AutoExposureConfig()
+
 NUM_POSES = 1
 MIN_POSE_DETECTION_CONFIDENCE = 0.5
 MIN_POSE_PRESENCE_CONFIDENCE = 0.5

@@ -186,3 +186,121 @@ def resolve_camera_source(value):
     print("Camera %d is not a capture device; using /dev/video%d instead"
           % (index, available[0]))
     return available[0], "v4l2"
+
+
+def device_path(source):
+    """The ``/dev/video*`` path for a resolved v4l2 source (index or path)."""
+    return source if isinstance(source, str) else "/dev/video%d" % source
+
+
+# --- camera image controls --------------------------------------------------
+# The exhibit camera faces a wall of windows and the visitor stands between the
+# two, so the camera's automatic exposure meters mostly daylight and hands the
+# hand-landmark model a silhouette. The camera cannot be moved, so the picture
+# has to be fixed at the camera: meter for the person (manual exposure / gain),
+# and crop the windows out of frame with the digital zoom+pan+tilt of the 4K
+# sensor, which also makes the hands bigger for the detector.
+#
+# These are applied by the APP, after the device is open, because they must
+# survive every restart the kiosk does on its own — a `v4l2-ctl` run by hand
+# is gone the moment the camera is re-enumerated. Setting them through a second
+# fd (rather than OpenCV's CAP_PROP_*) keeps the values exactly the numbers
+# `v4l2-ctl --list-ctrls` prints, with none of OpenCV's per-backend rescaling.
+
+# _IOWR('V', 27/28, struct v4l2_control) — the struct is {u32 id; s32 value;}.
+_VIDIOC_G_CTRL = 0xC008561B
+_VIDIOC_S_CTRL = 0xC008561C
+
+# (config key, V4L2 control id, human name). ORDER IS LOAD-BEARING: a mode
+# switch has to land before the value it unlocks, because the absolute controls
+# read `flags=inactive` while their automatic counterpart owns them.
+CAMERA_CONTROLS = (
+    ("power_line", 0x00980918, "power_line_frequency"),
+    ("backlight", 0x0098091C, "backlight_compensation"),
+    ("brightness", 0x00980900, "brightness"),
+    ("contrast", 0x00980901, "contrast"),
+    ("saturation", 0x00980902, "saturation"),
+    ("sharpness", 0x0098091B, "sharpness"),
+    ("gain", 0x00980913, "gain"),
+    ("auto_exposure", 0x009A0901, "auto_exposure"),
+    ("exposure", 0x009A0902, "exposure_time_absolute"),
+    ("dynamic_fps", 0x009A0903, "exposure_dynamic_framerate"),
+    ("auto_wb", 0x0098090C, "white_balance_automatic"),
+    ("wb", 0x0098091A, "white_balance_temperature"),
+    ("autofocus", 0x009A090C, "focus_automatic_continuous"),
+    ("focus", 0x009A090A, "focus_absolute"),
+    ("zoom", 0x009A090D, "zoom_absolute"),
+    ("pan", 0x009A0908, "pan_absolute"),
+    ("tilt", 0x009A0909, "tilt_absolute"),
+)
+
+
+def _ctrl(path, request, cid, value=0):
+    """One VIDIOC_[GS]_CTRL round trip; returns the value or None on failure."""
+    try:
+        fd = os.open(path, os.O_RDWR | os.O_NONBLOCK)
+    except OSError:
+        return None
+    try:
+        buf = bytearray(struct.pack("<Ii", cid, value))
+        fcntl.ioctl(fd, request, buf, True)
+        return struct.unpack("<Ii", bytes(buf))[1]
+    except (OSError, struct.error):
+        return None
+    finally:
+        os.close(fd)
+
+
+def get_control(path, cid):
+    """Read one V4L2 control, or None if the camera does not expose it."""
+    return _ctrl(path, _VIDIOC_G_CTRL, cid)
+
+
+def set_control(path, cid, value):
+    """Write one V4L2 control. Returns the value the camera reports back."""
+    if _ctrl(path, _VIDIOC_S_CTRL, cid, int(value)) is None:
+        return None
+    return get_control(path, cid)
+
+
+def restore_auto_exposure(path):
+    """Hand the camera back its own automatic exposure.
+
+    A UVC control outlives the process that wrote it. `auto_exposure.py` pins
+    the camera in Manual while it is metering, so without this any later run
+    WITHOUT the software loop — a kiosk restart, a crash, a backend started by
+    hand — would inherit whatever exposure was frozen in and never adapt to
+    anything again. The exhibit restarts itself, so that is not a corner case.
+
+    Tries Aperture Priority (3, what these cameras default to) and falls back
+    to full Auto (0) for a camera that only publishes that one.
+    """
+    for mode in (3, 0):
+        if set_control(path, 0x009A0901, mode) == mode:
+            return mode
+    return None
+
+
+def apply_camera_controls(path, settings):
+    """Apply the configured image controls to an open camera.
+
+    ``settings`` maps the keys of ``CAMERA_CONTROLS`` to integers; a key that
+    is absent or None leaves that control at whatever the camera already has,
+    so an unconfigured exhibit behaves exactly as it did before. Every control
+    is read back and any camera that clamps or refuses a value says so on
+    stdout — silence here would mean tuning against numbers the camera never
+    accepted.
+    """
+    if not settings:
+        return
+    for key, cid, name in CAMERA_CONTROLS:
+        want = settings.get(key)
+        if want is None:
+            continue
+        got = set_control(path, cid, want)
+        if got is None:
+            print("camera: %s not supported by this camera" % name)
+        elif got != int(want):
+            print("camera: %s set to %d (asked for %d)" % (name, got, want))
+        else:
+            print("camera: %s = %d" % (name, got))
