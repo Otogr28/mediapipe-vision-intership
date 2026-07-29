@@ -33,6 +33,12 @@ import control
 from config import (OUTPUT_MODE, STATE_FPS, STREAM_BIND, STREAM_PORT,
                     STREAM_QUALITY, WEB_DIST_DIR)
 
+# How long one MJPEG part may take to reach a client before that client is
+# given up on (seconds). Not a knob: a healthy reader on loopback never blocks
+# for a fraction of this, and the only thing it protects against is a wedged
+# client parking a handler thread and its socket forever.
+_STREAM_SEND_TIMEOUT_S = 5.0
+
 
 class WindowSink:
     """Presents frames in a resizable on-screen window."""
@@ -185,10 +191,16 @@ class MjpegSink:
                 self.wfile.write(body)
 
             def do_GET(self):
-                if self.path == "/":
+                # Dispatch on the path WITHOUT its query string. The frontend
+                # reopens a wedged MJPEG connection with a cache-busting
+                # `?r=N` (web/src/state/useVideoStream.ts), and an exact match
+                # would answer that retry with a 404 — i.e. the recovery would
+                # fail against the route it exists to recover.
+                path = self.path.split("?", 1)[0]
+                if path == "/":
                     self._send(200, "text/html; charset=utf-8", _PAGE)
 
-                elif self.path in ("/stream.mjpg", "/stream"):
+                elif path in ("/stream.mjpg", "/stream"):
                     self.send_response(200)
                     self.send_header(
                         "Content-Type", "multipart/x-mixed-replace; boundary=frame"
@@ -196,6 +208,12 @@ class MjpegSink:
                     self.send_header("Cache-Control", "no-cache, private")
                     self.send_header("Access-Control-Allow-Origin", "*")
                     self.end_headers()
+                    # A client that stops READING (a wedged browser, a peer
+                    # whose WiFi dropped) leaves this write blocked forever,
+                    # holding the thread and its socket — one per reconnect the
+                    # frontend's watchdog makes. Time the send out instead and
+                    # let the connection go; the browser opens a new one.
+                    self.connection.settimeout(_STREAM_SEND_TIMEOUT_S)
                     try:
                         last_seq = 0
                         while True:
@@ -208,22 +226,23 @@ class MjpegSink:
                                 b"Content-Length: " + str(len(jpg)).encode()
                                 + b"\r\n\r\n" + jpg + b"\r\n"
                             )
-                    except (BrokenPipeError, ConnectionResetError):
+                    except (BrokenPipeError, ConnectionResetError,
+                            TimeoutError):
                         pass
 
-                elif self.path == "/snapshot.jpg":
+                elif path == "/snapshot.jpg":
                     jpg = sink._latest()
                     if jpg is None:
                         self.send_error(503, "no frame yet")
                         return
                     self._send(200, "image/jpeg", jpg)
 
-                elif self.path == "/healthz":
+                elif path == "/healthz":
                     jpg = sink._latest()
                     body = b"ok\n" if jpg is not None else b"no-frame\n"
                     self._send(200 if jpg is not None else 503, "text/plain", body)
 
-                elif self.path.split("?", 1)[0] == "/control/idle":
+                elif path == "/control/idle":
                     self._control_status()
 
                 else:

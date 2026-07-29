@@ -109,16 +109,16 @@ def _bg_photo():
 def test_card():
     """Synthetic background: gradient + grid + circles — enough structure
     to judge overlays and (crucially) the black-hole lensing distortion.
-    HALL_MOCK_BG swaps it for a real photo (see _bg_photo)."""
+    HALL_MOCK_BG swaps it for a real photo (see _bg_photo).
+
+    Returns the BGR raster; ``stream_frames()`` encodes it."""
     photo = _bg_photo()
     if photo is not None:
         frame = photo
         if os.environ.get("HALL_MOCK_LABEL", "1") == "1":
             cv2.putText(frame, "MOCK", (W // 2 - 90, H - 40),
                         cv2.FONT_HERSHEY_SIMPLEX, 1.6, (230, 230, 230), 3)
-        ok, jpg = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 88])
-        assert ok
-        return jpg.tobytes()
+        return frame
     yy, xx = np.mgrid[0:H, 0:W].astype(np.float32)
     frame = np.zeros((H, W, 3), np.uint8)
     frame[..., 0] = (40 + 60 * xx / W).astype(np.uint8)   # B
@@ -138,12 +138,36 @@ def test_card():
     if os.environ.get("HALL_MOCK_LABEL", "1") == "1":
         cv2.putText(frame, "MOCK", (W // 2 - 90, H - 40),
                     cv2.FONT_HERSHEY_SIMPLEX, 1.6, (230, 230, 230), 3)
-    ok, jpg = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 85])
-    assert ok
-    return jpg.tobytes()
+    return frame
 
 
-JPG = test_card()
+def stream_frames(card, count=16):
+    """The card encoded ``count`` times, each with a marker dot one step
+    further along the bottom edge.
+
+    The picture has to MOVE. The frontend's stream watchdog
+    (`web/src/state/useVideoStream.ts`) samples the camera layer and reopens
+    the connection when it stops changing, so a mock serving one
+    byte-identical frame forever would look exactly like the wedged
+    connection the watchdog exists to detect — and every headless check would
+    report a reconnect the real backend would never cause. Encoded up front
+    (a few ms) rather than per request, since this is a dev harness.
+
+    The dot sits in the last few rows so a still used for docs/ is unaffected.
+    """
+    frames = []
+    for i in range(count):
+        frame = card.copy()
+        cv2.circle(frame, (int((i + 0.5) * W / count), H - 6), 3,
+                   (230, 230, 230), -1)
+        ok, jpg = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 85])
+        assert ok
+        frames.append(jpg.tobytes())
+    return frames
+
+
+CARD = test_card()
+STREAM_JPGS = stream_frames(CARD)
 
 
 def btn(bid, label, x, y, w, h, hovered=False, pressed=False):
@@ -890,21 +914,27 @@ class Handler(BaseHTTPRequestHandler):
         pass
 
     def do_GET(self):
-        if self.path in ("/stream.mjpg", "/stream"):
+        # Query stripped before dispatch, like the real backend (output.py):
+        # the frontend reopens a wedged stream with a cache-busting `?r=N`.
+        path = self.path.split("?", 1)[0]
+        if path in ("/stream.mjpg", "/stream"):
             self.send_response(200)
             self.send_header("Content-Type",
                              "multipart/x-mixed-replace; boundary=frame")
             self.end_headers()
             try:
+                i = 0
                 while True:
+                    jpg = STREAM_JPGS[i % len(STREAM_JPGS)]
+                    i += 1
                     self.wfile.write(
                         b"--frame\r\nContent-Type: image/jpeg\r\n"
-                        b"Content-Length: " + str(len(JPG)).encode()
-                        + b"\r\n\r\n" + JPG + b"\r\n")
+                        b"Content-Length: " + str(len(jpg)).encode()
+                        + b"\r\n\r\n" + jpg + b"\r\n")
                     time.sleep(1 / 15)
             except (BrokenPipeError, ConnectionResetError):
                 pass
-        elif self.path == "/state":
+        elif path == "/state":
             self.send_response(200)
             self.send_header("Content-Type", "text/event-stream")
             # match the real backend (output.py): allow cross-origin reads so
@@ -938,9 +968,9 @@ class Handler(BaseHTTPRequestHandler):
                     time.sleep(1 / 30)
             except (BrokenPipeError, ConnectionResetError):
                 pass
-        elif self.path.startswith("/attract/"):
+        elif path.startswith("/attract/"):
             full = os.path.join(ATTRACT_DIR,
-                                os.path.basename(unquote(self.path)))
+                                os.path.basename(unquote(path)))
             if not os.path.isfile(full):
                 self.send_error(404)
                 return
@@ -951,7 +981,7 @@ class Handler(BaseHTTPRequestHandler):
             self.send_header("Content-Length", str(len(body)))
             self.end_headers()
             self.wfile.write(body)
-        elif self.path == "/healthz":
+        elif path == "/healthz":
             body = b"ok\n"
             self.send_response(200)
             self.send_header("Content-Type", "text/plain")

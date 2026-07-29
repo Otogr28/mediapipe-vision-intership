@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect, useRef, useState } from "react";
+import { lazy, Suspense, useEffect, useState } from "react";
 import { LensedVideo } from "./gl/LensedVideo";
 import { WavesLayer } from "./gl/WavesLayer";
 import { ChargesLayer } from "./gl/ChargesLayer";
@@ -23,6 +23,7 @@ import type {
   SlingshotObject,
 } from "./state/types";
 import { useAppState } from "./state/useAppState";
+import { useVideoStream } from "./state/useVideoStream";
 
 // Lazy so three.js + three-vrm (the biggest dependency) only download when
 // the user actually opens Vtuber — the black-hole / orbitals paths stay light.
@@ -42,7 +43,6 @@ const VrmAvatar = lazy(() =>
  */
 export function App() {
   const { state, connected, pairRef } = useAppState();
-  const videoRef = useRef<HTMLImageElement>(null);
 
   // ?nointro=1 skips the splash (dev/screenshot convenience).
   const [introDone, setIntroDone] = useState(() =>
@@ -89,6 +89,10 @@ export function App() {
   const greeting = phase === "greeting" ? state?.session.greeting : null;
   const demoGesture = state?.session.demo_gesture;
 
+  // An <img> never reopens a MJPEG connection that died or froze, so this
+  // watches the picture and remounts the element when it stops moving.
+  const video = useVideoStream(phase !== "attract", pairRef);
+
   // The page-load splash is redundant once attract mode is running: the
   // greeting says the same thing per VISITOR instead of per page load, and
   // on a kiosk a page load happens at boot with nobody in the room. Retire
@@ -132,14 +136,25 @@ export function App() {
             closes the MJPEG connection, so the browser stops decoding 30
             frames a second of an empty room behind an opaque slideshow —
             which is what the Orin would otherwise spend most of its day
-            doing. It reconnects when the greeting brings the video back. */}
+            doing. It reconnects when the greeting brings the video back.
+
+            `key` comes from the watchdog: bumping it is what closes a wedged
+            connection, and the matching `?r=N` on the src keeps the retry from
+            being answered out of cache. */}
         {phase !== "attract" && (
-          <img ref={videoRef} className="layer" src="/stream.mjpg" alt="" />
+          <img
+            key={video.key}
+            ref={video.ref}
+            className="layer"
+            src={video.src}
+            alt=""
+            onError={video.onError}
+          />
         )}
         {hasBlackHole && (
           <LensedVideo
             pairRef={pairRef}
-            videoRef={videoRef}
+            videoRef={video.ref}
             frameW={frameW}
             frameH={frameH}
           />
