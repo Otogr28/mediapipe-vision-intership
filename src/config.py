@@ -633,7 +633,7 @@ ATTRACT_FADE_S = 1.2
 #
 # The gallery is deliberately not in git: it holds photographs of people, and
 # this repository is public. That also means a fresh checkout has none, so
-# ATTRACT_DIR (the eight experiment stills the exhibit website already uses)
+# ATTRACT_DIR (the experiment stills the exhibit website already uses)
 # is the fallback whenever the gallery is missing or empty — a laptop running
 # the app still gets a slideshow instead of a black screen.
 ATTRACT_GALLERY_DIR = os.path.expanduser(
@@ -648,7 +648,7 @@ ATTRACT_RESCAN_S = 60.0
 
 # Above this many slides the position dots become a smear, so the renderers
 # switch to a plain "12 / 82" counter. A gallery folder crosses this the
-# moment somebody empties a phone into it; the eight experiment stills do not.
+# moment somebody empties a phone into it; the experiment stills do not.
 # Keep in sync with MAX_DOTS in web/src/hud/Attract.tsx (the browser renderer).
 ATTRACT_MAX_DOTS = 12
 
