@@ -8,6 +8,21 @@
 // guessing a frame rate.
 //
 // Usage: node scripts/rec.mjs <url> <outDir> [recordMs] [warmupMs] [w] [h]
+//
+// The docs-site demo clips (docs/img/<scene>.mp4) were made from this, one mock
+// scene at a time, with the poster still taken from the clip's own first frame:
+//
+//   HALL_MOCK_BG=carina.jpg HALL_MOCK_LABEL=0 \
+//     uv run python web/scripts/mock_backend.py waves      # then, in web/:
+//   node scripts/rec.mjs http://localhost:5173/ /tmp/rec_waves 7000 7000
+//   cd /tmp/rec_waves && ffmpeg -f concat -safe 0 -i list.txt \
+//     -vf "fps=12,scale=800:450:flags=lanczos,setsar=1" -c:v libx264 -crf 30 \
+//     -preset slow -pix_fmt yuv420p -movflags +faststart -an waves.mp4
+//   ffmpeg -i f00000.jpg -qscale:v 4 waves.jpg
+//
+// setsar=1 is load-bearing: Chrome's screencast JPEGs carry a JFIF pixel
+// density that makes ffmpeg stamp a 300:271 aspect on the stream, and the
+// browser then renders the clip 886x450 inside its 16:9 box.
 import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 

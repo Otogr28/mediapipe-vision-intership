@@ -46,7 +46,7 @@ a { color: var(--cyan-dim); text-underline-offset: 3px; }
 a:hover { color: var(--white); }
 :focus-visible { outline: 2px solid var(--cyan); outline-offset: 3px; border-radius: 2px; }
 
-img { max-width: 100%; height: auto; display: block; }
+img, video { max-width: 100%; height: auto; display: block; }
 
 /* ---- masthead ---------------------------------------------------------- */
 
@@ -139,7 +139,7 @@ p strong, li strong { color: var(--white); font-weight: 600; }
 .howto small { color: var(--mist); font-size: .92rem; line-height: 1.5; display: block; }
 
 .hero-shot { border: 1px solid var(--line); border-radius: 12px; overflow: hidden; margin: 2rem 0 0; }
-.hero-shot img { width: 100%; }
+.hero-shot img, .hero-shot video { width: 100%; }
 .shot-cap {
   font-family: var(--mono); font-size: clamp(.62rem, .58rem + .25vw, .72rem);
   color: var(--mist); letter-spacing: .06em; line-height: 1.5;
@@ -161,7 +161,10 @@ p strong, li strong { color: var(--white); font-weight: 600; }
   transition: transform .18s ease, border-color .18s ease;
 }
 .card:hover { transform: translateY(-3px); border-color: var(--cyan); }
-.card img { width: 100%; aspect-ratio: 16 / 9; object-fit: cover; }
+.card img, .card video {
+  display: block; width: 100%; aspect-ratio: 16 / 9; object-fit: cover;
+  background: var(--navy);
+}
 .card-body { padding: .95rem 1.05rem 1.1rem; }
 .card-body .eyebrow { font-size: .66rem; }
 .card-body h3 {
@@ -194,6 +197,7 @@ figure.shot {
   border: 1px solid var(--line); border-radius: 12px; overflow: hidden;
   margin: clamp(1.2rem, 4vw, 1.8rem) 0;
 }
+figure.shot video { width: 100%; }
 figure.shot figcaption {
   font-family: var(--mono); font-size: clamp(.62rem, .58rem + .25vw, .72rem);
   color: var(--mist); letter-spacing: .06em; line-height: 1.5;

@@ -46,8 +46,10 @@
   </section>
 
   <figure class="shot">
-    <img src="../img/black_hole.jpg" width="1600" height="900"
-         alt="The black hole experiment: a bright ring of bent light around a black disc, drawn over the camera image, with a warped grid behind it.">
+    <video class="demo" data-demo src="../img/black_hole.mp4"
+           poster="../img/black_hole.jpg" width="1600" height="900"
+           muted loop playsinline preload="metadata"
+           aria-label="The black hole experiment: a bright ring of bent light around a black disc, drawn over the camera image, with a warped grid behind it."></video>
     <figcaption>THE DISPLAY RUNNING THIS EXPERIMENT. THE SKY BEHIND THE
     HOLE IS THE CAMERA IMAGE, STRETCHED BY THE LENS</figcaption>
   </figure>
@@ -103,6 +105,8 @@
     <p>Built during a Physics Department summer internship at Gordon College.</p>
   </div>
 </footer>
+
+<script src="../motion.js" defer></script>
 
 </body>
 </html>

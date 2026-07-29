@@ -57,8 +57,10 @@
   </section>
 
   <figure class="shot">
-    <img src="../img/waves.jpg" width="1600" height="900"
-         alt="The waves experiment: overlapping circular ripples from several sources, with frequency labels and a control palette.">
+    <video class="demo" data-demo src="../img/waves.mp4"
+           poster="../img/waves.jpg" width="1600" height="900" muted loop playsinline
+           preload="metadata"
+           aria-label="The waves experiment: overlapping circular ripples from several sources, with frequency labels and a control palette."></video>
     <figcaption>THREE SOURCES RIPPLING AT ONCE. THE BLOTCHY PATTERN
     BETWEEN THEM IS INTERFERENCE</figcaption>
   </figure>
@@ -114,6 +116,8 @@
     <p>Built during a Physics Department summer internship at Gordon College.</p>
   </div>
 </footer>
+
+<script src="../motion.js" defer></script>
 
 </body>
 </html>

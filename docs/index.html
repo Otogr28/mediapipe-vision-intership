@@ -53,8 +53,10 @@
     </div>
 
     <figure class="hero-shot">
-      <img src="img/black_hole.jpg" width="1600" height="900"
-           alt="The display's black hole experiment: the camera image bent into a bright ring around a black disc, with colored spheres floating nearby.">
+      <video class="demo" data-demo src="img/black_hole.mp4"
+             poster="img/black_hole.jpg" width="1600" height="900" muted loop playsinline
+             preload="metadata"
+             aria-label="The display's black hole experiment: the camera image bent into a bright ring around a black disc, with colored spheres floating nearby."></video>
       <figcaption class="shot-cap">LIVE VIEW OF THE BLACK HOLE EXPERIMENT.
       LIGHT FROM THE CAMERA, BENT BY SIMULATED GRAVITY</figcaption>
     </figure>
@@ -68,7 +70,9 @@
 
     <div class="grid">
       <a class="card" href="experiments/black_hole.html">
-        <img src="img/black_hole.jpg" alt="" loading="lazy">
+        <video class="demo" data-demo src="img/black_hole.mp4"
+               poster="img/black_hole.jpg" muted loop playsinline preload="none"
+               aria-hidden="true"></video>
         <div class="card-body">
           <span class="eyebrow">General relativity</span>
           <h3>Black hole</h3>
@@ -77,7 +81,9 @@
         </div>
       </a>
       <a class="card" href="experiments/slingshot.html">
-        <img src="img/slingshot.jpg" alt="" loading="lazy">
+        <video class="demo" data-demo src="img/slingshot.mp4"
+               poster="img/slingshot.jpg" muted loop playsinline preload="none"
+               aria-hidden="true"></video>
         <div class="card-body">
           <span class="eyebrow">Mechanics</span>
           <h3>Slingshot</h3>
@@ -86,7 +92,9 @@
         </div>
       </a>
       <a class="card" href="experiments/orbitals.html">
-        <img src="img/orbitals.jpg" alt="" loading="lazy">
+        <video class="demo" data-demo src="img/orbitals.mp4"
+               poster="img/orbitals.jpg" muted loop playsinline preload="none"
+               aria-hidden="true"></video>
         <div class="card-body">
           <span class="eyebrow">Gravity</span>
           <h3>Orbitals</h3>
@@ -95,7 +103,8 @@
         </div>
       </a>
       <a class="card" href="experiments/waves.html">
-        <img src="img/waves.jpg" alt="" loading="lazy">
+        <video class="demo" data-demo src="img/waves.mp4" poster="img/waves.jpg"
+               muted loop playsinline preload="none" aria-hidden="true"></video>
         <div class="card-body">
           <span class="eyebrow">Waves &amp; interference</span>
           <h3>Waves</h3>
@@ -104,7 +113,8 @@
         </div>
       </a>
       <a class="card" href="experiments/charges.html">
-        <img src="img/charges.jpg" alt="" loading="lazy">
+        <video class="demo" data-demo src="img/charges.mp4" poster="img/charges.jpg"
+               muted loop playsinline preload="none" aria-hidden="true"></video>
         <div class="card-body">
           <span class="eyebrow">Electrostatics</span>
           <h3>Charges</h3>
@@ -113,7 +123,9 @@
         </div>
       </a>
       <a class="card" href="experiments/spacetime.html">
-        <img src="img/spacetime.jpg" alt="" loading="lazy">
+        <video class="demo" data-demo src="img/spacetime.mp4"
+               poster="img/spacetime.jpg" muted loop playsinline preload="none"
+               aria-hidden="true"></video>
         <div class="card-body">
           <span class="eyebrow">General relativity</span>
           <h3>Spacetime</h3>
@@ -123,7 +135,9 @@
         </div>
       </a>
       <a class="card" href="experiments/schrodinger.html">
-        <img src="img/schrodinger.jpg" alt="" loading="lazy">
+        <video class="demo" data-demo src="img/schrodinger.mp4"
+               poster="img/schrodinger.jpg" muted loop playsinline preload="none"
+               aria-hidden="true"></video>
         <div class="card-body">
           <span class="eyebrow">Quantum mechanics</span>
           <h3>Schrödinger's cat</h3>
@@ -132,7 +146,8 @@
         </div>
       </a>
       <a class="card" href="experiments/magnets.html">
-        <img src="img/magnets.jpg" alt="" loading="lazy">
+        <video class="demo" data-demo src="img/magnets.mp4" poster="img/magnets.jpg"
+               muted loop playsinline preload="none" aria-hidden="true"></video>
         <div class="card-body">
           <span class="eyebrow">Magnetism &amp; induction</span>
           <h3>Magnets</h3>
@@ -161,13 +176,15 @@
 <footer>
   <div class="wrap">
     <p>Built during a Physics Department summer internship at Gordon College.</p>
-    <p>The pictures on these pages stand in for the live camera view with a
-    public-domain photograph by the James Webb Space Telescope: the
+    <p>The clips and pictures on these pages stand in for the live camera view
+    with a public-domain photograph by the James Webb Space Telescope: the
     <a href="https://images.nasa.gov/details/carina_nebula">Cosmic Cliffs
     of the Carina Nebula</a> (NASA, ESA, CSA, STScI).</p>
     <p><a href="https://github.com/Otogr28/mediapipe-vision-intership">Source code on GitHub</a></p>
   </div>
 </footer>
+
+<script src="motion.js" defer></script>
 
 </body>
 </html>
