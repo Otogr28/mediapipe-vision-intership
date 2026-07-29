@@ -35,8 +35,21 @@ export HALL_OUTPUT=web
 # 2560x1440 is available on the MX Brio and would match the panel 1:1. It is
 # 4x the pixel work of 720p rather than 2.25x, so it goes in only after a
 # frame-rate check on the device (HALL_DEBUG=1 prints render FPS).
-export HALL_CAPTURE_W="${HALL_CAPTURE_W:-1920}"
-export HALL_CAPTURE_H="${HALL_CAPTURE_H:-1080}"
+#
+# MEASURED ON THE DEVICE, 2026-07-29: 1920x1080 capture saturates the Orin.
+# With the hall EMPTY (attract, no visitor, the MJPEG <img> not even mounted)
+# the load average sat at 6.66 on 6 cores, python at 235% CPU and Firefox at
+# ~206%. The backend still reported its 30 fps cap, so the render loop is not
+# where it shows — it shows as lag in the browser, and the operator felt it
+# immediately. Back to 720p capture.
+#
+# The split itself is not the problem and stays wired: with capture at 1280
+# and HALL_PROC_W at 1280 the downscale is inert (`0 < PROC_WIDTH < frame_w`
+# is false), so this is the pre-change pipeline exactly. Raising capture again
+# means paying for the JPEG encode here AND the decode in Firefox, and that
+# budget is not there at 30 fps.
+export HALL_CAPTURE_W="${HALL_CAPTURE_W:-1280}"
+export HALL_CAPTURE_H="${HALL_CAPTURE_H:-720}"
 export HALL_PROC_W="${HALL_PROC_W:-1280}"
 # Lighter JPEGs: q60 encodes ~faster on ARM and decodes faster in Firefox;
 # indistinguishable at kiosk viewing distance.
