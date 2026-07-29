@@ -4,16 +4,19 @@ import traceback
 import cv2
 from mediapipe.tasks.python import vision
 
-from auto_exposure import SubjectExposure
 from capture import (FreshestFrame, apply_camera_controls, device_path,
                      resolve_camera_source, restore_auto_exposure)
-from config import (CAMERA_AE, CAMERA_AE_ENABLED, CAMERA_CONTROLS,
-                    CAMERA_STALL_S, DEBUG_HUD, POSE_ENABLED, POSE_SMOOTHING,
+from config import (CAMERA_CONTROLS, CAMERA_STALL_S, DEBUG_HUD,
+                    HAND_VIEW_ENABLED, HAND_VIEW_GROW, HAND_VIEW_LOST,
+                    HAND_VIEW_MIN, HAND_VIEW_PAD, HAND_VIEW_SCALE,
+                    POSE_ENABLED, POSE_SMOOTHING, PREPROCESS_SPEC,
                     SELECTED_CAMERA, STATE_FPS, WINDOW_HEIGHT, WINDOW_WIDTH)
 from detection import detectors
 from detection.detectors import build_hand_detector, build_pose_detector
 from detection.pose_smoother import PoseSmoother
+from hand_view import HandViewport
 from output import make_sink
+from preprocess import Preprocessor
 from rendering.drawing import draw_connections, draw_landmarks, toMpImage
 from ui.manager import UIManager
 from web.state import build_state
@@ -82,21 +85,11 @@ def main():
         # otherwise silently drop back to the backlit picture.
         apply_camera_controls(device_path(source), CAMERA_CONTROLS)
 
-    # Software exposure metering (HALL_CAM_AE=1): the camera's own automatic
-    # exposure meters the whole frame, which at this exhibit means it meters a
-    # wall of windows and renders the visitor as a silhouette. Only for a local
-    # camera — there is nothing to drive on a remote stream or a video file.
-    auto_exposure = None
-    if CAMERA_AE_ENABLED and kind == "v4l2":
-        auto_exposure = SubjectExposure(device_path(source), CAMERA_AE)
-        if not auto_exposure.ok:
-            auto_exposure = None
-    elif kind == "v4l2" and CAMERA_CONTROLS.get("auto_exposure") is None:
-        # Not metering this run, and nobody asked for a manual exposure: give
-        # the camera its own automatic mode back. A previous run WITH the
-        # software loop left it pinned in Manual, and that setting outlives the
-        # process — so skipping this is how a restart inherits a frozen
-        # exposure and stops responding to the room entirely.
+    if kind == "v4l2" and CAMERA_CONTROLS.get("auto_exposure") is None:
+        # Nobody asked for a manual exposure this run: give the camera its own
+        # automatic mode back. A UVC control outlives the process that wrote
+        # it, so a previous run that pinned Manual would otherwise leave every
+        # later run frozen at that exposure, unable to respond to the room.
         restore_auto_exposure(device_path(source))
 
     # Read one frame to learn the true frame size — a network source reports 0
@@ -130,6 +123,25 @@ def main():
 
     pose_connections = vision.PoseLandmarksConnections.POSE_LANDMARKS
     hand_connections = vision.HandLandmarksConnections.HAND_CONNECTIONS
+
+    # What the hand detector is SHOWN. Both of these sit between the camera and
+    # the model and neither touches the frame the visitor sees: `hand_view`
+    # feeds the detector a window of the frame so a distant hand is a big
+    # enough fraction of it to be found at all (the measured fix), and
+    # `preprocess` is the contrast knob, off by default because it measured as
+    # no help. See both modules for the numbers.
+    viewport = (HandViewport(scale=HAND_VIEW_SCALE, pad=HAND_VIEW_PAD,
+                             min_scale=HAND_VIEW_MIN,
+                             lost_frames=HAND_VIEW_LOST, grow=HAND_VIEW_GROW)
+                if HAND_VIEW_ENABLED else None)
+    preprocess = Preprocessor(PREPROCESS_SPEC)
+    # Said out loud at startup: this layer is invisible when it works, and when
+    # it misbehaves the symptom is "the model stopped finding hands", which is
+    # indistinguishable from every other cause unless the log says it was on.
+    print("hand detector input: %s · preprocess %s"
+          % ("viewport scale %.2f (scan+lock)" % HAND_VIEW_SCALE
+             if viewport is not None else "full frame",
+             preprocess.describe()), flush=True)
 
     global last_timestamp_ms
     last_error = None
@@ -173,7 +185,6 @@ def main():
                           flush=True)
                     break
                 flip_frame = cv2.flip(src=frame, flipCode=1)
-                mp_image = toMpImage(frame=flip_frame)
 
                 timestamps_ms = max(int((time.monotonic() - start_time) * 1000), last_timestamp_ms + 1)
                 last_timestamp_ms = timestamps_ms
@@ -194,13 +205,30 @@ def main():
                         print("pose detector build failed; staying hand-only",
                               flush=True)
                 if need_pose and pose_detector is not None:
-                    pose_detector.detect_async(image=mp_image, timestamp_ms=timestamps_ms)
+                    # Pose gets the WHOLE frame: it is a body model and the
+                    # hand viewport would cut the body in half.
+                    pose_detector.detect_async(image=toMpImage(frame=flip_frame),
+                                               timestamp_ms=timestamps_ms)
                     pose_result, pose_received_t = detectors.latest_pose_packet
                 else:
                     pose_result, pose_received_t = None, None
-                hand_detector.detect_async(image=mp_image, timestamp_ms=timestamps_ms)
 
-                hand_result, hand_received_t = detectors.latest_hand_packet
+                # Hands get a WINDOW of the frame (hand_view.py): at exhibit
+                # distance a hand is too small a fraction of the full frame for
+                # the palm detector to find, and this is the only lever on that
+                # ratio that leaves the camera and the visible picture alone.
+                hand_frame = flip_frame if viewport is None \
+                    else viewport.view(flip_frame, timestamps_ms)
+                hand_detector.detect_async(image=toMpImage(frame=preprocess(hand_frame)),
+                                           timestamp_ms=timestamps_ms)
+
+                hand_result, hand_received_t, hand_ts = \
+                    detectors.latest_hand_packet
+                # Landmarks arrive normalized to the window they were found in,
+                # and that window is one or two frames old by now — remap with
+                # the one that produced THIS result, not the current one.
+                if viewport is not None:
+                    hand_result = viewport.remap(hand_result, hand_ts)
 
                 # Smooth the body: feed the One-Euro smoother on each NEW pose
                 # result, then sample its filtered + velocity-extrapolated output
@@ -236,17 +264,6 @@ def main():
                 # top of it.
                 ui.update(hand_result, pose_landmarks, hand_received_t,
                           frame=flip_frame)
-
-                # Meter the exposure on the visitor. AFTER ui.update, because
-                # it reuses the motion blob presence just computed as the ROI
-                # of last resort, and BEFORE any drawing, because it must
-                # measure the camera image rather than the skeleton painted
-                # over it. Rate-limited internally (see auto_exposure.py).
-                if auto_exposure is not None:
-                    auto_exposure.update(flip_frame, hand_result,
-                                         ui.presence_blob_rect())
-                    if DEBUG_HUD:
-                        auto_exposure.report()
 
                 # Web mode streams the RAW frame — the browser draws the
                 # skeleton and all UI from the published state instead.

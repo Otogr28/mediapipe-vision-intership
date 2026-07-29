@@ -422,17 +422,6 @@ class UIManager:
         """
         return self._presence.to_state()
 
-    def presence_blob_rect(self):
-        """Normalized box of the largest moving thing, or None.
-
-        `auto_exposure` meters on this when the hand detector has nothing:
-        against a window a visitor is a silhouette no landmark model can find,
-        while a difference image sees them regardless of how dark they are.
-        Same reason it is a method rather than a public attribute as
-        `presence_state`.
-        """
-        return self._presence.blob_rect
-
     def wants_pose(self):
         """True when an active feature needs body-pose inference right now —
         which is the Vtuber puppet alone (its arms follow

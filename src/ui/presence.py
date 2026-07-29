@@ -129,8 +129,6 @@ class PresenceDetector:
         # as fractions of the frame. These are what decide the motion signal.
         self.blob_frac = 0.0
         self.blob_span = 0.0
-        # (x, y, w, h) of that blob, normalized — None when nothing moved.
-        self.blob_rect = None
         self.hand_span = 0.0
         self.pose_span = 0.0
         # What last asserted presence: "hand", "pose", "motion" or None.
@@ -160,7 +158,6 @@ class PresenceDetector:
         if n <= 1:
             self.blob_frac = 0.0
             self.blob_span = 0.0
-            self.blob_rect = None
             return
         # Row 0 is the background label; the rest are blobs of change.
         areas = stats[1:, cv2.CC_STAT_AREA]
@@ -168,17 +165,6 @@ class PresenceDetector:
         self.blob_frac = float(stats[biggest, cv2.CC_STAT_AREA]) / mask.size
         self.blob_span = float(stats[biggest, cv2.CC_STAT_HEIGHT]) \
             / mask.shape[0]
-        # Where that blob is, normalized. It is the only estimate of the
-        # visitor's position that survives a BACKLIT frame — a person against
-        # the windows is a silhouette the landmark models cannot read, but a
-        # difference image does not care how dark they are. `auto_exposure`
-        # meters on this box to climb out of the silhouette, after which the
-        # hands become detectable and take over as the finer target.
-        h, w = mask.shape[:2]
-        self.blob_rect = (float(stats[biggest, cv2.CC_STAT_LEFT]) / w,
-                          float(stats[biggest, cv2.CC_STAT_TOP]) / h,
-                          float(stats[biggest, cv2.CC_STAT_WIDTH]) / w,
-                          float(stats[biggest, cv2.CC_STAT_HEIGHT]) / h)
 
     def update(self, frame, hand_result=None, pose_landmarks=None, now=None):
         """Advance one frame; returns :attr:`present`.

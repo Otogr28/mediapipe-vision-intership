@@ -266,11 +266,11 @@ def set_control(path, cid, value):
 def restore_auto_exposure(path):
     """Hand the camera back its own automatic exposure.
 
-    A UVC control outlives the process that wrote it. `auto_exposure.py` pins
-    the camera in Manual while it is metering, so without this any later run
-    WITHOUT the software loop — a kiosk restart, a crash, a backend started by
-    hand — would inherit whatever exposure was frozen in and never adapt to
-    anything again. The exhibit restarts itself, so that is not a corner case.
+    A UVC control outlives the process that wrote it, so a run that pinned
+    Manual (`HALL_CAM_AUTO_EXPOSURE=1`, or a `camtune.sh` sweep that died
+    badly) leaves every later run — a kiosk restart, a crash, a backend
+    started by hand — frozen at that exposure, unable to respond to the room.
+    The exhibit restarts itself, so that is not a corner case.
 
     Tries Aperture Priority (3, what these cameras default to) and falls back
     to full Auto (0) for a camera that only publishes that one.

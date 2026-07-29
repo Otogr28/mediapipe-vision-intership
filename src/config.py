@@ -183,28 +183,35 @@ def _cam_ctrl(name):
 # fix again. The knobs stay exposed below because they are part of the camera,
 # not because they are the answer here.
 #
-# So the whole job falls to metering for the person and letting the windows
-# blow out, which is what a video call in front of a window already looks like:
+# **MORE LIGHT DOES NOT HELP, and this is measured, not assumed.** The obvious
+# reading of "backlit" is that the hand is too dark, so the fix is exposure and
+# gain. It is wrong here. In the exhibit's own frames (a T-pose sweep of three
+# exposures x four gains, kept on the device in `~/hall-testframes`) the hand
+# against the window is not dark: it reads around 200 of 255 against a window
+# already clipped at 255, washed flat by veiling glare. Raising exposure lifts
+# the hand INTO the clipped white and destroys what little edge it had — at
+# exposure 160 the fingers are barely separable from the glass. The frames with
+# the LEAST light hold the hand best. So the useful direction on this control
+# set is downward, and the real work is contrast rather than brightness
+# (`HALL_PREPROCESS`, see `src/preprocess.py`).
+#
+# What that leaves worth setting:
 #
 #   1. `backlight` (compensation, already 1 by default on the Brio) biases the
-#      camera's own metering toward the middle. It is coarse; a wall of windows
-#      is several stops brighter than an indoor face, which is more than a
-#      center-weighted mode is built to swallow.
+#      camera's own metering toward the middle. Coarse, but free.
 #   2. `auto_exposure` = 1 switches to Manual, and then `exposure` (3-2047, in
-#      units of 100 us) plus `gain` (0-255) pin the picture to indoor light.
-#      Raise `exposure` before `gain` — gain is noise — but keep it under ~250
-#      (25 ms), because a longer shutter smears a MOVING hand and hand tracking
-#      is the whole application. Leave `dynamic_fps` at 0 so the camera cannot
-#      buy brightness by dropping to 15 fps.
+#      units of 100 us) plus `gain` (0-255) pin the picture so it cannot drift
+#      with the daylight. Pin it at or BELOW what the camera's own metering
+#      chooses; the point is to stop the exposure wandering, not to add light.
+#      Leave `dynamic_fps` at 0 so the camera cannot buy brightness by dropping
+#      to 15 fps, and keep `exposure` well under 250 (25 ms) because a long
+#      shutter smears a moving hand and hand tracking is the application.
 #
-# The open risk with 2 is that a fixed exposure does not track the daylight, so
-# a value chosen at noon is wrong at dusk. If that drift turns out to matter
-# on-site, the fix is a small software metering loop in the app: sample the
-# middle of the frame every second or so and nudge `exposure`/`gain` to hold it
-# in range. That is the auto-exposure the camera will not give us, metered on
-# the visitor instead of on the windows, and it costs a mean over a thumbnail.
-# It is deliberately NOT built yet — whether the drift matters is a measurement
-# nobody has taken, and building it first would be guessing.
+# A previous session built a software metering loop here (`auto_exposure.py`,
+# `HALL_CAM_AE`). It was DELETED on 2026-07-29: every version of it was a
+# brightness controller, which is the axis that does not help, and its ROI
+# needed either a fixed region (the camera gets re-aimed) or hand detection
+# (circular — the light is what is preventing the detection). Do not rebuild it.
 #
 # Tune on-device with `deploy/hall-app/camtune.sh`, which sweeps one control
 # through a range against the live camera and pulls back one frame per value.
@@ -229,73 +236,41 @@ CAMERA_CONTROLS = {
 }
 
 
-class _AutoExposureConfig:
-    """Software exposure metering (`HALL_CAM_AE=1`, see `auto_exposure.py`).
+# --- What the DETECTOR is shown (see src/hand_view.py, src/preprocess.py) ---
+#
+# The exhibit's hand-detection failure was measured, on the real camera's own
+# frames with the real GPU pipeline (`tests/bench_hands.py`), and it is a SIZE
+# problem rather than a light problem: a hand 8.6 % of the frame wide was found
+# in 1 frame of 12, and the identical pixels cropped to 21.5 % of the frame were
+# found in 12 of 12. So the detector is fed a WINDOW of the frame, which is the
+# one lever that changes that ratio without moving the camera, cropping what the
+# visitor sees, or touching brightness.
+HAND_VIEW_ENABLED = os.environ.get("HALL_HAND_VIEW", "1") != "0"
+# Tile size as a fraction of the frame, while scanning for a hand. 0.5 doubles
+# the hand's share of what the model sees, which is the far side of the
+# measured cliff.
+HAND_VIEW_SCALE = float(os.environ.get("HALL_HAND_VIEW_SCALE", "0.5"))
+# How much bigger than the tracked hands the locked window is. Hands MOVE, and
+# the detector's answer is a frame or two old by the time it arrives, so a
+# window fitted to where the hand was is already wrong. Generous on purpose.
+HAND_VIEW_PAD = float(os.environ.get("HALL_HAND_VIEW_PAD", "2.5"))
+# Floor on the locked window, as a fraction of the frame. A window tight around
+# a hand loses it the moment it travels, and the landmark model needs context
+# around the hand to place the wrist.
+HAND_VIEW_MIN = float(os.environ.get("HALL_HAND_VIEW_MIN", "0.35"))
+# Consecutive empty results before the lock is abandoned for a full scan, and
+# how much the search widens on each of them. Widening rather than jumping
+# straight back to scanning: a hand that moved fast is near where it was, and
+# at exhibit distance the full-frame scan position is the one likely to miss it.
+HAND_VIEW_LOST = int(os.environ.get("HALL_HAND_VIEW_LOST", "5"))
+HAND_VIEW_GROW = float(os.environ.get("HALL_HAND_VIEW_GROW", "1.7"))
 
-    Off by default. The exhibit turns it on in `hallkiosk` because that is
-    where the backlit window wall is; leaving it off elsewhere means a laptop
-    webcam is never quietly switched out of its own automatic exposure.
-
-    The defaults are reasoned, not measured against the hall — every one is
-    overridable so a tuning pass needs no code change:
-
-    * ``target`` 120 of 255 is a mid-grey a person reads well at; skin under
-      indoor light lands near it, and it leaves headroom before clipping.
-    * ``tolerance`` 12 is the dead zone. Without one the loop chases sensor
-      noise forever and the picture visibly breathes.
-    * ``exposure_max`` 250 is a 25 ms shutter. Exposure is the low-noise way
-      to buy light, but past roughly this a MOVING hand smears, and hand
-      tracking is the whole application, so the rest is bought with gain.
-    * ``step`` 0.35 and ``gain_step`` 16 cap one tick's correction, so a
-      visitor walking in front of a window ramps instead of strobing.
-    * ``settle_s`` 0.4 covers the few frames a UVC camera takes to act on a
-      new exposure. Measuring inside that window reads the OLD picture and
-      doubles down, which is the classic way these loops oscillate.
-    """
-
-    def __init__(self):
-        self.target = float(os.environ.get("HALL_CAM_AE_TARGET", "120"))
-        self.tolerance = float(os.environ.get("HALL_CAM_AE_TOLERANCE", "12"))
-        self.interval_s = float(os.environ.get("HALL_CAM_AE_INTERVAL_S", "0.5"))
-        self.settle_s = float(os.environ.get("HALL_CAM_AE_SETTLE_S", "0.4"))
-        self.exposure_min = int(os.environ.get("HALL_CAM_AE_EXPOSURE_MIN", "20"))
-        self.exposure_max = int(os.environ.get("HALL_CAM_AE_EXPOSURE_MAX", "250"))
-        self.gain_max = int(os.environ.get("HALL_CAM_AE_GAIN_MAX", "200"))
-        self.gain_step = int(os.environ.get("HALL_CAM_AE_GAIN_STEP", "16"))
-        self.step = float(os.environ.get("HALL_CAM_AE_STEP", "0.35"))
-        # How much bigger than the detected hands/blob the metered box is.
-        # Padding buys context around a small target, and costs background:
-        # every pixel of window pulled into the box is a pixel arguing the
-        # scene is bright. Kept just over 1 for that reason.
-        self.roi_pad = float(os.environ.get("HALL_CAM_AE_ROI_PAD", "1.15"))
-        # WHICH pixel of the box counts as "the subject". The region around a
-        # backlit visitor is bimodal — dark person, blown window — so the mean
-        # sits between the two and reads as correctly exposed while the person
-        # is still a silhouette. Not a hypothetical: metering the mean settled
-        # the exhibit at exposure 117 with the visitor unreadable.
-        #
-        # The percentile has to sit BELOW the smallest fraction of the box the
-        # subject reliably fills, or the reading falls through into the window
-        # whenever the box frames loosely. Measured against a box wobbling
-        # between 30 % and 70 % subject (`tests/smoke_exposure.py`), with the
-        # target at 120: percentile 40 left the subject at 56-65, percentile 30
-        # at 75-84, and percentile 25 landed it at 131 and held it there.
-        self.meter_percentile = float(
-            os.environ.get("HALL_CAM_AE_PERCENTILE", "25"))
-        # EMA on the measurement, damping the fact that the metered REGION
-        # jitters frame to frame (the motion box redraws, hands wander over
-        # bright and dark background), so the reading moves even in steady
-        # light. A dead zone cannot absorb that, because it is the INPUT that
-        # is jumping. Honest scope: the gain sweeping 16 -> 144 -> 16 on the
-        # exhibit is explained by the mean-metering bug above, and the smoke
-        # test's wobbling ROI passes with the percentile fix and no smoothing
-        # at all. This is kept as cheap insurance against real sensor noise,
-        # which is messier than any synthetic scene, not as a proven fix.
-        self.smooth = float(os.environ.get("HALL_CAM_AE_SMOOTH", "0.35"))
-
-
-CAMERA_AE_ENABLED = os.environ.get("HALL_CAM_AE", "0") == "1"
-CAMERA_AE = _AutoExposureConfig()
+# Contrast processing on the frame handed to the model (`preprocess.py`).
+# Default OFF because it was MEASURED not to help: over the same 12 real frames
+# no CLAHE or gamma setting beat the untouched frame, and the best of them cost
+# 30 ms. Kept as a knob rather than deleted so the next person with a hypothesis
+# can score it in one command instead of rebuilding the harness.
+PREPROCESS_SPEC = os.environ.get("HALL_PREPROCESS", "off")
 
 NUM_POSES = 1
 MIN_POSE_DETECTION_CONFIDENCE = 0.5
