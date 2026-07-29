@@ -14,6 +14,15 @@ cd ~/Documents/Repos/vaults/Intership2026/HalLMediaPipe && git add -A && git com
 # Ver el kiosk del Jetson desde ESTA laptop (misma sesión en vivo)
 xdg-open http://<ip>:<outport>/
 
+# Forzar el IDLE: poner el slideshow de fotos aunque haya gente enfrente (no reinicia nada)
+~/Documents/Repos/vaults/Intership2026/HalLMediaPipe/deploy/hall-app/hallidle on
+
+# Soltar el idle: vuelve a reaccionar a los visitantes (en el frame siguiente)
+~/Documents/Repos/vaults/Intership2026/HalLMediaPipe/deploy/hall-app/hallidle off
+
+# Qué está mostrando el exhibit ahora mismo (forzado?, fase, foto en pantalla)
+~/Documents/Repos/vaults/Intership2026/HalLMediaPipe/deploy/hall-app/hallidle status
+
 # Estado del kiosk (servicio + updater + commit actual)
 ssh jetson@<ip> 'export XDG_RUNTIME_DIR=/run/user/1000; systemctl --user status hallkiosk --no-pager -n 5; cd ~/HalLMediaPipe && git log --oneline -1'
 

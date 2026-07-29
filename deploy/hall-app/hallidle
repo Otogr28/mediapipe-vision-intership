@@ -1,0 +1,132 @@
+#!/usr/bin/env bash
+# hallidle — force the LIVE exhibit into idle (the photo slideshow), or let it
+# go back to reacting to visitors.
+#
+#   deploy/hall-app/hallidle on       slideshow now, whoever is standing there
+#   deploy/hall-app/hallidle off      back to normal presence detection
+#   deploy/hall-app/hallidle status   what the exhibit is showing right now
+#
+# This is the "show the photographs" switch: a talk in front of the exhibit, a
+# visit where the hall should look like a gallery, or a check that the pictures
+# pushed with push-photos.sh actually made it. `on` also re-scans the gallery
+# folder, so a photograph copied over seconds ago is in the rotation.
+#
+# It does NOT stop or restart anything — it flips `control.forced_idle` inside
+# the running backend (POST /control/idle), and the phase machine in
+# ui/manager.py reads it once per frame. Camera, detectors and presence keep
+# running, so `off` hands back a live exhibit on the very next frame with no
+# TensorRT engine reload and no camera reopen. Nothing to stop, nothing to
+# wait for, and safe with a visitor in front of the screen.
+#
+# The override lives in the RUNNING process, so anything that restarts the
+# kiosk releases it: a push to main (hall-update.timer picks it up within a
+# minute), the health watchdog, a reboot. It is a switch for the next while,
+# not a permanent setting — to leave the exhibit as a photo frame for good,
+# say so in `hallkiosk` instead.
+#
+# Talks HTTP over Tailscale, no ssh. Point it somewhere else with:
+#   HALL_HEALTH_HOST=localhost deploy/hall-app/hallidle on   # on the device,
+#                                                            # or a laptop run
+#
+# Install as a plain command after a fresh clone (same as hallpush — a symlink,
+# so the script that runs is the one in the repo and stays backed up):
+#   ln -sfn <repo>/deploy/hall-app/hallidle ~/.local/bin/hallidle
+set -euo pipefail
+
+JETSON_HOST="${JETSON_HOST:-jetson@100.91.206.114}"
+HOST="${HALL_HEALTH_HOST:-${JETSON_HOST#*@}}"
+PORT="${HALL_STREAM_PORT:-8092}"
+URL="http://$HOST:$PORT/control/idle"
+
+usage() {
+  sed -n '2,33p' "$0" | sed 's/^# \?//'
+  exit 1
+}
+
+# Print the JSON the backend answered with as three readable lines. The phase
+# is the half that matters: `forced_idle` alone only says the flag was
+# written, while `phase` is what the app is actually publishing to the browser.
+report() {
+  if ! command -v python3 >/dev/null 2>&1; then
+    printf '   %s\n' "$1"
+    return
+  fi
+  python3 -c '
+import json, sys
+
+raw = sys.argv[1]
+try:
+    d = json.loads(raw)
+except ValueError:
+    print("   " + raw.strip())
+    sys.exit(0)
+print("   forced idle : " + ("YES (held by an operator)" if d.get("forced_idle")
+                             else "no (presence decides)"))
+phase = d.get("phase")
+if phase:
+    shown = {"attract": "slideshow", "greeting": "greeting a visitor",
+             "live": "live UI"}.get(phase, phase)
+    print("   phase       : %s (%s)" % (phase, shown))
+slide = d.get("slide")
+if slide:
+    count = d.get("slides")
+    print("   slide       : %s%s" % (slide,
+          "   (%d in the folder)" % count if count else ""))
+' "$1"
+}
+
+# Three failures worth telling apart, because they need three different things
+# done. `curl -sf` collapses all of them into "exit 22", which sent somebody
+# looking at a kiosk that was up and serving the whole time.
+call() {
+  local out code body
+  out="$(curl -s -w '\n%{http_code}' --max-time 5 "$@" "$URL" 2>/dev/null)" \
+    || out=""
+  code="$(printf '%s' "$out" | tail -n 1)"
+  body="$(printf '%s' "$out" | sed '$d')"
+
+  case "$code" in
+    2*)
+      report "$body"
+      return
+      ;;
+    404 | 501)
+      # The backend answered, so the kiosk is fine — it is running code from
+      # before /control/idle existed. GET gives 404 and POST 501 (the stock
+      # "Unsupported method" from BaseHTTPRequestHandler).
+      echo "hallidle: the kiosk on $HOST is UP but has no /control/idle (HTTP $code)." >&2
+      echo "          It is running a backend older than this command. Deploy and retry:" >&2
+      echo "            hallpush 'add the forced-idle control endpoint'" >&2
+      echo "          The device picks the commit up within ~60 s; check with:" >&2
+      echo "            ssh $JETSON_HOST 'cd ~/HalLMediaPipe && git log --oneline -1'" >&2
+      ;;
+    "" | 000)
+      echo "hallidle: nothing answered at $URL — is the kiosk up?" >&2
+      echo "          ssh $JETSON_HOST 'export XDG_RUNTIME_DIR=/run/user/1000;" \
+           "systemctl --user status hallkiosk --no-pager -n 5'" >&2
+      ;;
+    *)
+      echo "hallidle: $URL answered HTTP $code" >&2
+      [ -n "$body" ] && printf '   %s\n' "$body" >&2
+      ;;
+  esac
+  exit 1
+}
+
+case "${1:-status}" in
+  on|idle|1)
+    echo ">> forcing the slideshow on $HOST"
+    call -X POST -d on
+    echo ">> release it with: $0 off"
+    ;;
+  off|live|0)
+    echo ">> releasing $HOST back to presence detection"
+    call -X POST -d off
+    ;;
+  status|--status|-s)
+    echo ">> $URL"
+    call
+    ;;
+  -h|--help|help) usage ;;
+  *) echo "hallidle: unknown argument '$1'" >&2; usage ;;
+esac

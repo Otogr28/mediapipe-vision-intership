@@ -14,6 +14,11 @@ So: drive a real UIManager through the whole cycle with synthetic frames,
 asserting each transition, and run BOTH renderers (`draw()` and
 `to_state()`) in every phase, since those are what main.py calls.
 
+The operator override (`control.py`, `deploy/hall-app/hallidle`) is checked
+here too, at both ends: the phase machine honouring it against a visitor who
+is standing right there, and the HTTP route it arrives on, served by a real
+WebSink on a throwaway port.
+
 WHAT THIS DOES NOT DO: validate the presence thresholds. A bright rectangle
 pasted into a black frame is not a person in a corridor, so it proves the
 machine reacts to motion, not that PRESENCE_ENTER_FRAC is right for the
@@ -400,6 +405,131 @@ def check_gallery():
         shutil.rmtree(tmp, ignore_errors=True)
 
 
+def check_forced_idle():
+    """The operator override: `hallidle on` pinning the exhibit to the
+    slideshow while somebody is standing in front of it.
+
+    Two things are worth asserting and neither raises on its own. A force
+    that presence can overrule is useless — the whole point is showing the
+    photographs to the people who are there, so the visitor in frame must not
+    take them away again. And a release has to hand back a *live* exhibit
+    immediately, because the operator flipped it off in front of an audience.
+    """
+    print("\n--- forced idle (hallidle) " + "-" * 42)
+    import control
+
+    ui = UIManager(W, H, gpu_effects=False)
+    room = empty_room()
+    person = visitor(room)
+
+    _run(ui, room, seconds=PRESENCE_WARMUP_S + 2.0)
+    _run(ui, person, seconds=PRESENCE_ENTER_S + 0.7)
+    _run(ui, person, seconds=GREETING_S + 0.5)
+    _check(ui.phase == "live", "starts live, with a visitor in frame")
+    ui._set_state("experiments")
+    ui._spawn_slingshot()
+
+    control.set_forced_idle(True)
+    _run(ui, person, seconds=0.2)
+    _check(ui.phase == "attract", "forcing idle takes over mid-visit")
+    _check(ui._active_experiment is None and ui.state == "menu",
+           "...and resets the app, leaving nothing half-built behind it")
+
+    _run(ui, person, seconds=ATTRACT_IDLE_S + 2.0)
+    _check(ui.phase == "attract",
+           "a visitor filling the frame does NOT release the force")
+
+    out = np.zeros((H, W, 3), np.uint8)
+    ui.draw(out)
+    _check(out.any(), "the slideshow is what gets drawn while forced")
+
+    control.set_forced_idle(False)
+    _run(ui, person, seconds=0.2)
+    _check(ui.phase == "greeting",
+           "releasing it greets whoever is standing there, same frame")
+    control.reset()
+
+
+def check_control_endpoint():
+    """The wire `hallidle` talks over: POST /control/idle on a real WebSink.
+
+    Worth a check because the failure is silent. `WebSink` dispatches GET by
+    path and falls through to the static frontend, so a route left out of its
+    pass-through list answers `index.html` (or 404) with a 200-looking shape,
+    and its POST handler is inherited rather than written — exactly the wiring
+    a reader assumes works.
+    """
+    print("\n--- /control/idle " + "-" * 51)
+    import threading
+    import urllib.error
+    import urllib.request
+
+    import control
+    from output import WebSink
+
+    # Port 0: the kernel picks a free one, so this cannot collide with a
+    # backend already running on 8092. Bound to loopback, not `auto` — that
+    # would go asking Tailscale for an address.
+    sink = WebSink(bind="127.0.0.1", port=0, dist_dir=None)
+    port = sink._server.server_address[1]
+    url = f"http://127.0.0.1:{port}/control/idle"
+
+    def call(data=None):
+        req = urllib.request.Request(
+            url, data=None if data is None else data.encode(),
+            method="GET" if data is None else "POST")
+        with urllib.request.urlopen(req, timeout=5) as r:
+            return json.loads(r.read())
+
+    stop = threading.Event()
+    try:
+        # Stand in for the render loop: keep publishing a payload, the way
+        # main.py does once per frame. A POST waits for two fresh ones
+        # (WebSink.settle_control) before answering, so without a publisher
+        # every call here would sit out its timeout — and the phase in the
+        # answer comes from this payload, which is what makes the wire test a
+        # wire test and not a second copy of check_forced_idle.
+        ui = UIManager(W, H, gpu_effects=False)
+        _run(ui, empty_room(), seconds=0.2)
+        payload = json.dumps(ui.to_state()).encode()
+
+        def publisher():
+            while not stop.wait(0.01):
+                sink.publish_state(payload)
+
+        threading.Thread(target=publisher, daemon=True).start()
+
+        _check(call()["forced_idle"] is False, "GET reports the flag (off)")
+        got = call("on")
+        _check(got["forced_idle"] is True and control.forced_idle(),
+               "POST 'on' forces idle")
+        _check(got["phase"] == "attract",
+               f"...and the status carries the app's phase ({got['phase']})")
+        _check(isinstance(got.get("slide"), str)
+               and got["slide"].startswith("/attract/"),
+               f"...and which photograph is up ({got.get('slide')})")
+
+        # A GET must never be able to blank the exhibit: the kiosk browser,
+        # a crawler or a link preview all issue those.
+        _check(call()["forced_idle"] is True, "GET does not change the flag")
+
+        _check(call("off")["forced_idle"] is False, "POST 'off' releases it")
+
+        code = None
+        try:
+            call("banana")
+        except urllib.error.HTTPError as exc:
+            code = exc.code
+        _check(code == 400, f"a value that is neither on nor off is a 400 "
+                            f"(got {code})")
+        _check(control.forced_idle() is False,
+               "...and leaves the exhibit alone")
+    finally:
+        stop.set()
+        control.reset()
+        sink.close()
+
+
 def main():
     install_clock()
     try:
@@ -408,6 +538,8 @@ def main():
         check_phases()
         check_renderers()
         check_gallery()
+        check_forced_idle()
+        check_control_endpoint()
     finally:
         restore_clock()
     print()

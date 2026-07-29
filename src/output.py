@@ -17,6 +17,7 @@ stays thin — it just calls ``sink.present(frame)`` / ``sink.should_quit()``
 (plus ``sink.publish_state(...)`` in web mode).
 """
 
+import json
 import mimetypes
 import os
 import socket
@@ -24,10 +25,11 @@ import subprocess
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from urllib.parse import unquote
+from urllib.parse import parse_qs, unquote, urlparse
 
 import cv2
 
+import control
 from config import (OUTPUT_MODE, STATE_FPS, STREAM_BIND, STREAM_PORT,
                     STREAM_QUALITY, WEB_DIST_DIR)
 
@@ -90,7 +92,9 @@ class MjpegSink:
     """Serves the most-recent annotated frame as MJPEG over HTTP.
 
     Endpoints: ``/`` (viewer page), ``/stream.mjpg`` (raw MJPEG),
-    ``/snapshot.jpg`` (latest frame), ``/healthz`` (liveness).
+    ``/snapshot.jpg`` (latest frame), ``/healthz`` (liveness),
+    ``/control/idle`` (read the operator overrides in ``control.py`` with GET,
+    write them with POST — see ``_control_idle``).
     """
 
     def __init__(self, bind="auto", port=8092, quality=80, fps=30):
@@ -131,6 +135,24 @@ class MjpegSink:
     def _latest(self):
         with self._cond:
             return self._jpg
+
+    def control_status(self):
+        """What ``/control/idle`` answers: the operator overrides in force.
+
+        A dict, so subclasses can add what they know — ``WebSink`` folds in
+        the phase the app is actually in, which is the half of the answer that
+        says the override *took effect*.
+        """
+        return {"forced_idle": control.forced_idle()}
+
+    def settle_control(self, timeout=1.0):
+        """Give the render loop time to act on a just-written override, so the
+        reply describes the app AFTER it rather than before.
+
+        A no-op here (this sink publishes no app state); ``WebSink`` waits for
+        the render loop to come round.
+        """
+        return
 
     def _wait_frame(self, last_seq, timeout=1.0):
         """Block until a JPEG newer than ``last_seq`` exists (or timeout).
@@ -201,8 +223,57 @@ class MjpegSink:
                     body = b"ok\n" if jpg is not None else b"no-frame\n"
                     self._send(200 if jpg is not None else 503, "text/plain", body)
 
+                elif self.path.split("?", 1)[0] == "/control/idle":
+                    self._control_status()
+
                 else:
                     self.send_error(404)
+
+            def do_POST(self):
+                if self.path.split("?", 1)[0] == "/control/idle":
+                    self._control_idle()
+                else:
+                    self.send_error(404)
+
+            def _control_status(self):
+                self._send(200, "application/json",
+                           json.dumps(sink.control_status()).encode())
+
+            def _control_idle(self):
+                """Force the idle slideshow on or off on the LIVE exhibit.
+
+                    curl -X POST '.../control/idle?force=1'   # slideshow
+                    curl -X POST '.../control/idle?force=0'   # back to normal
+
+                POST rather than GET on purpose: the kiosk browser, a link
+                preview or anything that crawls this server must not be able
+                to blank the exhibit by fetching a URL. The value may also
+                come in the body (``on`` / ``off`` / ``1`` / ``0``), which is
+                what makes it a one-liner from `curl -d`.
+
+                No authentication, deliberately: this is a LAN/tailnet vision
+                appliance already serving its own camera on /snapshot.jpg
+                without any, so a switch that puts a photo slideshow up is not
+                the sensitive part of the surface.
+                """
+                arg = parse_qs(urlparse(self.path).query).get("force", [None])[0]
+                if arg is None:
+                    try:
+                        n = int(self.headers.get("Content-Length") or 0)
+                    except ValueError:
+                        n = 0
+                    arg = self.rfile.read(min(n, 64)).decode(
+                        "utf-8", "replace").strip() if n > 0 else ""
+                arg = (arg or "").strip().lower()
+                if arg in ("1", "on", "true", "yes", "idle"):
+                    control.set_forced_idle(True)
+                elif arg in ("0", "off", "false", "no", "live"):
+                    control.set_forced_idle(False)
+                else:
+                    self.send_error(400, "force must be on/off (1/0)")
+                    return
+                sink.settle_control()
+                self._control_status()
 
         return Handler
 
@@ -237,6 +308,9 @@ class WebSink(MjpegSink):
       travels to the Jetson in every ``git pull``, and the whole point of the
       gallery is that changing it is a file copy.
     * Static serving of the built frontend (``web/dist``) at ``/``.
+
+    It also answers ``/control/idle`` richer than the base sink does: the
+    override *and* the phase the app ended up in (see ``control_status``).
 
     ``present()`` still streams the frame — but ``main.py`` passes the RAW
     flipped frame in web mode, so the browser composites all UI itself.
@@ -286,6 +360,55 @@ class WebSink(MjpegSink):
         with self._lock:
             return self._state, self._state_seq
 
+    def control_status(self):
+        """The override, plus the phase and slide it produced.
+
+        `hallidle status` is asked from another machine, so "did it work?" has
+        to be answerable in one request: the flag alone would still read
+        ``forced_idle: true`` if the render loop had died and nothing were
+        being published. The phase comes out of the same payload the browser
+        renders from, so it is the app's own answer and not this module's
+        opinion.
+        """
+        status = super().control_status()
+        data, _seq = self._latest_state()
+        session = {}
+        if data:
+            try:
+                session = json.loads(data).get("session") or {}
+            except (ValueError, AttributeError):
+                session = {}
+        status["phase"] = session.get("phase")
+        attract = session.get("attract") or {}
+        current = attract.get("current") or {}
+        status["slide"] = current.get("src")
+        status["slides"] = attract.get("count")
+        return status
+
+    def settle_control(self, timeout=1.0):
+        """Block until the render loop has published state that accounts for
+        an override just written, so ``on`` does not answer "phase: live".
+
+        TWO payloads, not one: the flag can be written between this frame's
+        ``ui.update()`` and its ``publish_state()``, in which case the next
+        payload out is still the old phase. The wait is bounded and returns
+        early — at 30 fps it costs ~70 ms — and giving up quietly on timeout
+        is right, since a status one frame stale is still worth answering when
+        the alternative is hanging the operator's terminal.
+
+        The wait is counted in sleeps rather than measured against a
+        ``time.monotonic()`` deadline: this runs in an HTTP thread, and the
+        smoke tests drive the whole UI layer against a FROZEN monotonic clock,
+        against which a deadline never expires.
+        """
+        with self._lock:
+            target = self._state_seq + 2
+        for _ in range(max(int(timeout / 0.01), 1)):
+            with self._lock:
+                if self._state_seq >= target:
+                    return
+            time.sleep(0.01)
+
     def _make_handler(self):
         base_handler = super()._make_handler()
         sink = self
@@ -297,7 +420,10 @@ class WebSink(MjpegSink):
                 if path == "/state":
                     self._serve_state()
                 elif path in ("/stream.mjpg", "/stream", "/snapshot.jpg",
-                              "/healthz"):
+                              "/healthz", "/control/idle"):
+                    # POST /control/idle needs no line here: this class only
+                    # overrides do_GET, so the base handler's do_POST is
+                    # inherited as-is.
                     base_handler.do_GET(self)
                 elif path.startswith("/attract/"):
                     self._serve_attract(path)

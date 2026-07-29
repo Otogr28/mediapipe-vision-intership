@@ -206,3 +206,34 @@ folder rather than accumulating. 145 MB of phone photographs come out around
 These are **not in git, on purpose** — they are photographs of people and this
 repository is public. The trade is that a reflashed Jetson needs this run again.
 Point the app somewhere else with `HALL_ATTRACT_DIR`.
+
+## Showing the photographs on demand (`hallidle`)
+
+Normally the slideshow is what an empty hall gets: presence decides, and a
+visitor in front of the camera means the live UI. `hallidle` overrides that from
+the laptop, on the **running** kiosk:
+
+```bash
+deploy/hall-app/hallidle on       # slideshow now, whoever is standing there
+deploy/hall-app/hallidle off      # back to normal presence detection
+deploy/hall-app/hallidle status   # forced? which phase? which photograph?
+```
+
+It is the switch for a talk in front of the exhibit, for a visit where the hall
+should look like a gallery, and for checking that what `push-photos.sh` just
+copied is really in the rotation (`on` re-scans the folder).
+
+Plain HTTP over Tailscale, no ssh: it flips `control.forced_idle` in the backend
+via `POST /control/idle`, and `ui/manager.py` reads it once per frame. **Nothing
+stops or restarts** — camera, detectors and presence keep running, so `off`
+hands back a live exhibit on the next frame with no TensorRT reload and no
+camera reopen, which is what makes it safe to use with visitors there. `status`
+reports the phase the app is actually publishing, not just the flag.
+
+The override lives in the running process, so anything that restarts the kiosk
+releases it: a push to `main`, the health watchdog, a reboot. For a permanent
+photo frame, set the exhibit up that way in `hallkiosk` instead.
+
+Add `HALL_HEALTH_HOST=localhost` to talk to a backend on this machine (or run it
+on the device itself); `JETSON_HOST` / `HALL_STREAM_PORT` override the target the
+same way they do for `camtune.sh`.

@@ -6,6 +6,7 @@ import cv2
 from config import (ATTRACT_ENABLED, ATTRACT_IDLE_S, DEBUG_HUD, DEMO_GESTURE,
                     GESTURE_MODE, HINT_TEXT, QR_BOX_FRAC, QR_DIR,
                     QR_MARGIN_FRAC, START_VTUBER)
+from control import forced_idle
 from detection.gestures import (hand_id, pinch_info, pinch_infos, reserve_hand,
                                 update_pinches)
 from rendering.gl_lensing import LensingRenderer
@@ -393,13 +394,30 @@ class UIManager:
 
     def _update_phase(self, hand_result, pose_landmarks, frame):
         """Advance attract -> greeting -> live -> attract."""
-        if not ATTRACT_ENABLED or START_VTUBER:
+        now = time.monotonic()
+        # An operator holding the exhibit in the slideshow from outside
+        # (`POST /control/idle`, i.e. `deploy/hall-app/hallidle on`) outranks
+        # both the presence detector and the config gates: it is a person
+        # standing at the exhibit asking for the photographs, so a visitor
+        # walking past must not take them away again, and HALL_ATTRACT=0 must
+        # not refuse the request.
+        forced = forced_idle()
+        if (not ATTRACT_ENABLED or START_VTUBER) and not forced:
             self.phase = "live"
             return
 
-        now = time.monotonic()
+        # Presence keeps measuring while idle is forced. Its background EMA
+        # only learns the room while nobody is there, so letting it run means
+        # the frame that RELEASES the force already knows whether somebody is
+        # standing at the exhibit — stopping it would hand the next visitor a
+        # background with them baked into it.
         if self._presence.update(frame, hand_result, pose_landmarks, now):
             self._last_present_t = now
+
+        if forced:
+            if self.phase != "attract":
+                self._enter_attract(now)
+            return
 
         if self.phase == "attract":
             if self._presence.present:
