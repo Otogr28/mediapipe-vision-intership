@@ -616,7 +616,7 @@ ATTRACT_ENABLED = os.environ.get("HALL_ATTRACT", "1") == "1"
 # Seconds of continuous absence before the exhibit goes back to the slideshow.
 # Long enough to survive a visitor stepping out of frame to fetch a friend,
 # short enough that the display is not left mid-experiment for the next one.
-ATTRACT_IDLE_S = 30.0
+ATTRACT_IDLE_S = 10.0
 
 # Seconds per slide, and the cross-fade between them.
 ATTRACT_SLIDE_S = 6.5
