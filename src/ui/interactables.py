@@ -28,17 +28,13 @@ from config import (BH_DEFAULT_POS_FACTOR, BH_DISK_BRIGHTNESS,
                     ORB_MAX_BODIES, ORB_MAX_PULL_PX, ORB_MAX_SUBSTEPS,
                     ORB_PHYS_DT, ORB_PREDICT_SAMPLE, ORB_PREDICT_TIME_S,
                     ORB_PRUNE_MARGIN, ORB_RESTITUTION, ORB_SOFTENING_PX,
-                    ORB_TIME_SCALES, ORB_TRAIL_LEN, PUPPET_IDLE_BOB_S,
-                    SCAT_BOX_CX_FRAC, SCAT_BOX_CY_FRAC, SCAT_BOX_H_FRAC,
-                    SCAT_BOX_W_FRAC, SCAT_CAT_R_FRAC, SCAT_CAT_START,
-                    SCAT_COLLAPSE_P_ALIVE, SCAT_DETECTOR_R_PX,
-                    SCAT_FLASH_DECAY, SCAT_FRAME_DT, SCAT_GRAB_PAD_PX,
-                    SCAT_GUN_MUZZLE_X_FRAC, SCAT_GUN_W_FRAC,
+                    ORB_TIME_SCALES, ORB_TRAIL_LEN, SCAT_BOX_CX_FRAC,
+                    SCAT_BOX_CY_FRAC, SCAT_BOX_H_FRAC, SCAT_BOX_W_FRAC,
+                    SCAT_CAT_R_FRAC, SCAT_CAT_START, SCAT_COLLAPSE_P_ALIVE,
+                    SCAT_DETECTOR_R_PX, SCAT_FLASH_DECAY, SCAT_FRAME_DT,
+                    SCAT_GRAB_PAD_PX, SCAT_GUN_MUZZLE_X_FRAC, SCAT_GUN_W_FRAC,
                     SCAT_PARTICLE_SPEED, SCAT_RECOIL_DECAY, SCAT_SPRITE_DIR,
-                    SCAT_TRIGGER_R_PX, SIXSEVEN_BOARD_SIZE,
-                    SIXSEVEN_FLASH_FRAMES, SIXSEVEN_HAND_GRACE_S,
-                    SIXSEVEN_OVER_S, SIXSEVEN_PUMP_AMP, SIXSEVEN_ROUND_S,
-                    SIXSEVEN_SCORES_FILE, ST_BACKDROP_ALPHA, ST_BACKDROP_RGB,
+                    SCAT_TRIGGER_R_PX, ST_BACKDROP_ALPHA, ST_BACKDROP_RGB,
                     ST_BINARY_SEP_FRAC, ST_CAM_PITCH_POS_GAIN,
                     ST_CAM_PITCH_RATE_GAIN, ST_CAM_POS_RADIUS_PX,
                     ST_CAM_RATE_MAX_RAD_S, ST_CAM_SMOOTH, ST_CAM_YAW_POS_GAIN,
@@ -72,140 +68,6 @@ from config import (BH_DEFAULT_POS_FACTOR, BH_DISK_BRIGHTNESS,
 from detection.gestures import (hand_id, hand_scale, pinch_info, pinch_infos,
                                 pinch_state)
 from ui.button import Button
-from ui.scores import Scoreboard
-
-# Wrist landmark in the HAND model (MediaPipe hand landmark 0) — the 6-7
-# counter's height reference. The POSE_*_ELBOW / POSE_*_WRIST body indices
-# that used to live here went with the counter's elbow rule; nothing reads
-# body landmarks by index in this module any more.
-HAND_WRIST = 0
-
-
-FINGERTIP_INDICES = [0, 4, 8, 12, 16, 20]
-FINGER_RADIUS = 14
-PUSH_FORCE = 18.0
-MAX_SPEED = 22.0
-FRICTION = 0.985
-GRAB_RADIUS = 80      # max distance from midpoint to sphere center to initiate grab
-
-
-class BouncingSphere:
-    def __init__(self, frame_width, frame_height, radius=40):
-        self.radius = radius
-        self.w = frame_width
-        self.h = frame_height
-        self.x = float(frame_width // 2)
-        self.y = float(frame_height // 2)
-        self.vx = random.choice([-5.0, 5.0])
-        self.vy = random.choice([-4.0, 4.0])
-        self.grabbed = False
-        self.grab_hand = None      # owner: hand_id that initiated the grab
-        self.grab_offset_x = 0.0
-        self.grab_offset_y = 0.0
-
-    def update(self, hand_result, pose_landmarks):
-        if self.grabbed:
-            # Owner latch: only the hand that initiated the grab may keep
-            # it — another hand pinch-holding elsewhere on screen must not
-            # steal the sphere. Reading that hand's machine directly (not
-            # just the hands in this frame's result) lets the grab ride out
-            # a short tracking dropout; past the grace window the machine
-            # is dropped, `held` reads False and the sphere releases.
-            _, held, (mx, my) = pinch_state(self.grab_hand)
-            if held:
-                new_x = mx + self.grab_offset_x
-                new_y = my + self.grab_offset_y
-                self.vx = new_x - self.x
-                self.vy = new_y - self.y
-                self.x = new_x
-                self.y = new_y
-            else:
-                self.grabbed = False
-                self.grab_hand = None
-
-        if not self.grabbed and hand_result is not None:
-            for i, hand_landmarks in enumerate(hand_result.hand_landmarks):
-                hid = hand_id(hand_result, i)
-                pinching, held, (mx, my) = pinch_state(hid)
-
-                # Only the fresh close event (`pinching`) can initiate a
-                # grab, so an already-closed hand sliding over the sphere
-                # will not pick it up.
-                sphere_dist = ((self.x - mx) ** 2 + (self.y - my) ** 2) ** 0.5
-                if pinching and sphere_dist < GRAB_RADIUS:
-                    self.grab_hand = hid
-                    self.grab_offset_x = self.x - mx
-                    self.grab_offset_y = self.y - my
-                    self.vx = 0.0
-                    self.vy = 0.0
-                    self.grabbed = True
-                    break
-
-            if not self.grabbed:
-                for hand_landmarks in hand_result.hand_landmarks:
-                    for idx in FINGERTIP_INDICES:
-                        lm = hand_landmarks[idx]
-                        fx = lm.x * self.w
-                        fy = lm.y * self.h
-                        dx = self.x - fx
-                        dy = self.y - fy
-                        dist = (dx ** 2 + dy ** 2) ** 0.5
-                        contact_dist = self.radius + FINGER_RADIUS
-                        if dist < contact_dist and dist > 0:
-                            nx = dx / dist
-                            ny = dy / dist
-                            overlap = contact_dist - dist
-                            impulse = PUSH_FORCE * (1 + overlap / contact_dist)
-                            self.vx += nx * impulse
-                            self.vy += ny * impulse
-
-        if not self.grabbed:
-            self.vx *= FRICTION
-            self.vy *= FRICTION
-
-            speed = (self.vx ** 2 + self.vy ** 2) ** 0.5
-            if speed > MAX_SPEED:
-                self.vx = self.vx / speed * MAX_SPEED
-                self.vy = self.vy / speed * MAX_SPEED
-
-            self.x += self.vx
-            self.y += self.vy
-
-            if self.x - self.radius <= 0:
-                self.x = float(self.radius)
-                self.vx = abs(self.vx)
-            elif self.x + self.radius >= self.w:
-                self.x = float(self.w - self.radius)
-                self.vx = -abs(self.vx)
-
-            if self.y - self.radius <= 0:
-                self.y = float(self.radius)
-                self.vy = abs(self.vy)
-            elif self.y + self.radius >= self.h:
-                self.y = float(self.h - self.radius)
-                self.vy = -abs(self.vy)
-
-    def to_state(self):
-        """Serializable snapshot for the web frontend. The physics stays
-        here — the browser only renders the resolved position."""
-        return {
-            "type": "sphere",
-            "x": round(self.x, 1),
-            "y": round(self.y, 1),
-            "r": self.radius,
-            "grabbed": self.grabbed,
-        }
-
-    def draw(self, frame):
-        cx, cy = int(self.x), int(self.y)
-        if self.grabbed:
-            cv2.circle(frame, (cx, cy), self.radius + 10, (0, 200, 80), 3)
-            cv2.circle(frame, (cx, cy), self.radius, (0, 220, 100), -1)
-            cv2.circle(frame, (cx - self.radius // 4, cy - self.radius // 4), self.radius // 4, (120, 255, 180), -1)
-        else:
-            cv2.circle(frame, (cx, cy), self.radius + 6, (0, 50, 160), -1)
-            cv2.circle(frame, (cx, cy), self.radius, (0, 120, 255), -1)
-            cv2.circle(frame, (cx - self.radius // 4, cy - self.radius // 4), self.radius // 4, (100, 210, 255), -1)
 
 
 class BlackHole:
@@ -252,7 +114,7 @@ class BlackHole:
 
     def update(self, hand_result, pose_landmarks):
         if self.grabbed:
-            # Owner latch — same rule as BouncingSphere: only the hand
+            # Owner latch — the shared grab rule: only the hand
             # that initiated the drag may move it; it survives a tracking
             # dropout within the pinch grace window and releases when the
             # fingers open (or the hand expires past the grace).
@@ -317,312 +179,6 @@ class BlackHole:
             rotation_speed=self.disk_rotation_speed,
         )
         np.copyto(frame, lensed)
-
-
-_scoreboard_singleton = None
-
-
-def sixseven_scoreboard():
-    """The one shared high-score table, loaded from disk on first use.
-
-    A module singleton rather than one board per counter: pressing the
-    "6 7 Counter" button builds a fresh `SixSevenCounter` every time, and a
-    per-instance board would re-read the file on each spawn — harmless when
-    the file is writable, but on a read-only home it would also throw away
-    the in-memory records of the previous round.
-    """
-    global _scoreboard_singleton
-    if _scoreboard_singleton is None:
-        _scoreboard_singleton = Scoreboard(SIXSEVEN_SCORES_FILE,
-                                           SIXSEVEN_BOARD_SIZE)
-    return _scoreboard_singleton
-
-
-class SixSevenCounter:
-    """6 7 gesture counter — after mannygonzalezj7/67counter, played
-    against the clock.
-
-    Counts each time a HAND completes an up-stroke: it drops, then rises
-    again by at least `SIXSEVEN_PUMP_AMP` of its own width. Hands latch
-    independently, so the alternating two-handed gesture scores twice per
-    cycle and somebody using one hand still scores.
-
-    **The reference is the hand's own travel, and that is the whole point.**
-    The original port counted "wrist rises above elbow", which measured on
-    the exhibit as two counts and then silence: people do 6-7 with their
-    elbows down by the waist and their hands alternating at chest height,
-    so the wrist starts above the elbow and never drops back below it — the
-    latch fired once per arm and could never re-arm. Judging a hand against
-    where that same hand just was has no such posture assumption.
-
-    It also needs no body inference. `gestures.hand_scale` gives each hand's
-    own pixel width, so the required stroke is the same physical gesture at
-    any distance without a depth estimate, and the counter rides the hand
-    detector that runs every frame anyway — no pose model, no ~1.5 CPU
-    cores, and no multi-second TensorRT engine build inside the render loop
-    the first time a visitor opens the game.
-
-    Around that sits a three-phase round, which is what the scoreboard
-    needs to mean anything (see `SIXSEVEN_ROUND_S`):
-
-    ``ready``    armed and waiting. The FIRST count starts the clock and
-                 scores — there is no start button, because the exhibit is
-                 touchless and the player has just made the exact gesture
-                 the game is about.
-    ``running``  `SIXSEVEN_ROUND_S` seconds of pumping.
-    ``over``     the clock ran out: the score went to the board, and the
-                 board is on screen for `SIXSEVEN_OVER_S` before the
-                 counter re-arms itself for the next player.
-
-    Abandoning a round scores nothing: leaving drops the counter entirely
-    (`UIManager._reset`, which attract mode calls when a visitor walks
-    away), so a half-finished tally can never reach the table.
-    """
-
-    def __init__(self, frame_width, frame_height, board=None):
-        self.w = frame_width
-        self.h = frame_height
-        self.count = 0
-        # Per-hand zigzag latch, keyed by gestures.hand_id:
-        # {"armed": bool, "trough": px, "crest": px, "seen": monotonic}.
-        # See _pump_fired.
-        self._pumps = {}
-        # Decay counter for the flash overlay, in frames.
-        self._flash = 0
-        # Round machine: "ready" -> "running" -> "over" -> "ready".
-        self.phase = "ready"
-        self._round_end = 0.0     # monotonic deadline while "running"
-        self._over_until = 0.0    # monotonic deadline while "over"
-        # Where the last finished round landed on the board (0-based), or
-        # None when it did not make it. Cleared when the counter re-arms.
-        self.rank = None
-        # Injectable so the smoke test can drive a throwaway board instead
-        # of the player-facing file.
-        self._board = sixseven_scoreboard() if board is None else board
-
-    # --- round machine -------------------------------------------------
-
-    def _remaining(self, now):
-        """Seconds left on the clock — the full round before it starts, so
-        a waiting player can see what they are being given."""
-        if self.phase == "ready":
-            return SIXSEVEN_ROUND_S
-        if self.phase == "running":
-            return max(0.0, self._round_end - now)
-        return 0.0
-
-    def _start_round(self, now):
-        self.phase = "running"
-        self._round_end = now + SIXSEVEN_ROUND_S
-
-    def _finish_round(self, now):
-        self.rank = self._board.submit(self.count)
-        self.phase = "over"
-        self._over_until = now + SIXSEVEN_OVER_S
-
-    def _rearm(self):
-        self.count = 0
-        self.rank = None
-        self._pumps.clear()
-        self.phase = "ready"
-
-    def _pump_fired(self, hid, y, scale, now):
-        """Zigzag latch for one hand: True on a completed UP-stroke.
-
-        Each hand is judged against ITS OWN recent travel rather than against
-        a body landmark, which is what makes the counter work in the posture
-        people actually use (see the class docstring). `scale` is
-        `gestures.hand_scale` — a hand's own pixel width — so the required
-        stroke is the same physical gesture whether the visitor is at the
-        screen or a step back, with no distance estimate anywhere.
-
-        `y` is in pixels and grows DOWNWARD, so the hand is high when `y` is
-        small: `trough` is the lowest the hand has been (largest y) and
-        `crest` the highest (smallest y).
-        """
-        amp = SIXSEVEN_PUMP_AMP * scale
-        st = self._pumps.get(hid)
-        # A hand that has been gone longer than the grace window starts over:
-        # it may well come back somewhere unrelated, and inheriting the old
-        # trough would score a count the visitor never made.
-        if st is None or now - st["seen"] > SIXSEVEN_HAND_GRACE_S:
-            self._pumps[hid] = {"armed": False, "trough": y, "crest": y,
-                                "seen": now}
-            return False
-
-        st["seen"] = now
-        if not st["armed"]:
-            st["trough"] = max(st["trough"], y)      # how low it got
-            if st["trough"] - y > amp:               # ...and back up by amp
-                st["armed"] = True
-                st["crest"] = y
-                return True
-        else:
-            st["crest"] = min(st["crest"], y)        # how high it got
-            if y - st["crest"] > amp:                # ...and back down by amp
-                st["armed"] = False
-                st["trough"] = y
-        return False
-
-    def to_state(self):
-        """Serializable snapshot for the web frontend."""
-        flash = (self._flash / SIXSEVEN_FLASH_FRAMES
-                 if SIXSEVEN_FLASH_FRAMES else 0.0)
-        return {"type": "sixseven", "count": self.count,
-                "flash": round(flash, 3),
-                "phase": self.phase,
-                "remaining": round(self._remaining(time.monotonic()), 2),
-                "round_s": SIXSEVEN_ROUND_S,
-                # The whole board every frame: five integers is cheaper than
-                # any scheme for shipping it only when it changes.
-                "board": self._board.to_state(),
-                "rank": self.rank}
-
-    def update(self, hand_result, pose_landmarks):
-        """`pose_landmarks` is accepted for interface symmetry and ignored —
-        this scene is hand-only (see the class docstring)."""
-        now = time.monotonic()
-
-        # Advance the clock BEFORE reading the hands, so the pump that lands
-        # after the buzzer belongs to the next round rather than the one
-        # already being scored.
-        if self.phase == "running" and now >= self._round_end:
-            self._finish_round(now)
-        elif self.phase == "over" and now >= self._over_until:
-            self._rearm()
-
-        if self._flash > 0:
-            self._flash -= 1
-
-        # "over" is a read-only scoreboard: hands move while the player
-        # reacts to their score and none of it should count.
-        if hand_result is None or self.phase == "over":
-            return
-
-        fired = 0
-        for i, lms in enumerate(hand_result.hand_landmarks):
-            scale = hand_scale(lms, self.w, self.h)
-            if scale <= 0.0:
-                continue          # degenerate landmarks: no usable reference
-            if self._pump_fired(hand_id(hand_result, i),
-                                lms[HAND_WRIST].y * self.h, scale, now):
-                fired += 1
-
-        # Forget hands that have been gone a while, so the dict cannot grow
-        # across a long exhibit day.
-        for hid in [k for k, st in self._pumps.items()
-                    if now - st["seen"] > SIXSEVEN_HAND_GRACE_S]:
-            del self._pumps[hid]
-
-        if fired:
-            # The first pump of a fresh counter is the start signal AND the
-            # first point: asking for one gesture to arm the game and
-            # another to play it would just cost every player a count they
-            # thought they had made.
-            if self.phase == "ready":
-                self._start_round(now)
-            self.count += fired
-            self._flash = SIXSEVEN_FLASH_FRAMES
-
-    @staticmethod
-    def _clock(seconds):
-        """m:ss for the round clock — the browser formats the same way."""
-        total = int(math.ceil(max(0.0, seconds)))
-        return f"{total // 60}:{total % 60:02d}"
-
-    def draw(self, frame):
-        """cv2 fallback for window/stream mode.
-
-        Layout mirrored by hand in `web/src/hud/SixSeven.tsx`, which is what
-        the exhibit actually shows (web mode). Keep the two in step: same
-        rows, same order, same words.
-        """
-        flash_t = self._flash / SIXSEVEN_FLASH_FRAMES if SIXSEVEN_FLASH_FRAMES else 0.0
-        font = cv2.FONT_HERSHEY_SIMPLEX
-        board = self._board.to_state()
-
-        if self.phase == "ready":
-            status = "RAISE AN ARM TO START"
-        elif self.phase == "running":
-            status = "6 7"
-        else:
-            status = "TIME" if self.rank is None else f"NEW #{self.rank + 1}"
-
-        clock_text = self._clock(self._remaining(time.monotonic()))
-        count_text = str(self.count)
-        rows = [(f"{i + 1}.", str(s)) for i, s in enumerate(board)]
-
-        status_scale, status_thick = 0.62, 2
-        clock_scale, clock_thick = 1.0, 2
-        count_scale, count_thick = 2.2 + 0.4 * flash_t, 4
-        head_scale, head_thick = 0.55, 1
-        row_scale, row_thick = 0.7, 2
-
-        (sw, sh), _ = cv2.getTextSize(status, font, status_scale, status_thick)
-        (kw, kh), _ = cv2.getTextSize(clock_text, font, clock_scale, clock_thick)
-        (cw, ch), _ = cv2.getTextSize(count_text, font, count_scale, count_thick)
-        (bw, bh), _ = cv2.getTextSize("BEST", font, head_scale, head_thick)
-        row_h = cv2.getTextSize("0", font, row_scale, row_thick)[0][1]
-
-        pad_x, pad_y, gap = 26, 16, 10
-        rows_h = (len(rows) * (row_h + 9)) if rows else 0
-        # "BEST" divider + its rows only exist once somebody has scored —
-        # a fresh exhibit shows a counter, not an empty table.
-        board_h = (gap + bh + 8 + rows_h) if rows else 0
-        box_w = max(sw, kw, cw, 190) + pad_x * 2
-        box_h = sh + gap + kh + gap + ch + board_h + pad_y * 2
-        box_x = (self.w - box_w) // 2
-        box_y = 12
-
-        overlay = frame.copy()
-        cv2.rectangle(overlay, (box_x, box_y), (box_x + box_w, box_y + box_h),
-                      (0, 0, 0), -1)
-        cv2.addWeighted(overlay, 0.55, frame, 0.45, 0, frame)
-
-        # Border flashes green on a fresh count, then fades to neutral.
-        border = (
-            int(120 + (0 - 120) * flash_t),
-            int(120 + (220 - 120) * flash_t),
-            int(120 + (100 - 120) * flash_t),
-        )
-        cv2.rectangle(frame, (box_x, box_y), (box_x + box_w, box_y + box_h),
-                      border, 2)
-
-        def centered(text, y, scale, thick, colour):
-            (tw, _th), _ = cv2.getTextSize(text, font, scale, thick)
-            cv2.putText(frame, text, (box_x + (box_w - tw) // 2, y), font,
-                        scale, colour, thick, cv2.LINE_AA)
-
-        y = box_y + pad_y + sh
-        centered(status, y, status_scale, status_thick, (200, 200, 200))
-        # The clock goes amber in the last five seconds — the same "act now"
-        # colour the pinch cursor uses while a gesture is closing.
-        y += gap + kh
-        late = self.phase == "running" and self._remaining(time.monotonic()) <= 5.0
-        centered(clock_text, y, clock_scale, clock_thick,
-                 (77, 184, 255) if late else (170, 170, 170))
-        y += gap + ch
-        centered(count_text, y, count_scale, count_thick, (255, 255, 255))
-
-        if not rows:
-            return
-
-        y += gap + bh
-        centered("BEST", y, head_scale, head_thick, (154, 163, 178))
-        cv2.line(frame, (box_x + pad_x, y + 6), (box_x + box_w - pad_x, y + 6),
-                 (90, 96, 108), 1)
-
-        for i, (num, score) in enumerate(rows):
-            y += row_h + 9
-            # The player's own row is the only one in green, so they can find
-            # it without reading five numbers.
-            mine = self.rank == i
-            colour = (164, 230, 99) if mine else (220, 220, 220)
-            cv2.putText(frame, num, (box_x + pad_x, y), font, row_scale,
-                        (154, 163, 178), row_thick, cv2.LINE_AA)
-            (nw, _nh), _ = cv2.getTextSize(score, font, row_scale, row_thick)
-            cv2.putText(frame, score, (box_x + box_w - pad_x - nw, y), font,
-                        row_scale, colour, row_thick, cv2.LINE_AA)
 
 
 # --- Slingshot projectile experiment (SI units) -------------------------
@@ -1382,7 +938,7 @@ class Orbitals:
         self.spawn_y = 0.0
         self.pull_x = 0.0
         self.pull_y = 0.0
-        # Grab (reposition/fling) state, mirroring BouncingSphere.
+        # Grab (reposition/fling) state, the shared owner-latch pattern.
         self.grab_body = None
         self.grab_hand = None
         self.grab_offset_x = 0.0
@@ -3053,9 +2609,6 @@ class Magnets:
                         cv2.LINE_AA)
             cv2.putText(frame, txt, (gx - tw // 2, gy + dy),
                         cv2.FONT_HERSHEY_SIMPLEX, scale, col, 1, cv2.LINE_AA)
-
-
-# --- Vtuber / Puppet interactable ---------------------------------------
 
 
 class _Mass:
@@ -4833,7 +4386,7 @@ class SchrodingerCat:
 
     def _update_place(self, hand_result):
         if self._grabbed:
-            # Owner latch — same rule as BouncingSphere: only the hand that
+            # Owner latch — the shared grab rule: only the hand that
             # initiated the drag may move the cat; releasing over the box
             # puts it inside and closes the lid.
             _, held, (mx, my) = pinch_state(self._grab_hand)
@@ -5219,88 +4772,3 @@ class SchrodingerCat:
         self._draw_tally(frame)
 
 
-class Puppet:
-    """A cosmic-mascot avatar puppeteered by the live landmarks.
-
-    Pure rendering happens in the browser (and a cv2 fallback); this class
-    only carries a tiny per-frame snapshot (a spawn clock for the idle bob,
-    the pinch strength for the mouth). The renderer reads the hands (always
-    tracked) — and the body pose when ``HALL_POSE=1`` — straight from the
-    published state, so no landmark data is duplicated here. When the puppet
-    is active the frontend hides the raw skeleton and dims the camera so the
-    character stands alone.
-    """
-
-    def __init__(self, frame_width, frame_height):
-        self.w = frame_width
-        self.h = frame_height
-        self._spawn_time = time.monotonic()
-        # Latest max pinch progress across hands — drives the mouth. Held
-        # here (not just in the browser) so the cv2 fallback can react too.
-        self._mouth = 0.0
-        self._hand_result = None
-        self._pose = None
-
-    @property
-    def grabbed(self):
-        # Not a grab-target, but reporting True while a hand is pinching
-        # retires the onboarding hint once the user drives the mouth.
-        return self._mouth > 0.5
-
-    def update(self, hand_result, pose_landmarks):
-        self._hand_result = hand_result
-        self._pose = pose_landmarks
-        mouth = 0.0
-        if hand_result is not None:
-            for i in range(len(hand_result.hand_landmarks)):
-                info = pinch_info(hand_id(hand_result, i))
-                if info is not None:
-                    mouth = max(mouth, info.progress)
-        self._mouth = mouth
-
-    def to_state(self):
-        return {
-            "type": "vtuber",
-            "t": round((time.monotonic() - self._spawn_time) % 1000.0, 3),
-            "mouth": round(self._mouth, 3),
-        }
-
-    def draw(self, frame):
-        # cv2 fallback: dim the scene, then a minimal face + paws so the
-        # window/stream path still shows *something* coherent. The web path
-        # renders the rich avatar.
-        overlay = frame.copy()
-        cv2.rectangle(overlay, (0, 0), (self.w, self.h), (12, 8, 18), -1)
-        cv2.addWeighted(overlay, 0.6, frame, 0.4, 0, frame)
-
-        hands = []
-        if self._hand_result is not None:
-            for lms in self._hand_result.hand_landmarks:
-                wrist = lms[0]
-                hands.append((int(wrist.x * self.w), int(wrist.y * self.h)))
-
-        if hands:
-            hx = sum(p[0] for p in hands) // len(hands)
-            hy = sum(p[1] for p in hands) // len(hands)
-        else:
-            hx, hy = self.w // 2, self.h // 2
-        bob = int(10 * math.sin((time.monotonic() - self._spawn_time)
-                                * 2 * math.pi / PUPPET_IDLE_BOB_S))
-        head_y = max(120, hy - 200) + bob
-        head = (hx, head_y)
-        rr = 90
-        cv2.circle(frame, head, rr + 6, (90, 60, 130), -1, cv2.LINE_AA)
-        cv2.circle(frame, head, rr, (245, 220, 170), -1, cv2.LINE_AA)
-        # Eyes.
-        for ex in (-32, 32):
-            cv2.circle(frame, (head[0] + ex, head_y - 14), 12,
-                       (40, 30, 30), -1, cv2.LINE_AA)
-        # Mouth: opens with the pinch.
-        mh = int(6 + 26 * self._mouth)
-        cv2.ellipse(frame, (head[0], head_y + 34), (30, mh), 0, 0, 360,
-                    (40, 30, 30), -1, cv2.LINE_AA)
-        # Paws at each hand + noodle arms to the head.
-        for hp in hands:
-            cv2.line(frame, head, hp, (245, 220, 170), 10, cv2.LINE_AA)
-            cv2.circle(frame, hp, 26, (245, 220, 170), -1, cv2.LINE_AA)
-            cv2.circle(frame, hp, 26, (90, 60, 130), 3, cv2.LINE_AA)

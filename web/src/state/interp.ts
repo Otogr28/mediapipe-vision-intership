@@ -73,9 +73,6 @@ export function interpolate(pair: SnapshotPair, now: number): AppState {
     );
     if (!po) return o;
     switch (o.type) {
-      case "sphere":
-        if (po.type !== "sphere") return o;
-        return { ...o, x: lerp(po.x, o.x, t), y: lerp(po.y, o.y, t) };
       case "black_hole":
         if (po.type !== "black_hole") return o;
         return { ...o, x: lerp(po.x, o.x, t), y: lerp(po.y, o.y, t) };

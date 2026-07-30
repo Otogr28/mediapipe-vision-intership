@@ -87,8 +87,8 @@ def _hands_state(hand_result, now):
             "held": m.closed,
             "seen_ms": round((now - m.last_seen) * 1000.0, 1),
             "landmarks": landmarks_by_id.get(hid),
-            # 3D hand skeleton (meters, wrist origin) + raw handedness — drive
-            # the vtuber's hand orientation + fingers. None during grace window.
+            # 3D hand skeleton (meters, wrist origin) + raw handedness.
+            # None during grace window.
             "world": world_by_id.get(hid),
             "handedness": handed_by_id.get(hid),
         })
@@ -143,8 +143,8 @@ def build_state(ui, hand_result, pose_landmarks, pose_world_landmarks=None):
     Call once per rendered frame, after ``ui.update(...)`` (the pinch
     snapshot must be advanced) — ``main.py`` hands the result straight to
     ``sink.publish_state``. ``pose_world_landmarks`` is optional: the 2D
-    ``pose`` still drives the skeleton overlay + head; the 3D ``pose_world``
-    (when present) drives the vtuber rig's per-bone orientation.
+    ``pose`` drives the skeleton overlay; the 3D ``pose_world`` (when
+    present) carries per-bone orientation for any 3D consumer.
     """
     global _seq, _last_t, _dt_ema
     now = time.monotonic()

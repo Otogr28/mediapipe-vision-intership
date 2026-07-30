@@ -36,8 +36,8 @@ def main():
     # Pose is optional (HALL_POSE, off by default): the UI is fully
     # hand-driven and body inference was the biggest CPU cost on the Jetson.
     # HALL_POSE=1 builds it up front (always on); otherwise it is built
-    # LAZILY the first time a feature asks for it (ui.wants_pose(), e.g. the
-    # Vtuber puppet) and then only run while that feature is active — so pose
+    # LAZILY the first time a feature asks for it (ui.wants_pose(); nothing
+    # does today) and then only run while that feature is active — so pose
     # costs nothing until the user opts into something that needs a skeleton.
     pose_detector = build_pose_detector() if POSE_ENABLED else None
     hand_detector = build_hand_detector()
@@ -207,8 +207,8 @@ def main():
 
                 # Run pose only when needed: the HALL_POSE=1 override, or a
                 # live feature that asks for it (ui.wants_pose()). Built lazily
-                # on first demand — a one-time model-load hitch when the user
-                # first enters e.g. Vtuber, then free on exit (we simply stop
+                # on first demand — a one-time model-load hitch when a feature
+                # first asks, then free on exit (we simply stop
                 # feeding it; its threads idle). timestamps_ms keeps climbing
                 # every frame, so the stream stays monotonic across on/off gaps.
                 need_pose = POSE_ENABLED or ui.wants_pose()
@@ -237,7 +237,7 @@ def main():
                 # for THIS frame so the body glides between the ~13 fps results
                 # instead of stuttering/lagging (PoseSmoother). No person or pose
                 # off -> reset so it eases back in rather than snapping. The 3D
-                # world skeleton (meters, hips origin) drives the vtuber rig.
+                # world skeleton (meters, hips origin) also rides the payload.
                 pose_landmarks = None
                 pose_world_landmarks = None
                 if need_pose and pose_result is not None and pose_result.pose_landmarks:

@@ -1,6 +1,6 @@
 """One-Euro smoothing + velocity extrapolation for the body pose.
 
-This gives the avatar's body the same smooth-yet-snappy feel the pinch cursor
+This gives the tracked body the same smooth-yet-snappy feel the pinch cursor
 has (see ``gestures._HandPinch``). Body pose runs at ~13 fps on CPU and lands
 one inference behind the live frame, so fed raw it stutters and lags — the
 hands feel fine only because their cursor is already One-Euro filtered and

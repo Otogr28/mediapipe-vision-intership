@@ -1,6 +1,6 @@
 """The gallery: browsing the exhibit's photographs by hand.
 
-The third entry on the menu, next to Games and Experiments. It reads the same
+The second entry on the menu, next to Experiments. It reads the same
 folder as the idle slideshow (``config.ATTRACT_GALLERY_DIR`` — see
 ``ui/attract.py``), so there is one place to put photographs and two ways to
 see them: unattended as a slideshow, on demand as something a visitor flips
@@ -10,7 +10,7 @@ through themselves.
 your hand anywhere, pull sideways, let go. The strip follows the hand while
 held and settles on the nearest photograph on release, with a flick carrying
 it one further. Nothing new to learn: the exhibit has taught "close your hand
-and drag" since the first sphere, and this is that gesture applied to a strip.
+and drag" the whole app runs on, applied to a strip.
 Prev/Next buttons sit under the card for whoever does not discover the drag —
 they cannot fight the drag, because `UIManager` reserves any hand over a live
 button before the scene is updated.

@@ -5,7 +5,7 @@ import cv2
 
 from config import (ATTRACT_ENABLED, ATTRACT_IDLE_S, DEBUG_HUD, DEMO_GESTURE,
                     GESTURE_MODE, HINT_TEXT, QR_BOX_FRAC, QR_DIR,
-                    QR_MARGIN_FRAC, START_VTUBER)
+                    QR_MARGIN_FRAC)
 from control import forced_idle
 from detection.gestures import (hand_id, pinch_info, pinch_infos, reserve_hand,
                                 update_pinches)
@@ -16,19 +16,13 @@ from ui.cursor import PinchCursor
 from ui.debug_hud import DebugHUD
 from ui.gallery import Gallery
 from ui.hints import GestureHint, IntroOverlay
-from ui.interactables import (BlackHole, BouncingSphere, Charges, Magnets,
-                              Orbitals, Puppet, SchrodingerCat,
-                              SixSevenCounter, Slingshot, Spacetime, Waves)
+from ui.interactables import (BlackHole, Charges, Magnets, Orbitals,
+                              SchrodingerCat, Slingshot, Spacetime, Waves)
 from ui.presence import PresenceDetector
 
 MENU_BTN_W, MENU_BTN_H = 260, 70
 RESET_W, RESET_H = 130, 50
 
-# Selectable vtuber avatars — MUST match the order of AVATARS in
-# web/src/gl/avatars.ts (the frontend maps this index to the .vrm file). The
-# pinch "Avatar" button cycles this list; the index rides to_state() so the
-# browser loads the matching model.
-AVATAR_NAMES = ["Cool Alien", "Cool Banana", "Milk", "Agnes", "Stitch Witch"]
 SPEED_BTN = 46          # square -/+ sim-speed buttons (top-right)
 SPEED_LABEL_W = 92      # readout pill between them ("1x", "0.25x", ...)
 # Corner-anchored buttons keep a healthy margin from the frame edges: to
@@ -57,7 +51,6 @@ class UIManager:
         # browser's WebGL port of the lensing shader renders the black hole
         # from to_state()'s parameters instead.
         self._gpu_effects = gpu_effects
-        self.spheres = []
         # The single experiment currently running in the "experiments" state
         # (a BlackHole, Slingshot, Orbitals, …), or None while its picker is
         # shown. Only one experiment is active at a time.
@@ -67,23 +60,11 @@ class UIManager:
         self._qr_cache = {}
         self._qr_exp = None
         self._qr_key = None
-        self._sixseven = None
         # The photo gallery, live only while `state == "gallery"`. Built on
         # entry rather than at boot so it re-reads the gallery folder each
         # time somebody opens it — a photograph copied onto the device shows
         # up for the next visitor without a restart.
         self._gallery = None
-        # The vtuber puppet, live only while the user spawns it in the
-        # "interactables" state (None otherwise).
-        self._puppet = None
-        # Vtuber "skeleton view" toggle (web frontend hides the avatar and
-        # draws the raw pose+hand inference on the body). Kiosk-accessible via
-        # the pinch button below; mirrored to the frontend in to_state().
-        self._show_points = False
-        # Which vtuber avatar is selected (index into AVATAR_NAMES /
-        # web/src/gl/avatars.ts). Cycled by the pinch "Avatar" button; rides
-        # to_state() so the frontend loads the matching .vrm.
-        self._avatar_index = 0
         # Lazy-initialised the first time the user spawns the black hole —
         # postpones GL context creation until something actually needs it, and
         # keeps startup cost out of the camera-only path.
@@ -115,36 +96,24 @@ class UIManager:
 
         self._build_buttons()
 
-        # Dev: jump straight into the Vtuber scene (drive the avatar from a
-        # recorded video instead of live pinches). See config.START_VTUBER.
-        if START_VTUBER:
-            self.state = "interactables"
-            self._spawn_puppet()
-
     def _build_buttons(self):
         fw, fh = self.frame_w, self.frame_h
         margin = int(fh * EDGE_MARGIN_FRAC)
 
-        num_btns = 3
+        num_btns = 2
         gap = 16
         total_w = num_btns * MENU_BTN_W + (num_btns - 1) * gap
         start_x = (fw - total_w) // 2
         top_y = margin
 
-        self._menu_interactables_btn = Button(
-            x=start_x, y=top_y,
-            width=MENU_BTN_W, height=MENU_BTN_H,
-            label="Games",
-            on_click=lambda: self._set_state("interactables"),
-        )
         self._menu_experiments_btn = Button(
-            x=start_x + MENU_BTN_W + gap, y=top_y,
+            x=start_x, y=top_y,
             width=MENU_BTN_W, height=MENU_BTN_H,
             label="Experiments",
             on_click=lambda: self._set_state("experiments"),
         )
         self._menu_gallery_btn = Button(
-            x=start_x + (MENU_BTN_W + gap) * 2, y=top_y,
+            x=start_x + MENU_BTN_W + gap, y=top_y,
             width=MENU_BTN_W, height=MENU_BTN_H,
             label="Gallery",
             on_click=self._open_gallery,
@@ -166,26 +135,6 @@ class UIManager:
             x=fw // 2 + 20, y=nav_y, width=nav_w, height=nav_h,
             label="Next >",
             on_click=lambda: self._step_gallery(+1),
-        )
-
-        self._sphere_btn = Button(
-            x=margin, y=margin, width=120, height=50,
-            label="Sphere",
-            on_click=self._add_sphere,
-        )
-
-        self._vtuber_btn = Button(
-            x=margin + 120 + 10, y=margin, width=150, height=50,
-            label="Rigged Model",
-            on_click=self._spawn_puppet,
-            font_scale=0.6,
-        )
-
-        self._sixseven_btn = Button(
-            x=margin + 120 + 10 + 150 + 10, y=margin, width=170, height=50,
-            label="6 7 Counter",
-            on_click=self._spawn_sixseven,
-            font_scale=0.6,
         )
 
         # Experiment picker: one spawn button per experiment, laid out in a
@@ -273,28 +222,6 @@ class UIManager:
             on_click=self._reset,
         )
 
-        # "Points" toggle (bottom-left, only while the vtuber puppet is live):
-        # flips the web skeleton view so the raw inference is visible on the
-        # touchless kiosk without a keyboard.
-        self._points_btn = Button(
-            x=margin, y=fh - RESET_H - margin,
-            width=150, height=RESET_H,
-            label="Points",
-            on_click=self._toggle_points,
-            font_scale=0.6,
-        )
-
-        # "Avatar" cycler — stacked one row ABOVE Points (bottom-left, only
-        # while the vtuber puppet is live). Kept off the frame edge by `margin`
-        # (EDGE_MARGIN_FRAC) like every other button, so the pinch lands on a
-        # fully-in-frame hand. Label shows the current model; pressing advances.
-        self._avatar_btn = Button(
-            x=margin, y=fh - RESET_H - margin - RESET_H - 16,
-            width=220, height=RESET_H,
-            label=f"Avatar: {AVATAR_NAMES[0]}",
-            on_click=self._cycle_avatar,
-            font_scale=0.6,
-        )
 
     def _set_state(self, new_state):
         self.state = new_state
@@ -309,9 +236,6 @@ class UIManager:
     def _step_gallery(self, delta):
         if self._gallery is not None:
             self._gallery.step(delta)
-
-    def _add_sphere(self):
-        self.spheres.append(BouncingSphere(self.frame_w, self.frame_h))
 
     def _spawn_black_hole(self):
         if self._gpu_effects and self._lensing_renderer is None:
@@ -339,31 +263,9 @@ class UIManager:
     def _spawn_schrodinger(self):
         self._active_experiment = SchrodingerCat(self.frame_w, self.frame_h)
 
-    def _spawn_puppet(self):
-        self._puppet = Puppet(self.frame_w, self.frame_h)
-
-    def _toggle_points(self):
-        self._show_points = not self._show_points
-        self._points_btn.selected = self._show_points
-
-    def _cycle_avatar(self):
-        self._avatar_index = (self._avatar_index + 1) % len(AVATAR_NAMES)
-        self._avatar_btn.label = f"Avatar: {AVATAR_NAMES[self._avatar_index]}"
-
-    def _spawn_sixseven(self):
-        # Re-pressing the button while a counter is active resets the
-        # tally — gives users a way to zero the count without leaving the
-        # mode (the global Reset button drops the counter entirely).
-        self._sixseven = SixSevenCounter(self.frame_w, self.frame_h)
-
     def _reset(self):
-        self.spheres.clear()
         self._active_experiment = None
-        self._sixseven = None
         self._gallery = None
-        self._puppet = None
-        self._show_points = False
-        self._points_btn.selected = False
         self.state = "menu"
 
     # --- attract phase ----------------------------------------------------
@@ -402,7 +304,7 @@ class UIManager:
         # walking past must not take them away again, and HALL_ATTRACT=0 must
         # not refuse the request.
         forced = forced_idle()
-        if (not ATTRACT_ENABLED or START_VTUBER) and not forced:
+        if not ATTRACT_ENABLED and not forced:
             self.phase = "live"
             return
 
@@ -441,19 +343,16 @@ class UIManager:
         return self._presence.to_state()
 
     def wants_pose(self):
-        """True when an active feature needs body-pose inference right now —
-        which is the Vtuber puppet alone (its arms follow
-        shoulder→elbow→wrist). `main.py` runs the pose detector only when
-        this (or the HALL_POSE=1 override) is set, so the default hand-only
-        UI keeps pose OFF — the big CPU win — while selecting Vtuber lights
-        the skeleton up on demand and puts it away again on Reset.
+        """True when an active feature needs body-pose inference right now.
+        Nothing does since the Vtuber puppet was removed, so pose only runs
+        under the HALL_POSE=1 override — `main.py` still consults this, and
+        a future pose-driven feature reports itself here.
 
-        The 6-7 counter used to be listed here too. It is hand-only now (see
-        `SixSevenCounter`), which matters beyond the CPU: building the pose
-        detector happens INSIDE the render loop, and on the Jetson that is a
-        multi-second TensorRT engine load — a freeze the whole exhibit would
-        have paid the first time any visitor opened the game."""
-        return self._puppet is not None
+        Keep anything hand-only OUT of this: building the pose detector
+        happens INSIDE the render loop, and on the Jetson that is a
+        multi-second TensorRT engine load — a freeze the whole exhibit pays
+        the first time a visitor opens the feature that asked for it."""
+        return False
 
     def _experiment_palette(self):
         """(id, Button) list the active experiment exposes for its own
@@ -477,8 +376,7 @@ class UIManager:
             return []
 
         if self.state == "menu":
-            return [("menu.interactables", self._menu_interactables_btn),
-                    ("menu.experiments", self._menu_experiments_btn),
+            return [("menu.experiments", self._menu_experiments_btn),
                     ("menu.gallery", self._menu_gallery_btn)]
 
         if self.state == "gallery":
@@ -489,23 +387,6 @@ class UIManager:
             return [("gallery.prev", self._gallery_prev_btn),
                     ("gallery.next", self._gallery_next_btn),
                     ("reset", self._reset_btn)]
-
-        if self.state == "interactables":
-            # The 6-7 counter is pose-driven, and this button used to be
-            # hidden unless HALL_POSE=1 — which is 0 on the exhibit, so the
-            # game was unreachable there. The gate was never needed:
-            # `wants_pose()` reports the live counter and `main.py` builds
-            # body inference on demand for it, exactly as it does for the
-            # Vtuber (which was never gated). Spawning costs a one-time
-            # model-load hitch; Reset puts pose away again.
-            out = [("spawn.sphere", self._sphere_btn),
-                   ("spawn.vtuber", self._vtuber_btn),
-                   ("spawn.sixseven", self._sixseven_btn)]
-            if self._puppet is not None:
-                out.append(("points", self._points_btn))
-                out.append(("avatar", self._avatar_btn))
-            out.append(("reset", self._reset_btn))
-            return out
 
         if self.state == "experiments":
             if self._active_experiment is None:
@@ -579,13 +460,6 @@ class UIManager:
         update_pinches(hand_result, self.frame_w, self.frame_h,
                        received_t=hand_received_t)
 
-        # Dev lock: keep the puppet alive so a video-driven session can't
-        # accidentally Reset itself back to the menu.
-        if START_VTUBER and (self._puppet is None or self.state != "interactables"):
-            self.state = "interactables"
-            if self._puppet is None:
-                self._spawn_puppet()
-
         # `frame` (the mirrored camera image) is the motion signal presence
         # runs on; it is optional so a caller without one still gets the
         # hand/pose signals.
@@ -608,15 +482,7 @@ class UIManager:
                        self.frame_h)
         self._reserve_ui_hands(buttons, hand_result)
 
-        if self.state == "interactables":
-            for s in self.spheres:
-                s.update(hand_result, pose_landmarks)
-            if self._sixseven is not None:
-                self._sixseven.update(hand_result, pose_landmarks)
-            if self._puppet is not None:
-                self._puppet.update(hand_result, pose_landmarks)
-
-        elif self.state == "experiments":
+        if self.state == "experiments":
             if self._active_experiment is not None:
                 self._active_experiment.update(hand_result, pose_landmarks)
 
@@ -637,9 +503,6 @@ class UIManager:
         object — used to retire the onboarding gesture hint."""
         if any(btn.pressed for _bid, btn in self._active_buttons()):
             return True
-        if self.state == "interactables":
-            return (any(s.grabbed for s in self.spheres)
-                    or (self._puppet is not None and self._puppet.grabbed))
         if self.state == "experiments":
             return (self._active_experiment is not None
                     and self._active_experiment.grabbed)
@@ -669,16 +532,7 @@ class UIManager:
 
         buttons = [btn.to_state(bid) for bid, btn in self._active_buttons()]
 
-        if self.state == "interactables":
-            objects = [dict(s.to_state(), id=i)
-                       for i, s in enumerate(self.spheres)]
-            if self._sixseven is not None:
-                objects.append(self._sixseven.to_state())
-            # The puppet renders last so its dim backdrop sits over the scene.
-            if self._puppet is not None:
-                objects.append(self._puppet.to_state())
-
-        elif self.state == "gallery" and self._gallery is not None:
+        if self.state == "gallery" and self._gallery is not None:
             objects = [self._gallery.to_state()]
 
         elif self.state == "experiments" and self._active_experiment is not None:
@@ -720,11 +574,11 @@ class UIManager:
             # the detector is watching for a fist.
             "hint": {"visible": self._pinch_hint.visible,
                      "text": HINT_TEXT},
-            # Web-only: hide the avatar + draw the raw pose/hand skeleton.
-            "show_points": self._show_points,
-            # Which vtuber avatar the frontend should load (index into
-            # web/src/gl/avatars.ts). Cycled by the "Avatar" pinch button.
-            "avatar_index": self._avatar_index,
+            # Web-only: draw the raw pose/hand skeleton over the picture.
+            # Kept in the contract (always False now that the Points button
+            # went with the Vtuber) so the frontend's `k`/?skeleton=1 debug
+            # toggle keeps its shape.
+            "show_points": False,
         }
 
     def _draw_speed_label(self, frame):
@@ -811,16 +665,7 @@ class UIManager:
         # readable over a black hole's full-frame distortion, and drawing
         # them last is the visual half of the same rule the hand reservation
         # enforces for input (see _reserve_ui_hands).
-        if self.state == "interactables":
-            for s in self.spheres:
-                s.draw(frame)
-            if self._sixseven is not None:
-                self._sixseven.draw(frame)
-            # The puppet dims the scene, so it draws over the spheres.
-            if self._puppet is not None:
-                self._puppet.draw(frame)
-
-        elif self.state == "experiments":
+        if self.state == "experiments":
             if self._active_experiment is not None:
                 self._active_experiment.draw(frame)
                 self._draw_qr_plate(frame)

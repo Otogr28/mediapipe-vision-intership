@@ -31,11 +31,10 @@ export interface HandState {
   seen_ms: number;
   /** 21 normalized [x, y] landmarks, or null while in the grace window */
   landmarks: Vec2[] | null;
-  /** 21 metric [x, y, z] hand-world landmarks (wrist origin, meters) — drives
-   *  the vtuber's hand orientation + finger curl. null while in the grace
-   *  window (or if a backend omits them). */
+  /** 21 metric [x, y, z] hand-world landmarks (wrist origin, meters).
+   *  null while in the grace window (or if a backend omits them). */
   world?: Vec3[] | null;
-  /** raw MediaPipe handedness label; the avatar matches hands by image-x, so
+  /** raw MediaPipe handedness label; consumers match hands by image-x, so
    *  this is a fallback only (unreliable on the mirrored feed). */
   handedness?: "Left" | "Right" | null;
 }
@@ -46,8 +45,7 @@ export type PoseState = [number, number, number][];
 /**
  * 33 metric 3D pose landmarks as [x, y, z] in meters, origin at the hips
  * midpoint (MediaPipe `pose_world_landmarks`). Camera-independent and
- * gravity-aligned — this is what drives the vtuber rig's per-bone 3D
- * orientation. Visibility is not repeated; index into `pose[i][2]`.
+ * gravity-aligned. Visibility is not repeated; index into `pose[i][2]`.
  * MediaPipe axes: +x image-right, +y down, +z away from camera.
  */
 export type PoseWorld = [number, number, number][];
@@ -66,42 +64,6 @@ export interface ButtonState {
 export interface SpeedPill {
   rect: [number, number, number, number];
   text: string;
-}
-
-export interface SphereObject {
-  type: "sphere";
-  id: number;
-  x: number;
-  y: number;
-  r: number;
-  grabbed: boolean;
-}
-
-/**
- * The 6-7 arm-pump counter, played as a timed round against a persistent
- * high-score table. Mirrors `SixSevenCounter.to_state()` in
- * `src/ui/interactables.py`.
- */
-export interface SixSevenObject {
-  type: "sixseven";
-  count: number;
-  /** 1.0 right after a count, decaying to 0 over SIXSEVEN_FLASH_FRAMES. */
-  flash: number;
-  /**
-   * "ready"   — armed; the first pump starts the clock and scores.
-   * "running" — the round is on.
-   * "over"    — time up; the score went to the board, which is on screen
-   *             for SIXSEVEN_OVER_S before the counter re-arms itself.
-   */
-  phase: "ready" | "running" | "over";
-  /** Seconds left. The full round while "ready", 0 while "over". */
-  remaining: number;
-  /** Round length (s), so the browser can draw the clock as a fraction. */
-  round_s: number;
-  /** Top scores, best first — SIXSEVEN_BOARD_SIZE rows at most. */
-  board: number[];
-  /** Where this round landed in `board` (0-based), or null if it missed. */
-  rank: number | null;
 }
 
 export interface BlackHoleObject {
@@ -376,14 +338,6 @@ export interface SpacetimeObject {
   ghost: { x: number; y: number } | null;
 }
 
-export interface VtuberObject {
-  type: "vtuber";
-  /** spawn-relative clock (s), wrapped — drives the idle bob */
-  t: number;
-  /** max pinch progress across hands [0, 1] — drives the mouth */
-  mouth: number;
-}
-
 /**
  * Schrodinger's cat measurement game, staged as the 1935 apparatus: an alpha
  * gun fires at the Geiger tube on the steel chamber; hammer + HCN flask live
@@ -462,9 +416,7 @@ export interface GalleryObject {
 }
 
 export type SceneObject =
-  | SphereObject
   | GalleryObject
-  | SixSevenObject
   | BlackHoleObject
   | SlingshotObject
   | OrbitalsObject
@@ -472,7 +424,6 @@ export type SceneObject =
   | ChargesObject
   | MagnetsObject
   | SpacetimeObject
-  | VtuberObject
   | SchrodingerObject;
 
 export interface DebugState {
@@ -562,10 +513,10 @@ export interface AppState {
   frame: { w: number; h: number };
   hands: HandState[];
   pose: PoseState | null;
-  /** metric 3D skeleton for the vtuber rig; null unless pose is running */
+  /** metric 3D body skeleton; null unless pose is running */
   pose_world?: PoseWorld | null;
   session: {
-    state: "menu" | "interactables" | "experiments" | "gallery";
+    state: "menu" | "experiments" | "gallery";
     experiment:
       | "black_hole"
       | "slingshot"
@@ -589,11 +540,9 @@ export interface AppState {
     /** `text` rides along so the words match the gesture the detector is
      *  watching for; absent on older backends → the pinch wording. */
     hint: { visible: boolean; text?: string };
-    /** vtuber "Points" toggle — hide the avatar + draw the raw skeleton */
+    /** draw the raw skeleton over the picture (backend-driven toggle;
+     *  always false since the Points button went with the Vtuber) */
     show_points?: boolean;
-    /** which vtuber avatar to load (index into AVATARS); set by the backend's
-     *  "Avatar" pinch button. Absent on older backends → falls back to 0. */
-    avatar_index?: number;
   };
   buttons: ButtonState[];
   speed: SpeedPill | null;

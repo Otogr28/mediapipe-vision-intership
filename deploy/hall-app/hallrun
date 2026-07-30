@@ -33,7 +33,7 @@ export HALL_INFERENCE="${HALL_INFERENCE:-gpu}"
 # MediaPipe pose ran ~13 fps one inference behind and was the body's stutter/lag
 # source while the GPU hands felt snappy; running pose on the GPU lifts its rate
 # and frees the ~1.5 CPU cores it ate. Pose is only built when a feature needs it
-# (the Vtuber rig, or HALL_POSE=1), so this costs nothing until then. First launch
+# (HALL_POSE=1), so this costs nothing until then. First launch
 # on a fresh .trt_cache builds two more FP16 engines (~1-2 min each, then cached).
 # Override with HALL_POSE_INFERENCE=mediapipe to A/B against the CPU pose path.
 export HALL_POSE_INFERENCE="${HALL_POSE_INFERENCE:-gpu}"
@@ -47,7 +47,7 @@ export HALL_POSE_INFERENCE="${HALL_POSE_INFERENCE:-gpu}"
 export HALL_ONNX_PROVIDERS="${HALL_ONNX_PROVIDERS:-TensorrtExecutionProvider,CUDAExecutionProvider,CPUExecutionProvider}"
 
 # Cap each TRT engine's build workspace to 512 MiB. The Orin Nano's 8 GB is
-# SHARED CPU+GPU and with the Vtuber active four engines build/run (palm +
+# SHARED CPU+GPU and with pose active four engines build/run (palm +
 # handpose + pose-detector + pose-landmark) beside the kiosk browser + the
 # black-hole shader — a default (unbounded) workspace can OOM the board during a
 # rebuild. 512 MiB was measured sufficient to build all four (pose engines ~2 min

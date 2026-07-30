@@ -10,15 +10,8 @@ IMAGE_FORMAT = mp.ImageFormat.SRGB
 # Body-pose inference (HALL_POSE). OFF by default since 2026-07-07: nothing
 # in the current UI needs the body skeleton (the pinch pipeline is entirely
 # hand-relative), and MediaPipe pose on CPU was the single biggest CPU cost
-# (~1.5 cores at ~13 fps). Setting HALL_POSE=1 re-enables it and brings back
-# the pose-driven "6 7 Counter" (its button hides when pose is off).
+# (~1.5 cores at ~13 fps). Setting HALL_POSE=1 re-enables it (debug skeleton).
 POSE_ENABLED = os.environ.get("HALL_POSE", "0") == "1"
-
-# Dev/testing: start straight in the Vtuber scene with the puppet spawned and
-# kept alive (so the avatar can be driven from a recorded VIDEO FILE via
-# HALL_CAMERA=<file> without needing live pinch gestures to navigate). Off in
-# production. Implies the puppet's pose need, so pose runs.
-START_VTUBER = os.environ.get("HALL_START_VTUBER", "0") == "1"
 
 # Inference backend for the HAND pipeline (HALL_INFERENCE):
 #   "mediapipe" — default; MediaPipe HandLandmarker (.task), CPU on the Jetson.
@@ -75,8 +68,8 @@ TRT_ENGINE_CACHE = os.environ.get(
 )
 
 # Optional cap on the TensorRT build workspace, in MiB (HALL_TRT_MAX_WORKSPACE).
-# The Orin Nano has 8 GB of memory SHARED between CPU and GPU, and now runs four
-# TRT engines when the Vtuber is active (palm + handpose + pose-detector +
+# The Orin Nano has 8 GB of memory SHARED between CPU and GPU, and runs up to
+# four TRT engines when pose is on (palm + handpose + pose-detector +
 # pose-landmark) alongside the browser kiosk and the black-hole shader. If that
 # runs the board out of memory, cap each engine's build workspace here (e.g. 512
 # or 1024) to bound peak GPU memory — the trade is a possibly slower engine.
@@ -487,8 +480,7 @@ BUTTON_STICKY_PAD_FRAC = 0.15  # sticky targets: while hovered, the hit rect
 # Increase to make the BH visually heavier; decrease for subtler lensing.
 BH_EINSTEIN_RADIUS_PX = 80
 
-# Max distance from pinch midpoint to BH centre to initiate a drag. Matches
-# the sphere's GRAB_RADIUS so the interaction model stays consistent.
+# Max distance from pinch midpoint to BH centre to initiate a drag.
 BH_GRAB_RADIUS = 100
 
 # Initial spawn position as a fraction of frame size (0..1 each axis).
@@ -515,55 +507,6 @@ BH_DISK_BRIGHTNESS = 1.0
 # overall "rotational feel" scales with it. Set to 0 to freeze the
 # disk's procedural texture.
 BH_DISK_ROTATION_SPEED = 0.8
-
-# 6 7 Counter. Counts each time a HAND completes an up-stroke: it drops,
-# then rises again by at least `SIXSEVEN_PUMP_AMP` of its own width. Hands
-# latch independently, so the alternating two-handed gesture scores twice
-# per cycle and one hand alone still scores.
-#
-# The original 67counter definition — "wrist rises above elbow" — was
-# measured on the exhibit and scored two counts, then silence. People do 6-7
-# with their elbows down by the waist and their hands alternating at chest
-# height, so the wrist starts above the elbow and never drops back below it;
-# the latch fired once per arm and could never re-arm. Judging a hand
-# against where that same hand just was carries no posture assumption, and
-# it drops the body model entirely (no ~1.5 CPU cores, and no multi-second
-# TensorRT engine build inside the render loop when a visitor opens the
-# game).
-#
-# The unit is the hand's OWN width (`gestures.hand_scale`), which is what
-# makes one constant cover the whole room: a hand twice as far away is half
-# as wide on screen and its stroke is half as many pixels, so the same
-# physical gesture counts at any distance with no depth estimate. ~0.9 hand
-# widths is roughly 7 cm of travel for an adult, well inside a real pump
-# (15-25 cm) and well outside landmark jitter. Raise it if idle hand-waving
-# scores; lower it if small gestures are ignored.
-SIXSEVEN_PUMP_AMP = 0.9
-# A hand gone longer than this starts its latch over rather than inheriting
-# the old trough — it may come back somewhere unrelated, and that would
-# score a count the visitor never made.
-SIXSEVEN_HAND_GRACE_S = 0.4
-# Frames over which the count-flash animation decays back to 0.
-SIXSEVEN_FLASH_FRAMES = 12
-
-# The counter is played as a TIMED ROUND, and the round is what makes the
-# scoreboard mean anything: an unbounded tally rewards whoever stands in
-# front of the camera longest, so the "record" would just be the longest
-# visit. A fixed window turns it into a rate, which is a real contest.
-# The round starts on the first count (no button — the exhibit is
-# touchless and the gesture the player already made is the best trigger),
-# so the clock only ever measures time spent actually pumping.
-SIXSEVEN_ROUND_S = 30.0
-# How long the final score + board stay up before the counter re-arms for
-# the next player. Long enough to read five rows and point at your own.
-SIXSEVEN_OVER_S = 8.0
-SIXSEVEN_BOARD_SIZE = 5      # rows kept on the high-score table
-# Where those records live. OUTSIDE the repo on purpose: the Jetson
-# updates itself with `git reset --hard` (see deploy/hall-app), which
-# would wipe any file tracked here, and the scores are the one piece of
-# exhibit state that should survive both an update and a reboot.
-SIXSEVEN_SCORES_FILE = os.path.expanduser(
-    os.environ.get("HALL_SCORES_FILE", "~/hall-scores.json"))
 
 # Onboarding / intro overlay.
 # A brief "how to interact" splash shown once at startup (Nintendo-style),
@@ -739,8 +682,8 @@ PRESENCE_HAND_SPAN = 0.16
 PRESENCE_HAND_EXIT_SPAN = 0.10
 
 # --- pose ---
-# Height of the visible pose landmarks' bounding box. Only consulted when some
-# other feature already pays for body inference (HALL_POSE=1, or the Vtuber).
+# Height of the visible pose landmarks' bounding box. Only consulted when
+# body inference is already running (HALL_POSE=1).
 PRESENCE_POSE_SPAN = 0.45
 PRESENCE_POSE_EXIT_SPAN = 0.30
 
@@ -749,8 +692,7 @@ PRESENCE_POSE_EXIT_SPAN = 0.30
 PRESENCE_ENTER_S = 0.6
 
 # ---------------------------------------------------------------------------
-# Gallery (`ui/gallery.py`) — the third menu entry, next to Games and
-# Experiments. It browses the SAME folder the idle slideshow reads
+# Gallery (`ui/gallery.py`) — the second menu entry, next to Experiments. It browses the SAME folder the idle slideshow reads
 # (ATTRACT_GALLERY_DIR), so there is one place to put photographs and two ways
 # to see them: unattended as a slideshow, on demand as something you flip
 # through with your hand.
@@ -1653,15 +1595,6 @@ ST_GW_WAVE_MAX_PX = 60.0     # cap the ripple's height so a merger chirp cannot
 # to the frame handed to inference. See the Spacetime.draw docstring.
 ST_BACKDROP_ALPHA = 0.45
 ST_BACKDROP_RGB = [6, 8, 18]
-
-# Vtuber / Puppet interactable.
-# A friendly cosmic mascot puppeteered by the live landmarks: its paws ride
-# the tracked HANDS (always available), its mouth opens with the pinch, and
-# — when body pose is on (HALL_POSE=1) — its arms follow shoulder/elbow/wrist.
-# Pure rendering happens in the browser (and a cv2 fallback); the backend
-# only carries a tiny mode/expression snapshot. `PUPPET_IDLE_BOB_S` is the
-# period of the head's resting bob.
-PUPPET_IDLE_BOB_S = 3.2
 
 # Schrodinger's cat experiment ("Quantum Cat").
 # A four-phase quantum measurement game: drop the cat in the box, fire a

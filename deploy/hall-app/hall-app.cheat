@@ -61,7 +61,7 @@ cd ~/Documents/Repos/vaults/Intership2026/HalLMediaPipe/web && npm run dev
 # Dev local: backend con HUD de debug del pinch (tecla d en el browser)
 cd ~/Documents/Repos/vaults/Intership2026/HalLMediaPipe && HALL_DEBUG=1 HALL_OUTPUT=web uv run python src/main.py
 
-# Mock backend: cualquier escena SIN cámara ni gestos (menu/sphere/sixseven/picker/slingshot/slingaim/blackhole)
+# Mock backend: cualquier escena SIN cámara ni gestos (menu/picker/slingshot/slingaim/blackhole)
 cd ~/Documents/Repos/vaults/Intership2026/HalLMediaPipe && uv run python web/scripts/mock_backend.py <escena>
 
 # Screenshot headless del frontend (verificación rápida)
@@ -70,7 +70,7 @@ cd ~/Documents/Repos/vaults/Intership2026/HalLMediaPipe/web && node scripts/shot
 # Modo clásico: ventana cv2 local (q para salir)
 cd ~/Documents/Repos/vaults/Intership2026/HalLMediaPipe && uv run python src/main.py
 
-$ escena: echo -e 'menu\nsphere\nsixseven\npicker\nslingshot\nslingaim\nblackhole'
+$ escena: echo -e 'menu\npicker\nslingshot\nslingaim\nblackhole'
 
 % hall, legacy, stream
 

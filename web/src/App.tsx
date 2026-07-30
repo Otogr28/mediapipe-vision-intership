@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { LensedVideo } from "./gl/LensedVideo";
 import { WavesLayer } from "./gl/WavesLayer";
 import { ChargesLayer } from "./gl/ChargesLayer";
@@ -11,24 +11,11 @@ import { Greeting } from "./hud/Greeting";
 import { HintPanel } from "./hud/HintPanel";
 import { HudLayer } from "./hud/HudLayer";
 import { Intro } from "./hud/Intro";
-import { SixSeven } from "./hud/SixSeven";
 import { AimReadout, SlingshotLegend } from "./hud/Slingshot";
-import { AVATARS } from "./gl/avatars";
-import { isVrmReady } from "./gl/vrmState";
 import { setSkeletonView } from "./overlay/debugView";
 import { OverlayCanvas } from "./overlay/OverlayCanvas";
-import type {
-  GalleryObject,
-  SixSevenObject,
-  SlingshotObject,
-} from "./state/types";
+import type { GalleryObject, SlingshotObject } from "./state/types";
 import { useAppState } from "./state/useAppState";
-
-// Lazy so three.js + three-vrm (the biggest dependency) only download when
-// the user actually opens Vtuber — the black-hole / orbitals paths stay light.
-const VrmAvatar = lazy(() =>
-  import("./gl/VrmAvatar").then((m) => ({ default: m.VrmAvatar })),
-);
 
 /**
  * Layer stack, bottom to top (all sharing the .stage aspect-ratio box):
@@ -49,18 +36,11 @@ export function App() {
     new URLSearchParams(location.search).has("nointro"),
   );
   const [showDebug, setShowDebug] = useState(false);
-  // Raw-inference view: draw every tracked point on the body, hide the avatar.
+  // Raw-inference view: draw every tracked point on the body.
   // `k` toggles it; `?skeleton=1` opens straight into it (handy from the laptop).
   const [showSkeleton, setShowSkeleton] = useState(() =>
     new URLSearchParams(location.search).has("skeleton"),
   );
-  // `?avatar=N` fallback for local/mock runs whose backend doesn't send
-  // session.avatar_index (the real backend always does — see below).
-  const urlAvatar = (() => {
-    const n = Number(new URLSearchParams(location.search).get("avatar"));
-    return Number.isInteger(n) && n >= 0 && n < AVATARS.length ? n : 0;
-  })();
-
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "d") setShowDebug((v) => !v);
@@ -100,9 +80,6 @@ export function App() {
   const frameW = state?.frame.w ?? 1920;
   const frameH = state?.frame.h ?? 1080;
 
-  const sixseven = state?.objects.find(
-    (o): o is SixSevenObject => o.type === "sixseven",
-  );
   const slingshot = state?.objects.find(
     (o): o is SlingshotObject => o.type === "slingshot",
   );
@@ -113,18 +90,9 @@ export function App() {
     state?.objects.some((o) => o.type === "charges") ?? false;
   const hasMagnets =
     state?.objects.some((o) => o.type === "magnets") ?? false;
-  const hasVtuber =
-    state?.objects.some((o) => o.type === "vtuber") ?? false;
   const gallery = state?.objects.find(
     (o): o is GalleryObject => o.type === "gallery",
   );
-  // The backend's "Avatar" pinch button owns which model is shown (rides
-  // session.avatar_index); `urlAvatar` only covers mock backends that omit it.
-  const avatarIdx = (() => {
-    const n = state?.session.avatar_index;
-    return typeof n === "number" && n >= 0 && n < AVATARS.length ? n : urlAvatar;
-  })();
-
   return (
     <div className="viewport">
       <div className="stage" style={{ aspectRatio: `${frameW} / ${frameH}` }}>
@@ -162,37 +130,15 @@ export function App() {
           </HudLayer>
         )}
         <OverlayCanvas pairRef={pairRef} frameW={frameW} frameH={frameH} />
-        {hasVtuber && !skeletonView && (
-          <Suspense fallback={null}>
-            <VrmAvatar
-              key={AVATARS[avatarIdx].src}
-              src={AVATARS[avatarIdx].src}
-              pairRef={pairRef}
-              frameW={frameW}
-              frameH={frameH}
-            />
-          </Suspense>
-        )}
         <HudLayer frameW={frameW} frameH={frameH}>
           {state && (
             <>
               <Buttons buttons={state.buttons} speed={state.speed} />
-              {sixseven && <SixSeven obj={sixseven} frameW={frameW} />}
               {slingshot && (
                 <>
                   <SlingshotLegend />
                   <AimReadout obj={slingshot} />
                 </>
-              )}
-              {hasVtuber && (
-                <div
-                  className="vtuber-status data"
-                  style={{ left: 24, top: frameH - 44 }}
-                >
-                  <span className={isVrmReady() ? "on" : "off"}>●</span> avatar
-                  {"   "}
-                  <span className={state.pose ? "on" : "off"}>●</span> body
-                </div>
               )}
               {introDone && state.session.hint.visible && (
                 <HintPanel

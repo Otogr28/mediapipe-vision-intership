@@ -44,12 +44,6 @@ export function drawSkeleton(
   w: number,
   h: number,
 ) {
-  // In vtuber mode the puppet replaces the raw skeleton — drawing both would
-  // clutter the character with its own tracking lines. EXCEPT in skeleton view
-  // (hotkey `k` / `?skeleton=1`), where the avatar is hidden and we draw the
-  // full raw inference on the body instead.
-  if (state.objects.some((o) => o.type === "vtuber") && !isSkeletonView()) return;
-
   ctx.lineCap = "round";
   ctx.lineJoin = "round";
 

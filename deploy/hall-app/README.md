@@ -2,7 +2,7 @@
 
 Deploy + run the **interactive** HalLMediaPipe app on the Jetson Orin Nano:
 live camera feed with a real-time pose + hand skeleton and a pinch-driven UI
-(buttons, bouncing spheres, the black-hole lensing mode).
+(buttons, the experiments, the black-hole lensing mode).
 
 This is the *app itself* — distinct from `../camera-stream/`, which is only a
 headless MJPEG feed for watching the camera from the laptop.

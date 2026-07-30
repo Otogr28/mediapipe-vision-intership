@@ -1,5 +1,3 @@
-import { isVrmReady } from "../gl/vrmState";
-import { isSkeletonView } from "./debugView";
 import scatCatAliveUrl from "../assets/schrodinger/cat_alive.png";
 import scatCatDeadUrl from "../assets/schrodinger/cat_dead.png";
 import scatGunUrl from "../assets/schrodinger/gun.png";
@@ -22,16 +20,15 @@ import type {
   SchrodingerObject,
   SlingshotObject,
   SpacetimeObject,
-  SphereObject,
   Vec2,
   WavesObject,
 } from "../state/types";
 
 /**
- * Canvas renderers for the physics scene objects (sphere, slingshot,
- * orbitals) and the vtuber puppet. Pure rendering of the backend simulation
- * state, in frame pixels. The black hole is NOT here — it's the WebGL layer
- * (gl/LensedVideo).
+ * Canvas renderers for the physics scene objects (slingshot, orbitals,
+ * waves, charges, magnets, spacetime, schrodinger). Pure rendering of the
+ * backend simulation state, in frame pixels. The black hole is NOT here —
+ * it's the WebGL layer (gl/LensedVideo).
  */
 
 // ---- palette (RGB ports of the BGR constants in ui/interactables.py) ----
@@ -289,10 +286,6 @@ function drawForceArrow(
 }
 
 // ---- object renderers ---------------------------------------------------
-
-function drawSphere(ctx: CanvasRenderingContext2D, s: SphereObject) {
-  drawBall(ctx, s.x, s.y, s.r, s.grabbed);
-}
 
 function drawSlingshot(ctx: CanvasRenderingContext2D, s: SlingshotObject) {
   const [ax, ay] = s.anchor;
@@ -931,48 +924,6 @@ function drawMagnets(ctx: CanvasRenderingContext2D, o: MagnetsObject) {
   }
   ctx.textAlign = "left";
   ctx.textBaseline = "alphabetic";
-}
-
-// ---- vtuber avatar (loading state) ------------------------------------
-// The real avatar is the WebGL VRM (gl/VrmAvatar). Here we only dim the
-// camera and, until the model is live, show a clean loading spinner — NO
-// placeholder puppet (that stand-in was the "beta model" people saw first).
-
-function drawPuppet(
-  ctx: CanvasRenderingContext2D,
-  state: AppState,
-  now: number,
-) {
-  // Skeleton view hides the avatar and draws the raw inference on the body —
-  // so skip the dimming + spinner entirely and let the clear video show.
-  if (isSkeletonView()) return;
-  const w = state.frame.w;
-  const h = state.frame.h;
-  const bg = ctx.createRadialGradient(
-    w / 2, h * 0.42, h * 0.2, w / 2, h / 2, Math.max(w, h) * 0.75,
-  );
-  bg.addColorStop(0, "rgba(14,10,26,0.72)");
-  bg.addColorStop(1, "rgba(4,3,10,0.92)");
-  ctx.fillStyle = bg;
-  ctx.fillRect(0, 0, w, h);
-
-  if (isVrmReady()) return; // the VRM layer draws the character on top
-
-  const cx = w / 2;
-  const cy = h / 2;
-  const r = Math.min(w, h) * 0.05;
-  const a = (now / 1000) * 2.2;
-  ctx.strokeStyle = "rgba(127,180,255,0.85)";
-  ctx.lineWidth = 4;
-  ctx.lineCap = "round";
-  ctx.beginPath();
-  ctx.arc(cx, cy, r, a, a + Math.PI * 1.4);
-  ctx.stroke();
-  ctx.fillStyle = "rgba(237,241,247,0.7)";
-  ctx.font = "500 22px 'IBM Plex Sans', system-ui, sans-serif";
-  ctx.textAlign = "center";
-  ctx.textBaseline = "middle";
-  ctx.fillText("summoning avatar\u2026", cx, cy + r + 34);
 }
 
 // ---- spacetime (relativistic gravity) -----------------------------------
@@ -1836,9 +1787,6 @@ export function drawScene(
 ) {
   for (const obj of state.objects) {
     switch (obj.type) {
-      case "sphere":
-        drawSphere(ctx, obj);
-        break;
       case "slingshot":
         drawSlingshot(ctx, obj);
         break;
@@ -1857,14 +1805,11 @@ export function drawScene(
       case "spacetime":
         drawSpacetime(ctx, obj, state.frame.w, state.frame.h);
         break;
-      case "vtuber":
-        drawPuppet(ctx, state, _now);
-        break;
       case "schrodinger":
         drawSchrodinger(ctx, obj, _now, state.frame.w);
         break;
       default:
-        break; // sixseven + black_hole render in other layers
+        break; // black_hole renders in the GL layer
     }
   }
   // Every running experiment gets the QR plate (black hole included — its

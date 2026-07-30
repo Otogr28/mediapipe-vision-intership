@@ -285,7 +285,6 @@ def check_button_lists_agree():
     print("\n--- one button list, four consumers " + "-" * 33)
     for setup, label in (
         (lambda ui: None, "menu"),
-        (lambda ui: ui._set_state("interactables"), "interactables"),
         (lambda ui: ui._set_state("experiments"), "experiment picker"),
         (lambda ui: (ui._set_state("experiments"), ui._spawn_orbitals()),
          "orbitals (with palette)"),

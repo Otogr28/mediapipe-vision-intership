@@ -8,9 +8,8 @@ Run from the repo root (needs the repo venv for cv2/numpy):
 
     uv run python web/scripts/mock_backend.py [scene]
 
-Scenes: menu (default), attract, greeting, gallery, sphere, sixseven,
-slingshot, blackhole, picker, orbitals, orbaim, waves, charges, magnets,
-spacetime, vtuber, schrodinger.
+Scenes: menu (default), attract, greeting, gallery, slingshot, blackhole,
+picker, orbitals, orbaim, waves, charges, magnets, spacetime, schrodinger.
 Then point the vite dev server at it:  npm run dev  (same port 8092).
 """
 
@@ -168,124 +167,6 @@ def fake_hand(t):
     }
 
 
-def vtuber_center(t):
-    """Moving body centre (norm image) + half shoulder-width, so the avatar's
-    root-follow (translation) and distance-scale can be verified headless."""
-    cx = 0.5 + 0.22 * math.sin(t * 0.5)     # slide left/right across the frame
-    cy = 0.42 + 0.05 * math.sin(t * 0.37)   # drift up/down
-    hw = 0.10 + 0.03 * math.sin(t * 0.6)    # shoulder half-width -> avatar scale
-    return cx, cy, hw
-
-
-def vtuber_pose(t):
-    """Synthetic 33-landmark 2D pose (mirrored-feed labelling). The image-RIGHT
-    arm (12/14/16) is raised, the image-LEFT arm (11/13/15) is horizontal —
-    asymmetric so the mirror is obvious. The whole body slides + breathes
-    (vtuber_center) to exercise the avatar's screen-position follow + scale."""
-    wob = 0.03 * math.sin(t * 1.5)
-    cx, cy, hw = vtuber_center(t)
-    lm = [[cx, cy + 0.10, 0.5] for _ in range(33)]
-    lm[0] = [cx, cy - 0.12, 0.99]                      # nose
-    # image-LEFT arm — held out horizontally to the left
-    lm[11] = [cx - hw, cy, 0.99]                        # L shoulder
-    lm[13] = [cx - hw - 0.11, cy + 0.02, 0.99]         # L elbow
-    lm[15] = [cx - hw - 0.22, cy + 0.04 + wob, 0.99]   # L wrist
-    lm[19] = [cx - hw - 0.25, cy + 0.04 + wob, 0.99]   # L index
-    # image-RIGHT arm — raised straight up
-    lm[12] = [cx + hw, cy, 0.99]                        # R shoulder
-    lm[14] = [cx + hw + 0.04, cy - 0.12, 0.99]         # R elbow
-    lm[16] = [cx + hw + 0.08, cy - 0.26 + wob, 0.99]   # R wrist
-    lm[20] = [cx + hw + 0.10, cy - 0.30 + wob, 0.99]   # R index
-    # hips (spine gating)
-    lm[23] = [cx - 0.06, cy + 0.34, 0.9]               # L hip
-    lm[24] = [cx + 0.06, cy + 0.34, 0.9]               # R hip
-    return [[round(a, 4), round(b, 4), round(c, 2)] for a, b, c in lm]
-
-
-def vtuber_world(t):
-    """Synthetic metric 3D skeleton (`pose_world_landmarks`) matching the 2D
-    `vtuber_pose`: meters, origin at hips midpoint, +x image-right, +y DOWN,
-    +z away from camera. The image-right arm (idx 12/14/16) is raised and, on
-    a slow cycle, REACHES toward the camera (negative z) so the depth mapping
-    is visible; the image-left arm (11/13/15) is held out horizontally."""
-    reach = 0.5 * (1.0 - math.cos(t * 1.3))   # 0..1, raised arm reaches forward
-    zf = -0.38 * reach                        # toward camera (=> +z in three.js)
-    zl = 0.12 * math.sin(t * 1.5)             # left arm slow depth wobble
-    lm = [[0.0, 0.0, 0.0] for _ in range(33)]
-    lm[0] = [0.0, -0.72, -0.05]                       # nose
-    # image-LEFT arm (person's left) — held out horizontal to the left
-    lm[11] = [-0.18, -0.50, 0.0]                      # L shoulder
-    lm[13] = [-0.42, -0.50, zl]                       # L elbow
-    lm[15] = [-0.64, -0.50, zl]                       # L wrist
-    lm[19] = [-0.70, -0.50, zl]                       # L index
-    lm[17] = [-0.69, -0.47, zl]                       # L pinky
-    # image-RIGHT arm (person's right) — raised up, reaching toward camera
-    lm[12] = [0.18, -0.50, 0.0]                       # R shoulder
-    lm[14] = [0.30, -0.72, zf]                        # R elbow
-    lm[16] = [0.36, -0.95, zf]                        # R wrist
-    lm[20] = [0.38, -1.05, zf]                        # R index
-    lm[18] = [0.34, -1.03, zf]                        # R pinky
-    # hips + legs (mostly off-frame in the avatar shot; here just for the spine)
-    lm[23] = [-0.12, 0.0, 0.0]                        # L hip
-    lm[24] = [0.12, 0.0, 0.0]                         # R hip
-    lm[25] = [-0.13, 0.45, 0.0]                       # L knee
-    lm[26] = [0.13, 0.45, 0.0]                        # R knee
-    lm[27] = [-0.13, 0.90, 0.0]                       # L ankle
-    lm[28] = [0.13, 0.90, 0.0]                        # R ankle
-    return [[round(a, 3), round(b, 3), round(c, 3)] for a, b, c in lm]
-
-
-def _finger_points(mcp, segs, curl):
-    """MCP + 3 joint points for one finger, bending toward the palm (-z) as
-    `curl` (0..1) rises; more bend at the distal joints."""
-    pts = [list(mcp)]
-    pos = list(mcp)
-    ang = 0.0
-    for i, seg_len in enumerate(segs):
-        ang += curl * (0.5 if i == 0 else 1.0)
-        pos = [pos[0], pos[1] + seg_len * math.cos(ang),
-               pos[2] - seg_len * math.sin(ang)]
-        pts.append(list(pos))
-    return pts
-
-
-def fake_hand_world(t, side):
-    """Synthetic 21-pt metric hand skeleton (wrist origin). Fingers curl on a
-    slow cycle and the whole palm ROLLS about the finger axis so palm-facing is
-    visible. The absolute orientation is rough (exact convention is confirmed on
-    the real camera) — the point is that the palm turns and the fingers bend."""
-    curl = 0.5 * (1.0 - math.cos(t * 0.9))     # 0..1 open -> fist
-    roll = 0.9 * math.sin(t * 0.6)             # palm swivels toward/away
-    sx = 1.0 if side == "Right" else -1.0      # mirror the thumb for the left hand
-    w3 = [[0.0, 0.0, 0.0] for _ in range(21)]
-    bases = {
-        "thumb":  ([0.035 * sx, 0.015, 0.010], [0.035, 0.030, 0.025]),
-        "index":  ([0.022 * sx, 0.060, 0.0], [0.040, 0.025, 0.020]),
-        "middle": ([0.005 * sx, 0.065, 0.0], [0.045, 0.030, 0.022]),
-        "ring":   ([-0.015 * sx, 0.060, 0.0], [0.040, 0.028, 0.020]),
-        "little": ([-0.033 * sx, 0.052, 0.0], [0.030, 0.022, 0.016]),
-    }
-    slots = {"thumb": (1, 2, 3, 4), "index": (5, 6, 7, 8),
-             "middle": (9, 10, 11, 12), "ring": (13, 14, 15, 16),
-             "little": (17, 18, 19, 20)}
-    for name, (mcp, segs) in bases.items():
-        pts = _finger_points(mcp, segs, curl * (0.6 if name == "thumb" else 1.0))
-        for slot, p in zip(slots[name], pts):
-            w3[slot] = p
-    c, s = math.cos(roll), math.sin(roll)      # roll about the finger (y) axis
-    return [[round(x * c + z * s, 4), round(y, 4), round(-x * s + z * c, 4)]
-            for x, y, z in w3]
-
-
-def fake_hand_2d(world, wx, wy, scale=0.7):
-    """21 norm-image [x,y] points: the 3D hand's (x,y) projected around the wrist
-    screen pos, so the skeleton view shows a real hand shape. Only [0] (wrist) is
-    read for hand->avatar side matching; the rest feed the debug overlay."""
-    w0 = world[0]
-    return [[round(wx + (p[0] - w0[0]) * scale, 4),
-             round(wy + (p[1] - w0[1]) * scale, 4)] for p in world]
-
-
 def scene_state(t):
     margin = int(H * 0.12)
     hover = int(t) % 2 == 0
@@ -337,11 +218,11 @@ def scene_state(t):
 
     elif SCENE == "menu":
         bw, bh, gap = 260, 70, 16
-        sx = (W - 3 * bw - 2 * gap) // 2
+        sx = (W - 2 * bw - gap) // 2
         base["buttons"] = [
-            btn("menu.interactables", "Games", sx, margin, bw, bh, hovered=hover),
-            btn("menu.experiments", "Experiments", sx + bw + gap, margin, bw, bh),
-            btn("menu.gallery", "Gallery", sx + 2 * (bw + gap), margin, bw, bh),
+            btn("menu.experiments", "Experiments", sx, margin, bw, bh,
+                hovered=hover),
+            btn("menu.gallery", "Gallery", sx + bw + gap, margin, bw, bh),
         ]
         base["session"]["hint"] = {"visible": True}
 
@@ -379,44 +260,6 @@ def scene_state(t):
                 dict(ATTRACT_SLIDES[i], index=i) for i in range(lo, hi + 1)
             ] if ATTRACT_SLIDES else [],
         }]
-
-    elif SCENE in ("sphere", "sixseven"):
-        base["session"]["state"] = "interactables"
-        base["buttons"] = [
-            btn("spawn.sphere", "Sphere", margin, margin, 120, 50),
-            btn("spawn.sixseven", "6 7 Counter", margin + 130, margin, 170, 50),
-            btn("reset", "Reset", W - 130 - margin, H - 50 - margin, 130, 50),
-        ]
-        if SCENE == "sphere":
-            base["objects"] = [{
-                "type": "sphere", "id": 0,
-                "x": round(W / 2 + 320 * math.sin(t * 1.7), 1),
-                "y": round(H / 2 + 180 * math.sin(t * 2.3), 1),
-                "r": 40, "grabbed": int(t) % 4 == 0,
-            }]
-        else:
-            # Walk the whole round machine on a 24 s cycle — 4 s armed, 14 s
-            # running, 6 s showing the board — so one `shot.mjs` pass at a
-            # chosen offset can catch any phase, including the "over" screen
-            # with the player's row highlighted.
-            round_s, cycle = 14.0, 24.0
-            c = t % cycle
-            if c < 4.0:
-                phase, remaining, count, rank = "ready", round_s, 0, None
-            elif c < 4.0 + round_s:
-                phase = "running"
-                remaining = round_s - (c - 4.0)
-                count = int((c - 4.0) * 2.2)
-                rank = None
-            else:
-                phase, remaining, count, rank = "over", 0.0, 30, 2
-            base["objects"] = [{
-                "type": "sixseven", "count": count,
-                "flash": max(0.0, 1.0 - (t % 1.0) * 2),
-                "phase": phase, "remaining": round(remaining, 2),
-                "round_s": round_s,
-                "board": [41, 38, 30, 19, 12], "rank": rank,
-            }]
 
     elif SCENE == "picker":
         base["session"]["state"] = "experiments"
@@ -831,54 +674,6 @@ def scene_state(t):
                 else "It's DEAD - the hammer smashed the poison."
                 " Pinch the box to play again")
         base["objects"] = [obj]
-
-    elif SCENE == "vtuber":
-        base["session"]["state"] = "interactables"
-        base["buttons"] = [
-            btn("spawn.sphere", "Sphere", margin, margin, 120, 50),
-            btn("spawn.vtuber", "Rigged Model", margin + 130, margin, 150, 50, pressed=True),
-            btn("reset", "Reset", W - 130 - margin, H - 50 - margin, 130, 50),
-        ]
-        # Two hands placed at each arm's WRIST so the avatar's image-x hand
-        # matcher pairs hand<->arm on the same screen side; each carries a full
-        # 21-pt 3D `world` skeleton (palm roll + finger curl) + handedness.
-        cx, cy, hw = vtuber_center(t)
-        wl_x, wl_y = cx - hw - 0.22, cy + 0.04      # image-LEFT wrist (horizontal arm)
-        wr_x, wr_y = cx + hw + 0.08, cy - 0.26      # image-RIGHT wrist (raised arm)
-        world_r = fake_hand_world(t, "Right")
-        world_l = fake_hand_world(t, "Left")
-        base["hands"] = [
-            {"id": "handR", "cursor": [round(wr_x * W, 1), round(wr_y * H, 1)],
-             "press_cursor": [round(wr_x * W, 1), round(wr_y * H, 1)], "state": "open",
-             "progress": round(0.5 * (1 - math.cos(t * 2.1)), 3),
-             "ratio": 0.7, "pinching": False, "held": False, "seen_ms": 0.0,
-             "landmarks": fake_hand_2d(world_r, wr_x, wr_y),
-             "world": world_r, "handedness": "Right"},
-            {"id": "handL", "cursor": [round(wl_x * W, 1), round(wl_y * H, 1)],
-             "press_cursor": [round(wl_x * W, 1), round(wl_y * H, 1)], "state": "open",
-             "progress": round(0.5 * (1 - math.cos(t * 1.7)), 3),
-             "ratio": 0.7, "pinching": False, "held": False, "seen_ms": 0.0,
-             "landmarks": fake_hand_2d(world_l, wl_x, wl_y),
-             "world": world_l, "handedness": "Left"},
-        ]
-        base["pose"] = vtuber_pose(t)
-        base["pose_world"] = vtuber_world(t)
-        base["objects"] = [{
-            "type": "vtuber", "t": round(t % 1000.0, 3),
-            "mouth": round(0.5 * (1 - math.cos(t * 1.8)), 3),
-        }]
-        # "Points" pinch toggle (alternates every 4 s so a screenshot catches
-        # both the avatar and the skeleton view driven by the backend flag).
-        # MOCK_NO_POINTS=1 pins it off so the avatar is always shown (handy when
-        # verifying a specific avatar without waiting out the toggle).
-        show_points = int(t / 4) % 2 == 1 and os.environ.get("MOCK_NO_POINTS") != "1"
-        base["session"]["show_points"] = show_points
-        # Cycle the avatar every 5 s so the state-driven switcher is testable
-        # (the real backend sets this from the "Avatar" pinch button).
-        base["session"]["avatar_index"] = int(t / 5) % 5
-        pbtn = btn("points", "Points", margin, H - 50 - margin, 150, 50)
-        pbtn["selected"] = show_points
-        base["buttons"].append(pbtn)
 
     return base
 
