@@ -34,7 +34,12 @@ export function DebugHud({ state, frameH }: { state: AppState; frameH: number })
             <div className={d.presence.present ? "" : "dim"}>
               presence {d.presence.present ? "YES" : "no"} via{" "}
               {d.presence.source ?? "--"} · motion{" "}
-              {d.presence.motion.toFixed(3)}
+              {d.presence.motion.toFixed(3)} · blob{" "}
+              {d.presence.blob.toFixed(3)} · tall{" "}
+              {d.presence.span.toFixed(2)}
+              {d.presence.still !== undefined && (
+                <> · still {d.presence.still.toFixed(0)}s</>
+              )}
             </div>
           )}
         </>

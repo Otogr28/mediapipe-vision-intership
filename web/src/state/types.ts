@@ -451,6 +451,9 @@ export interface DebugState {
     /** longest side of the biggest tracked hand's bounding box */
     hand: number;
     source: "hand" | "pose" | "motion" | null;
+    /** seconds without any frame-to-frame change — the static-release
+     *  countdown that breaks the stale-background presence latch */
+    still?: number;
   } | null;
 }
 

@@ -41,6 +41,18 @@ still keep registering, instead of dissolving into the background a few
 seconds after they stop moving — which is exactly when they are reading the
 screen and most need the exhibit to stay awake.
 
+That same detail creates a deadlock the detector must break itself out of:
+if the whole picture shifts while somebody is present (the camera's
+auto-exposure re-adapting around them, the corridor light changing), the
+frozen background is stale when they leave — the empty room reads as one
+frame-wide blob, presence never releases, and the background can never
+re-learn because presence never releases. The way out is that such a
+difference is DEAD: consecutive thumbnails are identical, while a standing
+person's edges flicker every few seconds however still they hold. Presence
+held ``PRESENCE_STATIC_RELEASE_S`` with zero frame-to-frame activity is
+therefore ruled scenery — the background re-seeds from the current frame
+and presence releases (see ``config.PRESENCE_STATIC_RELEASE_S``).
+
 The exception is the first ``PRESENCE_WARMUP_S``, where the background is
 learned fast and motion is ignored entirely. Cameras hand back a black or
 half-exposed frame or two on open; seeded as the background, every later
@@ -57,9 +69,10 @@ import numpy as np
 from config import (PRESENCE_BG_TAU_S, PRESENCE_ENTER_FRAC, PRESENCE_ENTER_S,
                     PRESENCE_ENTER_SPAN, PRESENCE_EXIT_FRAC,
                     PRESENCE_EXIT_SPAN, PRESENCE_GRID_W,
-                    PRESENCE_HAND_EXIT_SPAN, PRESENCE_HAND_SPAN,
+                    PRESENCE_HAND_EXIT_SPAN, PRESENCE_HAND_SPAN, PRESENCE_MODE,
                     PRESENCE_PIXEL_DELTA, PRESENCE_POSE_EXIT_SPAN,
-                    PRESENCE_POSE_SPAN, PRESENCE_WARMUP_S)
+                    PRESENCE_POSE_SPAN, PRESENCE_STATIC_RELEASE_S,
+                    PRESENCE_WARMUP_S)
 
 # Speckle filter for the motion mask. On a 64px-wide thumbnail one pixel is a
 # big chunk of the room, so a 3x3 open only removes isolated sensor noise —
@@ -119,7 +132,11 @@ class PresenceDetector:
     sighting, which is what absorbs a visitor briefly stepping out of frame.
     """
 
-    def __init__(self):
+    def __init__(self, mode=None):
+        # "hand" (default, config.PRESENCE_MODE): only the hand signal may
+        # assert presence — the picture is never consulted, so none of the
+        # background machinery below runs. "full": hand + motion + pose.
+        self.mode = mode if mode is not None else PRESENCE_MODE
         self.present = False
         # Raw changed-pixel fraction. No longer a threshold input — kept
         # because it is the one number that says "the camera is producing a
@@ -133,7 +150,12 @@ class PresenceDetector:
         self.pose_span = 0.0
         # What last asserted presence: "hand", "pose", "motion" or None.
         self.source = None
+        # Seconds since the picture last changed frame-to-frame — the
+        # "is this difference alive" number behind the static release.
+        self.still_s = 0.0
         self._bg = None
+        self._prev = None
+        self._last_activity_t = None
         self._enter_since = None
         self._last_t = None
         self._first_t = None
@@ -184,11 +206,51 @@ class PresenceDetector:
         self.hand_span = _hand_span(hand_result)
         self.pose_span = _pose_span(pose_landmarks)
 
-        if frame is not None:
+        # Hand-only mode (the default, see config.PRESENCE_MODE): the picture
+        # is never consulted, so the background, the blobs, the activity
+        # tracker and the static release all stay dormant. What remains is
+        # exactly the operator's rule: a hand big enough in frame arms the
+        # exhibit, its absence releases it, and UIManager's ATTRACT_IDLE_S
+        # turns that absence into the slideshow.
+        use_motion = self.mode != "hand"
+
+        if frame is not None and use_motion:
             small = self._thumbnail(frame)
             if self._bg is None or self._bg.shape != small.shape:
                 self._bg = small.copy()
             self._measure_motion(small)
+
+            # Frame-to-frame activity: is the picture ALIVE, regardless of
+            # how far it sits from the learned background? Same delta and
+            # speckle filter as the motion mask, so "still" means still to
+            # the same instrument that asserted the presence.
+            if self._prev is None or self._prev.shape != small.shape:
+                self._last_activity_t = now
+            else:
+                moved = (np.abs(small - self._prev)
+                         > PRESENCE_PIXEL_DELTA).astype(np.uint8)
+                if cv2.morphologyEx(moved, cv2.MORPH_OPEN, _OPEN_KERNEL).any():
+                    self._last_activity_t = now
+            self._prev = small
+            self.still_s = now - self._last_activity_t
+
+            # The deadlock breaker (see the module docstring): presence held
+            # by a difference that has shown no life whatsoever for
+            # PRESENCE_STATIC_RELEASE_S is a lighting/exposure shift baked
+            # into a stale background, not a person. Re-seed and release, so
+            # the idle slideshow can come back instead of never. Only the
+            # MOTION source can deadlock — hand and pose re-assert from the
+            # detectors every frame and never consult the background — and
+            # gating on it keeps a (phantom) hand from re-seeding the
+            # background with a person baked in.
+            if (self.present and self.source == "motion" and not warming
+                    and self.still_s > PRESENCE_STATIC_RELEASE_S):
+                self._bg = small.copy()
+                self._measure_motion(small)
+                self.present = False
+                self.source = None
+                self._enter_since = None
+
             if (warming or not self.present) and dt > 0.0:
                 # Learn the empty room, and ONLY the empty room: adapting
                 # while somebody is standing there would quietly absorb them.
@@ -204,9 +266,9 @@ class PresenceDetector:
         near = not self.present
         hand_ok = self.hand_span >= (PRESENCE_HAND_SPAN if near
                                      else PRESENCE_HAND_EXIT_SPAN)
-        pose_ok = self.pose_span >= (PRESENCE_POSE_SPAN if near
-                                     else PRESENCE_POSE_EXIT_SPAN)
-        motion_ok = (
+        pose_ok = use_motion and self.pose_span >= (
+            PRESENCE_POSE_SPAN if near else PRESENCE_POSE_EXIT_SPAN)
+        motion_ok = use_motion and (
             self.blob_frac >= (PRESENCE_ENTER_FRAC if near
                                else PRESENCE_EXIT_FRAC)
             and self.blob_span >= (PRESENCE_ENTER_SPAN if near
@@ -256,4 +318,8 @@ class PresenceDetector:
             "span": round(self.blob_span, 3),
             "hand": round(self.hand_span, 3),
             "source": self.source,
+            # Seconds without any frame-to-frame change — the static-release
+            # countdown. Watching it climb while the room is empty and
+            # "present" reads YES is watching the latch being defused.
+            "still": round(self.still_s, 1),
         }

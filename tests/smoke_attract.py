@@ -39,7 +39,7 @@ import numpy as np  # noqa: E402
 from smoke_gestures import make_hand  # noqa: E402
 
 from config import (ATTRACT_IDLE_S, GREETING_S, PRESENCE_ENTER_S,  # noqa: E402
-                    PRESENCE_WARMUP_S)
+                    PRESENCE_STATIC_RELEASE_S, PRESENCE_WARMUP_S)
 from ui.manager import UIManager  # noqa: E402
 from ui.presence import PresenceDetector  # noqa: E402
 
@@ -150,12 +150,56 @@ def _run(ui, frame, hand=None, seconds=1.0, fps=30.0):
     return ui.phase
 
 
-def check_presence():
-    """The detector on its own: empty room quiet, visitor detected, and a
-    visitor who stops moving stays detected (the background must not learn
-    them)."""
-    print("\n--- presence detector " + "-" * 47)
+def check_hand_mode():
+    """The DEFAULT presence mode (config.PRESENCE_MODE == "hand"): only a
+    hand big enough in frame counts. The operator's rule — show it a hand,
+    it goes live; hide your hands for ATTRACT_IDLE_S, the slideshow returns.
+    Motion must be completely inert, or somebody watching the slideshow
+    keeps it off just by standing there."""
+    print("\n--- hand-only mode (the default) " + "-" * 36)
+    room = empty_room()
+
     det = PresenceDetector()
+    _check(det.mode == "hand", f"the default mode is hand ({det.mode})")
+    t = CLOCK[0]
+    for _ in range(int((PRESENCE_WARMUP_S + 2.0) * 30)):
+        t += 1 / 30
+        det.update(room, now=t)
+    _check(not det.present, "empty room reads as absent")
+
+    # A person-sized moving blob — the thing that wakes "full" mode — must
+    # do NOTHING here.
+    for _ in range(int((PRESENCE_ENTER_S + 2.0) * 30)):
+        t += 1 / 30
+        det.update(visitor(room), now=t)
+    _check(not det.present,
+           "somebody standing in frame WITHOUT showing a hand stays absent")
+
+    t += 1 / 30
+    det.update(visitor(room), hand_result=_HandResult(), now=t)
+    _check(det.present and det.source == "hand",
+           "a hand at the screen asserts presence on the spot")
+
+    t += 1 / 30
+    det.update(visitor(room), hand_result=None, now=t)
+    _check(not det.present,
+           "hiding the hand releases it on the next frame "
+           "(UIManager's idle timer owns the 5 s)")
+
+    small = _HandResult(scaled_hand(make_hand(curl=0.0), 0.3))
+    t += 1 / 30
+    det.update(visitor(room), hand_result=small, now=t)
+    _check(not det.present,
+           f"a hand across the room is still too small (span "
+           f"{det.hand_span:.2f} < gate)")
+
+
+def check_presence():
+    """The FULL mode (HALL_PRESENCE=full) detector on its own: empty room
+    quiet, visitor detected, and a visitor who stops moving stays detected
+    (the background must not learn them)."""
+    print("\n--- presence detector (full mode) " + "-" * 35)
+    det = PresenceDetector(mode="full")
     room = empty_room()
     t = CLOCK[0]
     for _ in range(int((PRESENCE_WARMUP_S + 2.0) * 30)):  # learn the room
@@ -187,7 +231,7 @@ def check_presence():
 
     # A hand alone is enough, with no motion signal at all — as long as it is
     # big enough in frame to be a hand at the screen.
-    det2 = PresenceDetector()
+    det2 = PresenceDetector(mode="full")
     det2.update(None, hand_result=_HandResult(), now=CLOCK[0])
     _check(det2.present and det2.source == "hand",
            "a hand held at the screen asserts presence with no frame at all")
@@ -206,7 +250,7 @@ def check_distance():
     room = empty_room()
 
     def settled():
-        det = PresenceDetector()
+        det = PresenceDetector(mode="full")
         t = CLOCK[0]
         for _ in range(int((PRESENCE_WARMUP_S + 2.0) * 30)):
             t += 1 / 30
@@ -242,28 +286,101 @@ def check_distance():
 
     # ...and the same gate on the hand signal.
     small = _HandResult(scaled_hand(make_hand(curl=0.0), 0.3))
-    det = PresenceDetector()
+    det = PresenceDetector(mode="full")
     det.update(None, hand_result=small, now=CLOCK[0])
     _check(not det.present,
            f"a hand across the room is not a visitor "
            f"(span {det.hand_span:.2f})")
 
 
+def check_static_release():
+    """The presence latch-up, and the escape hatch that breaks it.
+
+    The background EMA freezes while somebody is present, and presence only
+    releases when the frame matches that background again — so a global
+    brightness shift during a visit (the camera's auto-exposure re-adapting
+    around the visitor) used to leave the EMPTY room reading as one
+    frame-wide blob forever: present never released, the background never
+    re-learned, and the idle slideshow never came back after somebody used
+    an experiment. The escape hatch rules a difference with zero
+    frame-to-frame life in it for PRESENCE_STATIC_RELEASE_S to be scenery.
+    """
+    print("\n--- static release (presence latch-up) " + "-" * 30)
+    room = empty_room()
+    # The same empty room after the exposure shift: globally brighter by
+    # more than PRESENCE_PIXEL_DELTA, so every pixel differs from the
+    # learned background at once.
+    shifted = np.clip(room.astype(np.int16) + 40, 0, 255).astype(np.uint8)
+
+    det = PresenceDetector(mode="full")
+    t = CLOCK[0]
+    for _ in range(int((PRESENCE_WARMUP_S + 2.0) * 30)):
+        t += 1 / 30
+        det.update(room, now=t)
+    for _ in range(int((PRESENCE_ENTER_S + 0.5) * 30)):
+        t += 1 / 30
+        det.update(visitor(room), now=t)
+    _check(det.present, "visitor asserted via motion (the latch precondition)")
+
+    # Visitor leaves; the exposure shift they caused stays. Without the
+    # escape hatch this held `present` forever.
+    for _ in range(int(5.0 * 30)):
+        t += 1 / 30
+        det.update(shifted, now=t)
+    _check(det.present,
+           "the stale-background blob does keep presence at first (latched)")
+    for _ in range(int((PRESENCE_STATIC_RELEASE_S + 2.0) * 30)):
+        t += 1 / 30
+        det.update(shifted, now=t)
+    _check(not det.present,
+           f"a dead frame-wide difference releases within "
+           f"{PRESENCE_STATIC_RELEASE_S:.0f} s (still {det.still_s:.0f} s)")
+    for _ in range(int(5.0 * 30)):
+        t += 1 / 30
+        det.update(shifted, now=t)
+    _check(not det.present and det.blob_frac < 0.01,
+           "...and the re-seeded background keeps the empty room absent")
+
+    # End to end, in the DEFAULT hand-only mode: the latch cannot form at
+    # all, because the picture is never consulted. A visit that bakes in an
+    # exposure shift still hands the slideshow back on the idle timer.
+    ui = UIManager(W, H, gpu_effects=False)
+    hand = _HandResult()
+    _run(ui, room, seconds=PRESENCE_WARMUP_S + 2.0)
+    _run(ui, room, hand=hand, seconds=0.3)
+    _run(ui, room, hand=hand, seconds=GREETING_S + 0.5)
+    _check(ui.phase == "live", "a raised hand walked up to a live exhibit")
+    ui._set_state("experiments")
+    ui._spawn_slingshot()
+    _run(ui, shifted, seconds=ATTRACT_IDLE_S + 2.0)
+    _check(ui.phase == "attract",
+           "an exposure shift baked in during the visit no longer keeps the "
+           "slideshow away — hand mode never consults the picture")
+
+
 def check_phases():
-    """The manager's attract -> greeting -> live -> attract cycle."""
+    """The manager's attract -> greeting -> live -> attract cycle, driven
+    the way the default hand-only mode is driven: by a hand appearing and
+    disappearing. (A person-shaped motion blob no longer wakes it — that is
+    check_hand_mode's business.)"""
     print("\n--- phase machine " + "-" * 51)
     ui = UIManager(W, H, gpu_effects=False)
     room = empty_room()
     person = visitor(room)
+    hand = _HandResult()
 
     _check(ui.phase == "attract", "boots into attract")
     _run(ui, room, seconds=PRESENCE_WARMUP_S + 2.0)
     _check(ui.phase == "attract", "stays in attract with an empty room")
 
-    _run(ui, person, seconds=PRESENCE_ENTER_S + 0.7)
-    _check(ui.phase == "greeting", "somebody walking up triggers the greeting")
+    _run(ui, person, seconds=PRESENCE_ENTER_S + 2.0)
+    _check(ui.phase == "attract",
+           "somebody in frame WITHOUT a hand up does not wake it")
 
-    _run(ui, person, seconds=GREETING_S + 0.5)
+    _run(ui, person, hand=hand, seconds=0.3)
+    _check(ui.phase == "greeting", "a raised hand triggers the greeting")
+
+    _run(ui, person, hand=hand, seconds=GREETING_S + 0.5)
     _check(ui.phase == "live", "the greeting hands over to the live UI")
 
     # Enter an experiment, then leave: the next visitor must not inherit it.
@@ -281,7 +398,7 @@ def check_phases():
 
     # ...and the onboarding hint comes back for that next visitor.
     ui._has_interacted = True
-    _run(ui, person, seconds=PRESENCE_ENTER_S + 0.7)
+    _run(ui, person, hand=hand, seconds=0.3)
     _check(ui.phase == "greeting" and not ui._has_interacted,
            "the next visitor gets the onboarding hint back")
 
@@ -308,15 +425,17 @@ def check_renderers():
     person = visitor(room)
 
     # Let the presence warm-up pass with an empty room first, the way the
-    # exhibit actually boots.
+    # exhibit actually boots. Arrival is a raised hand (the default
+    # hand-only presence mode).
+    hand = _HandResult()
     _run(ui, room, seconds=PRESENCE_WARMUP_S + 0.5)
 
     for phase, frame in (("attract", room), ("greeting", person),
                          ("live", person)):
         if phase == "greeting":
-            _run(ui, person, seconds=PRESENCE_ENTER_S + 0.7)
+            _run(ui, person, hand=hand, seconds=0.3)
         elif phase == "live":
-            _run(ui, person, seconds=GREETING_S + 0.5)
+            _run(ui, person, hand=hand, seconds=GREETING_S + 0.5)
         _check(ui.phase == phase, f"reached phase {phase!r}")
 
         out = np.zeros((H, W, 3), np.uint8)
@@ -421,30 +540,31 @@ def check_forced_idle():
     ui = UIManager(W, H, gpu_effects=False)
     room = empty_room()
     person = visitor(room)
+    hand = _HandResult()
 
     _run(ui, room, seconds=PRESENCE_WARMUP_S + 2.0)
-    _run(ui, person, seconds=PRESENCE_ENTER_S + 0.7)
-    _run(ui, person, seconds=GREETING_S + 0.5)
-    _check(ui.phase == "live", "starts live, with a visitor in frame")
+    _run(ui, person, hand=hand, seconds=0.3)
+    _run(ui, person, hand=hand, seconds=GREETING_S + 0.5)
+    _check(ui.phase == "live", "starts live, with a visitor's hand in frame")
     ui._set_state("experiments")
     ui._spawn_slingshot()
 
     control.set_forced_idle(True)
-    _run(ui, person, seconds=0.2)
+    _run(ui, person, hand=hand, seconds=0.2)
     _check(ui.phase == "attract", "forcing idle takes over mid-visit")
     _check(ui._active_experiment is None and ui.state == "menu",
            "...and resets the app, leaving nothing half-built behind it")
 
-    _run(ui, person, seconds=ATTRACT_IDLE_S + 2.0)
+    _run(ui, person, hand=hand, seconds=ATTRACT_IDLE_S + 2.0)
     _check(ui.phase == "attract",
-           "a visitor filling the frame does NOT release the force")
+           "a visitor's hand at the screen does NOT release the force")
 
     out = np.zeros((H, W, 3), np.uint8)
     ui.draw(out)
     _check(out.any(), "the slideshow is what gets drawn while forced")
 
     control.set_forced_idle(False)
-    _run(ui, person, seconds=0.2)
+    _run(ui, person, hand=hand, seconds=0.2)
     _check(ui.phase == "greeting",
            "releasing it greets whoever is standing there, same frame")
     control.reset()
@@ -533,8 +653,10 @@ def check_control_endpoint():
 def main():
     install_clock()
     try:
+        check_hand_mode()
         check_presence()
         check_distance()
+        check_static_release()
         check_phases()
         check_renderers()
         check_gallery()

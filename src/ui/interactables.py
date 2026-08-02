@@ -65,8 +65,8 @@ from config import (BH_DEFAULT_POS_FACTOR, BH_DISK_BRIGHTNESS,
                     WAVE_MAX_SOURCES, WAVE_MAX_SUBSTEPS, WAVE_PHYS_DT,
                     WAVE_RAMP_S, WAVE_SOURCE_TYPES, WAVE_SPEED_PX_S,
                     WAVE_TIME_SCALES)
-from detection.gestures import (hand_id, hand_scale, pinch_info, pinch_infos,
-                                pinch_state)
+from detection.gestures import (hand_id, hand_reserved, hand_scale, pinch_info,
+                                pinch_infos, pinch_state)
 from ui.button import Button
 
 
@@ -3259,7 +3259,29 @@ class Spacetime:
         # frame to frame (the dict order is not).
         held = sorted((hid, m.cursor) for hid, m in pinch_infos() if m.closed)
 
-        if len(held) >= 2:
+        if self._rot_origin is None:
+            # A rotate would START on this frame, and starting is what has
+            # to respect the rest of the app. This raw `pinch_infos` read
+            # bypasses two filters `pinch_state` gives every other
+            # initiation in the file: a hand a button reserved this frame
+            # (closing on a Spacetime palette button used to press it AND
+            # seize the camera — the exact cross-talk `reserve_hand` was
+            # built to stop), and a grace-window ghost — a hand missing
+            # from THIS frame's result whose machine still reports closed
+            # for up to PINCH_TRACK_GRACE_S, which could anchor a gesture
+            # nobody can steer. Mid-rotate the raw list stands, the way a
+            # drag already under way keeps its hold while crossing a
+            # button: only starting is gated.
+            live = set()
+            if hand_result is not None:
+                live = {hand_id(hand_result, i)
+                        for i in range(len(hand_result.hand_landmarks))}
+            starters = [(hid, cur) for hid, cur in held
+                        if hid in live and not hand_reserved(hid)]
+        else:
+            starters = held
+
+        if len(starters) >= 2:
             # Two pinches mean "rotate", and they SUPERSEDE whatever one hand
             # had started — the same promotion a touchscreen does when a
             # one-finger pan becomes a two-finger gesture. Dropping the pending

@@ -278,6 +278,57 @@ def check_reservation_is_per_frame():
            "and the scene hears it again (+%d)" % (len(exp.charges) - before))
 
 
+class _TwoHandResult:
+    def __init__(self, a, b):
+        self.hand_landmarks = [a, b]
+        self.handedness = []      # ids fall back to hand_0 / hand_1
+
+
+def _feed2(ui, lms_a, lms_b, frames=6):
+    result = _TwoHandResult(lms_a, lms_b)
+    blank = np.zeros((H, W, 3), np.uint8)
+    for _ in range(frames):
+        ui.update(result, None, frame=blank)
+    return result
+
+
+def check_two_hand_rotate_respects_buttons():
+    """Spacetime's camera rotate is the one interaction that STARTS from the
+    raw `pinch_infos` snapshot (two simultaneous closed hands), which does
+    not filter reserved hands the way `pinch_state` does. Unguarded, closing
+    on a Spacetime palette button while the other hand was closed pressed
+    the button AND seized the camera — the same cross-talk rule 1 exists
+    for, one level up. The start gate must ignore reserved hands; two free
+    hands must still rotate."""
+    print("\n--- two-hand rotate vs a button " + "-" * 37)
+
+    # One hand parked on a palette button, the other closed in open space:
+    # the rotate must NOT start.
+    ui = _live_manager()
+    ui._set_state("experiments")
+    ui._spawn_spacetime()
+    exp = ui._active_experiment
+    _bid, btn, centre = _scene_palette_button(ui)
+    if centre is None:
+        _check(False, "spacetime has no palette button to test against")
+        return
+    free = (W * 0.6, H * 0.5)
+    _feed2(ui, _hand_at(*centre, curl=0.0), _hand_at(*free, curl=0.0))
+    _feed2(ui, _hand_at(*centre, curl=0.9), _hand_at(*free, curl=0.9))
+    _check(not exp.rotating,
+           "a hand a button reserved cannot help start a rotate")
+
+    # Both hands free: the rotate still works.
+    ui = _live_manager()
+    ui._set_state("experiments")
+    ui._spawn_spacetime()
+    exp = ui._active_experiment
+    a, b = (W * 0.38, H * 0.5), (W * 0.62, H * 0.5)
+    _feed2(ui, _hand_at(*a, curl=0.0), _hand_at(*b, curl=0.0))
+    _feed2(ui, _hand_at(*a, curl=0.9), _hand_at(*b, curl=0.9))
+    _check(exp.rotating, "two free closed hands still rotate the camera")
+
+
 def check_button_lists_agree():
     """`_active_buttons()` feeds update, reserve, to_state and draw. If it
     ever disagreed with what is serialized, the browser would show a button
@@ -307,6 +358,7 @@ def main():
     check_hover_alone_is_enough()
     check_drag_survives_a_button()
     check_reservation_is_per_frame()
+    check_two_hand_rotate_respects_buttons()
     check_button_lists_agree()
     print()
     if FAILURES:

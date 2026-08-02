@@ -557,9 +557,13 @@ HINT_TEXT = ("Pinch your fingers to interact" if DEMO_GESTURE == "pinch"
 ATTRACT_ENABLED = os.environ.get("HALL_ATTRACT", "1") == "1"
 
 # Seconds of continuous absence before the exhibit goes back to the slideshow.
-# Long enough to survive a visitor stepping out of frame to fetch a friend,
-# short enough that the display is not left mid-experiment for the next one.
-ATTRACT_IDLE_S = 10.0
+# 5.0 at the operator's request (2026-08-02): the display should fall back to
+# the photographs almost as soon as the visitor leaves, whatever state it was
+# in. History: 30 -> 10 (2026-07-30) -> 5. If this proves too eager (somebody
+# stepping aside to fetch a friend gets the app reset on them), those were
+# the earlier values. Presence exit hysteresis still runs first, so the
+# wall-clock time from walking away is exit-debounce + this.
+ATTRACT_IDLE_S = 5.0
 
 # Seconds per slide, and the cross-fade between them.
 ATTRACT_SLIDE_S = 6.5
@@ -654,6 +658,21 @@ ATTRACT_TITLE = "Physics and Engineering Life"
 # The background is an EMA that only adapts while nobody is present, so a
 # visitor who walks up and then stands perfectly still keeps registering
 # instead of being absorbed into the background after a few seconds.
+# Which signals may assert presence (HALL_PRESENCE):
+#   "hand" (default) — ONLY a tracked hand big enough in frame counts. The
+#          operator's ruling (2026-08-02): show the display a hand within
+#          reach and it goes live; hide your hands for ATTRACT_IDLE_S and the
+#          slideshow returns. Predictable, and immune by construction to the
+#          background latch PRESENCE_STATIC_RELEASE_S exists for (no
+#          background is consulted at all). The motion signal, tested live,
+#          kept the exhibit awake for ANYBODY standing in frame — including
+#          somebody just watching the slideshow — which read as "idle never
+#          engages".
+#   "full" — the original three OR-ed signals (hand + frame motion against a
+#          learned background + opportunistic pose): wakes for somebody
+#          walking up with their hands down, at the cost of the above.
+PRESENCE_MODE = os.environ.get("HALL_PRESENCE", "hand")
+
 PRESENCE_GRID_W = 64            # thumbnail width in px (height keeps aspect)
 PRESENCE_PIXEL_DELTA = 18       # per-pixel gray difference counted as "changed"
 
@@ -690,6 +709,25 @@ PRESENCE_POSE_EXIT_SPAN = 0.30
 # The enter thresholds must hold this long before presence is asserted, so a
 # door swinging or a light switching does not wake the exhibit.
 PRESENCE_ENTER_S = 0.6
+
+# The escape hatch for the presence LATCH-UP, measured before it was built:
+# the background EMA only adapts while nobody is present, and presence only
+# releases when the frame matches that background again — so anything that
+# shifts the whole picture while somebody is standing there (the camera's
+# auto-exposure re-adapting when they block the bright window, the corridor
+# light changing) leaves a frame-wide "blob" behind when they walk away.
+# Reproduced synthetically: a 24-grey-level global shift left an EMPTY room
+# reading present via motion (blob 0.62, span 1.00) indefinitely, which is
+# "the slideshow never comes back after somebody uses an experiment". The
+# tell is that such a difference has no LIFE in it: two consecutive
+# thumbnails are identical, while a standing human's high-contrast edges
+# flicker every few seconds no matter how still they hold. So: presence held
+# by a difference that shows zero frame-to-frame activity for this long is
+# scenery — the background is re-seeded from the current frame and presence
+# released. Long on purpose: releasing a statue-still visitor mid-read costs
+# them the app reset the size gates exist to prevent, whereas the latch it
+# cures only delays the slideshow by this much once, instead of forever.
+PRESENCE_STATIC_RELEASE_S = 60.0
 
 # ---------------------------------------------------------------------------
 # Gallery (`ui/gallery.py`) — the second menu entry, next to Experiments. It browses the SAME folder the idle slideshow reads

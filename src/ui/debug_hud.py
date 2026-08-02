@@ -103,7 +103,8 @@ class DebugHUD:
                         f" via {presence['source'] or '--'}"
                         f"   blob {presence['blob']:.3f}>{PRESENCE_ENTER_FRAC}"
                         f"  tall {presence['span']:.2f}>{PRESENCE_ENTER_SPAN}"
-                        f"  hand {presence['hand']:.2f}>{PRESENCE_HAND_SPAN}",
+                        f"  hand {presence['hand']:.2f}>{PRESENCE_HAND_SPAN}"
+                        f"  still {presence.get('still', 0.0):.0f}s",
                         (x0 + PAD, ty), FONT, 0.38,
                         COL_CLOSED if presence["present"] else COL_DIM, 1,
                         cv2.LINE_AA)
