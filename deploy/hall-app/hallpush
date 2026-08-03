@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# hallpush — despliega HalLMediaPipe al Jetson: add + commit + push + synca.
+# hallpush — despliega HalLMediaPipe al Jetson: add + commit + push (+ vault padre).
 #
 # El kiosko del Jetson se auto-actualiza desde origin/main (hall-update.timer
 # hace pull cada ~60 s y reinicia el kiosko), así que "desplegar" ES pushear a
@@ -8,21 +8,28 @@
 #   1. git add -A + commit        (mensaje = tus argumentos, o uno automático
 #                                  "hallpush: fecha (host)" al estilo synca)
 #   2. git pull --rebase + push   -> el exhibit se actualiza solo en ~1 min
-#   3. synca                      -> el vault padre registra el puntero nuevo
-#                                    del submodule y se respalda todo lo demás
+#   3. vault padre                -> commitea y pushea el puntero nuevo del
+#                                    submodule, si este repo es submodule de un
+#                                    vault presente en esta máquina
 #
 # Uso:
-#   hallpush                        commit automático + push + synca
+#   hallpush                        commit automático + push + vault padre
 #   hallpush arreglo del gato       ídem, con ese mensaje de commit
 #   hallpush -w mensaje...          además ESPERA a que el Jetson tenga el
 #                                   commit (ssh por Tailscale) y palpa /healthz
-#   hallpush -n mensaje...          sin synca (solo este repo)
+#   hallpush -n mensaje...          sin tocar el vault padre (solo este repo)
 #   hallpush --dry-run              muestra qué haría; no toca nada
 #
-# Igual que synca: NUNCA --force. Si el pull --rebase entra en conflicto,
+# El paso 3 lo delegaba a `synca`, pero el vault del internship se archivó a
+# vaults/old/ y salió de synca/repos.conf, así que hallpush mueve el puntero él
+# mismo: no depende de synca ni de que el vault esté en su lista. Toca SOLO la
+# ruta del submodule, así que las notas a medio escribir del vault se quedan
+# donde están (el pull usa --autostash por si hay algo suelto).
+#
+# Igual que synca: NUNCA --force. Si un pull --rebase entra en conflicto,
 # aborta el rebase (deja el repo limpio) y te lo dice; lo resuelves tú.
 #
-# Instalar tras un clone fresco (igual que tools/synca/install.sh):
+# Instalar tras un clone fresco (igual que ~/Documents/Repos/tools/synca/install.sh):
 #   ln -sfn <repo>/deploy/hall-app/hallpush ~/.local/bin/hallpush
 set -uo pipefail
 
@@ -40,13 +47,23 @@ say()  { printf '%s\n' "$*"; }
 die()  { say "${C_RED}✗ $*${C_RST}"; exit 1; }
 g()    { git -C "$REPO" "$@"; }
 
+# el vault padre, si este repo es submodule de un repo git que está acá
+PARENT="$(cd "$REPO/.." && pwd)"
+SUB="$(basename "$REPO")"
+parent_ok() {
+  [ "$(git -C "$PARENT" rev-parse --show-toplevel 2>/dev/null)" = "$PARENT" ] &&
+  [ "$(git -C "$PARENT" ls-files --stage -- "$SUB" 2>/dev/null | cut -c1-6)" = "160000" ]
+}
+p() { git -C "$PARENT" -c submodule.recurse=false "$@"; }
+
 WAIT=0; SYNC=1; DRY=0; MSG_WORDS=()
 while [ $# -gt 0 ]; do
   case "$1" in
     -w|--wait)    WAIT=1 ;;
     -n|--no-sync) SYNC=0 ;;
     --dry-run)    DRY=1 ;;
-    -h|--help)    sed -n '2,27p' "$SELF" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    # hasta el `set -uo`, sin depender de un número de línea que se desfasa
+    -h|--help)    sed -n '2,/^set -uo/p' "$SELF" | sed '$d; s/^# \{0,1\}//'; exit 0 ;;
     *)            MSG_WORDS+=("$1") ;;
   esac
   shift
@@ -69,7 +86,14 @@ if [ "$DRY" = 1 ]; then
   AHEAD="$(g rev-list --count origin/main..main 2>/dev/null || echo '?')"
   say "  commits locales sin pushear: $AHEAD"
   say "  luego: git pull --rebase && git push origin main"
-  [ "$SYNC" = 1 ] && say "  luego: synca (vault + puntero del submodule)"
+  if [ "$SYNC" = 1 ]; then
+    if parent_ok; then
+      say "  luego: en $PARENT, commit+push del puntero de $SUB"
+      say "         (recordado ahora: $(p rev-parse --short "HEAD:$SUB" 2>/dev/null || echo '?'))"
+    else
+      say "  luego: nada — no hay vault padre con $SUB como submodule en esta máquina"
+    fi
+  fi
   [ "$WAIT" = 1 ] && say "  luego: esperar el commit en $JETSON"
   exit 0
 fi
@@ -90,21 +114,42 @@ if ! g pull --rebase --quiet origin main; then
 fi
 g push --quiet origin main || die "push falló (¿red? ¿ruleset?)"
 HEAD_SHA="$(g rev-parse --short HEAD)"
+FULL_SHA="$(g rev-parse HEAD)"
 say "${C_GRN}✓ push${C_RST} main @ $HEAD_SHA — el kiosko lo toma en ~1 min (hall-update.timer)"
 
-# 3. synca: el vault padre registra el submodule ------------------------------
+# 3. el vault padre registra el puntero nuevo del submodule -------------------
 if [ "$SYNC" = 1 ]; then
-  if command -v synca >/dev/null 2>&1; then
-    say "${C_B}— synca —${C_RST}"
-    synca || say "${C_YEL}⚠ synca terminó con avisos — mira 'synca status'${C_RST}"
+  if ! parent_ok; then
+    say "· sin vault padre con $SUB como submodule acá — no hay puntero que mover"
   else
-    say "${C_YEL}⚠ synca no está instalado — el vault no registró el puntero nuevo${C_RST}"
+    say "${C_B}— vault padre ($(basename "$PARENT")) —${C_RST}"
+    if [ "$(p rev-parse "HEAD:$SUB" 2>/dev/null)" = "$FULL_SHA" ]; then
+      say "· el vault ya tenía el puntero al día"
+    elif p commit --quiet -m "hallpush: $SUB @ $HEAD_SHA" -- "$SUB"; then
+      say "${C_GRN}✓ puntero commiteado${C_RST} @ $HEAD_SHA"
+    else
+      say "${C_YEL}⚠ no se pudo commitear el puntero — 'git -C $PARENT status'${C_RST}"
+    fi
+    # subirlo: pull --rebase primero (autostash por lo que el vault tenga suelto)
+    if ! p rev-parse --abbrev-ref '@{u}' >/dev/null 2>&1; then
+      say "${C_YEL}⚠ el vault no tiene upstream — quedó commiteado solo en local${C_RST}"
+    elif ! p pull --rebase --autostash --quiet; then
+      p rebase --abort 2>/dev/null
+      say "${C_YEL}⚠ pull --rebase del vault en conflicto — rebase ABORTADO, el vault quedó limpio. Resuélvelo a mano.${C_RST}"
+    else
+      AHEAD_P="$(p rev-list --count '@{u}..HEAD' 2>/dev/null || echo 0)"
+      if [ "$AHEAD_P" -gt 0 ]; then
+        if p push --quiet; then say "${C_GRN}✓ vault pusheado${C_RST} ($AHEAD_P commit(s))"
+        else say "${C_YEL}⚠ push del vault falló (¿auth/red?) — 'git -C $PARENT status'${C_RST}"; fi
+      else
+        say "· vault al día con su remoto"
+      fi
+    fi
   fi
 fi
 
 # 4. --wait: confirmar que el Jetson ya lo tiene ------------------------------
 if [ "$WAIT" = 1 ]; then
-  FULL_SHA="$(g rev-parse HEAD)"
   say "esperando a que $JETSON llegue a $HEAD_SHA (máx 3 min)…"
   for _ in $(seq 1 18); do
     REMOTE="$(ssh -o BatchMode=yes -o ConnectTimeout=5 "$JETSON" \

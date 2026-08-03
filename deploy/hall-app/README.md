@@ -20,13 +20,15 @@ headless MJPEG feed for watching the camera from the laptop.
 
 **Appliance mode (the normal path):** the Jetson auto-updates from `origin/main`
 every ~60 s, so deploying = pushing. `hallpush` wraps the whole flow from the
-laptop — add + commit + pull-rebase + push, then `synca` so the parent vault
-records the new submodule pointer:
+laptop — add + commit + pull-rebase + push, then commits and pushes the new
+submodule pointer in the parent vault (it does that itself; it used to delegate
+to `synca`, but the parent vault was archived to `vaults/old/` and left `synca`'s
+repo list):
 
 ```bash
 hallpush fixed the cat scene     # commit message = your words (or auto if none)
 hallpush -w ...                  # also wait until the Jetson reports the commit
-hallpush -n ...                  # skip the synca step
+hallpush -n ...                  # skip the parent-vault step (this repo only)
 hallpush --dry-run               # show what it would do
 # install after a fresh clone:
 ln -sfn "$PWD/deploy/hall-app/hallpush" ~/.local/bin/hallpush
