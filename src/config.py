@@ -630,7 +630,7 @@ GREETING_SUBTITLE = "This display is controlled with your hand"
 # The line under the slideshow. It is the only thing telling somebody walking
 # past that the screen is not a poster, so it says what to do, not what the
 # exhibit is.
-ATTRACT_PROMPT = "Step closer to control this display with your hand"
+ATTRACT_PROMPT = "Step closer and hold your hand up in front of you"
 ATTRACT_TITLE = "Physics and Engineering Life"
 
 # ---------------------------------------------------------------------------
