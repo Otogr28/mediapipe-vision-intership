@@ -264,8 +264,10 @@ class PresenceDetector:
         # clear arrival to wake the exhibit, and a clear departure to release
         # it, with no band in between where it oscillates.
         near = not self.present
-        hand_ok = self.hand_span >= (PRESENCE_HAND_SPAN if near
-                                     else PRESENCE_HAND_EXIT_SPAN)
+        # `> 0.0` first: no hand measures 0.0, and an exit gate of 0.0
+        # ("any tracked hand holds presence") must not read that as a hand.
+        hand_ok = self.hand_span > 0.0 and self.hand_span >= (
+            PRESENCE_HAND_SPAN if near else PRESENCE_HAND_EXIT_SPAN)
         pose_ok = use_motion and self.pose_span >= (
             PRESENCE_POSE_SPAN if near else PRESENCE_POSE_EXIT_SPAN)
         motion_ok = use_motion and (

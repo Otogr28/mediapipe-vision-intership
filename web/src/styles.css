@@ -574,7 +574,7 @@ body {
     to top,
     rgba(4, 6, 10, 0.92) 0%,
     rgba(4, 6, 10, 0.72) 16%,
-    rgba(4, 6, 10, 0) 42%
+    rgba(4, 6, 10, 0) 52%
   );
 }
 
@@ -586,7 +586,7 @@ body {
 }
 
 .attract-eyebrow {
-  font-size: clamp(11px, 1.1vw, 15px);
+  font-size: clamp(14px, 1.6vw, 34px);
   color: var(--amber);
   margin-bottom: 10px;
 }
@@ -594,14 +594,14 @@ body {
 .attract-title {
   font-family: var(--font-label);
   font-weight: 600;
-  font-size: clamp(30px, 5vw, 66px);
+  font-size: clamp(36px, 6.2vw, 150px);
   line-height: 1.05;
   letter-spacing: 0.01em;
 }
 
 .attract-sub {
-  margin-top: 8px;
-  font-size: clamp(14px, 1.7vw, 24px);
+  margin-top: 12px;
+  font-size: clamp(18px, 2.3vw, 54px);
   color: var(--ink-dim);
   max-width: 46ch;
 }
@@ -611,8 +611,8 @@ body {
    in front of the exhibit — by the time you can read small type here, you
    are already close enough not to need the instruction. */
 .attract-prompt {
-  margin-top: 26px;
-  font-size: clamp(20px, 2.6vw, 40px);
+  margin-top: 34px;
+  font-size: clamp(30px, 3.8vw, 96px);
   letter-spacing: 0.06em;
   color: var(--ink);
   animation: attract-breathe 3.4s ease-in-out infinite;
@@ -644,7 +644,7 @@ body {
   position: absolute;
   right: 5%;
   bottom: 6%;
-  font-size: clamp(11px, 1.1vw, 15px);
+  font-size: clamp(14px, 1.6vw, 34px);
   color: var(--ink-dim);
   font-variant-numeric: tabular-nums;
 }

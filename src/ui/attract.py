@@ -275,20 +275,20 @@ class AttractScreen:
         # the two out.
         slide = self.slides[index]
         if slide["title"]:
-            _put(frame, ATTRACT_TITLE, w * 0.06, h - band_h + h * 0.045, 0.55,
+            _put(frame, ATTRACT_TITLE, w * 0.06, h - band_h + h * 0.045, 0.8,
                  (120, 200, 255), 1)
-            _put(frame, slide["title"], w * 0.06, h - band_h + h * 0.115, 1.3,
+            _put(frame, slide["title"], w * 0.06, h - band_h + h * 0.115, 1.8,
                  (245, 245, 245), 3)
             if slide["caption"]:
                 _put(frame, slide["caption"], w * 0.06,
                      h - band_h + h * 0.165, 0.7, (205, 205, 205), 2)
         else:
-            _put(frame, ATTRACT_TITLE, w * 0.06, h - band_h + h * 0.105, 1.3,
+            _put(frame, ATTRACT_TITLE, w * 0.06, h - band_h + h * 0.105, 1.8,
                  (245, 245, 245), 3)
         # Sized to be read from across the hall, not from in front of the
         # exhibit: by the time small type here is legible you are already
         # close enough not to need the instruction.
-        _put(frame, ATTRACT_PROMPT, w * 0.06, h - h * 0.035, 1.0,
+        _put(frame, ATTRACT_PROMPT, w * 0.06, h - h * 0.035, 1.5,
              (120, 200, 255), 2)
 
         # Slide position, bottom-right. Dots for a handful of slides; past

@@ -698,7 +698,15 @@ PRESENCE_EXIT_SPAN = 0.35
 # hand three metres away measures under 0.08. Everything the UI does needs the
 # hand near the camera anyway, so this gate costs a real visitor nothing.
 PRESENCE_HAND_SPAN = 0.16
-PRESENCE_HAND_EXIT_SPAN = 0.10
+# Exit gate is "any tracked hand at all". Seen on the exhibit 2026-08-25: a
+# visitor whose hand the detector was tracking the whole time got dropped back
+# to the slideshow ATTRACT_IDLE_S after going live, because a hand held at
+# arm level in the real hall measures ~0.08-0.12 of the frame (the same 8.6 %
+# width tests/bench_hands.py recorded) and the 0.10 exit gate flickered under
+# it. The palm detector cannot find a corridor-distant hand anyway (1/12 at
+# full frame), so a tracked hand IS the distance gate; a second one here only
+# fought the operator's rule "hand visible = exhibit awake".
+PRESENCE_HAND_EXIT_SPAN = 0.0
 
 # --- pose ---
 # Height of the visible pose landmarks' bounding box. Only consulted when
