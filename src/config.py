@@ -697,7 +697,11 @@ PRESENCE_EXIT_SPAN = 0.35
 # held out at the screen measures ~0.2-0.35 of frame height at 720p; the same
 # hand three metres away measures under 0.08. Everything the UI does needs the
 # hand near the camera anyway, so this gate costs a real visitor nothing.
-PRESENCE_HAND_SPAN = 0.16
+# 0.16 -> 0.10 on 2026-08-25: with 0.16 the visitor had to bring the hand
+# right up to the camera to wake the exhibit. A hand at natural use distance
+# measures ~0.08-0.12 here (see the exit-gate note below), so the enter gate
+# sits at the top of that band and the detector's own reach does the rest.
+PRESENCE_HAND_SPAN = 0.10
 # Exit gate is "any tracked hand at all". Seen on the exhibit 2026-08-25: a
 # visitor whose hand the detector was tracking the whole time got dropped back
 # to the slideshow ATTRACT_IDLE_S after going live, because a hand held at

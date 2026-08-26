@@ -186,7 +186,7 @@ def check_hand_mode():
            "hiding the hand releases it on the next frame "
            "(UIManager's idle timer owns the 5 s)")
 
-    small = _HandResult(scaled_hand(make_hand(curl=0.0), 0.3))
+    small = _HandResult(scaled_hand(make_hand(curl=0.0), 0.2))
     t += 1 / 30
     det.update(visitor(room), hand_result=small, now=t)
     _check(not det.present,
@@ -285,7 +285,7 @@ def check_distance():
            f"(blob {det.blob_frac:.3f}, tall {det.blob_span:.2f})")
 
     # ...and the same gate on the hand signal.
-    small = _HandResult(scaled_hand(make_hand(curl=0.0), 0.3))
+    small = _HandResult(scaled_hand(make_hand(curl=0.0), 0.2))
     det = PresenceDetector(mode="full")
     det.update(None, hand_result=small, now=CLOCK[0])
     _check(not det.present,
